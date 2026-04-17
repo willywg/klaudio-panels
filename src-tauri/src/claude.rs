@@ -71,29 +71,25 @@ pub async fn claude_send(
         .ok_or_else(|| "claude stderr unavailable".to_string())?;
 
     // Reader task for stdout — one event per JSONL line.
-    // session_id is present on EVERY event (not just system/init), so we
-    // capture from the first line that carries it.
+    // Single channel (claude:event) to avoid a race between session_id
+    // promotion and the frontend re-subscribing. We still announce the
+    // session_id once via claude:session so the UI can display it.
     let app_out = app.clone();
     tokio::spawn(async move {
-        let mut session_id: Option<String> = None;
+        let mut session_announced = false;
         let mut lines = BufReader::new(stdout).lines();
         loop {
             match lines.next_line().await {
                 Ok(Some(line)) => {
-                    if session_id.is_none() {
+                    if !session_announced {
                         if let Ok(v) = serde_json::from_str::<Value>(&line) {
                             if let Some(id) = v.get("session_id").and_then(|i| i.as_str()) {
-                                session_id = Some(id.to_string());
+                                session_announced = true;
                                 let _ = app_out.emit("claude:session", id);
                             }
                         }
                     }
-
-                    let channel = match &session_id {
-                        Some(id) => format!("claude:event:{id}"),
-                        None => "claude:event:pending".to_string(),
-                    };
-                    let _ = app_out.emit(&channel, &line);
+                    let _ = app_out.emit("claude:event", &line);
                 }
                 Ok(None) => break,
                 Err(e) => {

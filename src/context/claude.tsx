@@ -1,6 +1,5 @@
 import {
   createContext,
-  createEffect,
   onCleanup,
   useContext,
   type ParentProps,
@@ -64,27 +63,16 @@ export function makeClaudeContext() {
     console.warn("[claude stderr]", e.payload);
   }).then((fn) => unlistens.push(fn));
 
-  // Dynamic listener on claude:event:<sessionId> (or :pending before promotion).
-  createEffect(() => {
-    const sid = store.sessionId ?? "pending";
-    let detach: UnlistenFn | undefined;
-    let cancelled = false;
-    listen<string>(`claude:event:${sid}`, (e) => {
-      try {
-        const ev = JSON.parse(e.payload) as ClaudeEvent;
-        apply(ev);
-      } catch (err) {
-        console.error("parse event", err, e.payload);
-      }
-    }).then((fn) => {
-      if (cancelled) fn();
-      else detach = fn;
-    });
-    onCleanup(() => {
-      cancelled = true;
-      detach?.();
-    });
-  });
+  // Single stable channel; Rust only spawns one session at a time so we
+  // don't need per-session isolation.
+  listen<string>("claude:event", (e) => {
+    try {
+      const ev = JSON.parse(e.payload) as ClaudeEvent;
+      apply(ev);
+    } catch (err) {
+      console.error("parse event", err, e.payload);
+    }
+  }).then((fn) => unlistens.push(fn));
 
   onCleanup(() => {
     for (const fn of unlistens) fn();
