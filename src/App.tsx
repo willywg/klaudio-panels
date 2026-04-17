@@ -1,16 +1,13 @@
 import { createEffect, createSignal, Show } from "solid-js";
 import { ProjectPicker } from "@/components/project-picker";
 import { SessionsList } from "@/components/sessions-list";
-import { ChatView } from "@/components/chat-view";
-import { ClaudeProvider, useClaude } from "@/context/claude";
 
-function Shell() {
+function App() {
   const [projectPath, setProjectPath] = createSignal<string | null>(
     localStorage.getItem("projectPath"),
   );
   const [activeSessionId, setActiveSessionId] = createSignal<string | null>(null);
-  const [sessionsRefresh, setSessionsRefresh] = createSignal(0);
-  const ctx = useClaude();
+  const [sessionsRefresh] = createSignal(0);
 
   createEffect(() => {
     const p = projectPath();
@@ -18,27 +15,7 @@ function Shell() {
     else localStorage.removeItem("projectPath");
   });
 
-  // When a run ends, refresh the sessions list so a newly-created session
-  // appears with the freshly-assigned id.
-  createEffect(() => {
-    if (ctx.store.status === "idle" && ctx.store.sessionId && !activeSessionId()) {
-      setActiveSessionId(ctx.store.sessionId);
-      setSessionsRefresh((k) => k + 1);
-    }
-  });
-
-  function handleNew() {
-    ctx.reset();
-    setActiveSessionId(null);
-  }
-
-  function handleSelect(id: string) {
-    ctx.reset();
-    setActiveSessionId(id);
-  }
-
   function handleChangeProject() {
-    ctx.reset();
     setActiveSessionId(null);
     setProjectPath(null);
   }
@@ -68,16 +45,13 @@ function Shell() {
             <SessionsList
               projectPath={projectPath()!}
               activeSessionId={activeSessionId()}
-              onNew={handleNew}
-              onSelect={handleSelect}
+              onNew={() => setActiveSessionId(null)}
+              onSelect={(id) => setActiveSessionId(id)}
               refreshKey={sessionsRefresh()}
             />
           </aside>
-          <section class="min-w-0">
-            <ChatView
-              projectPath={projectPath()!}
-              activeSessionId={activeSessionId()}
-            />
+          <section class="min-w-0 flex items-center justify-center text-neutral-500 text-sm">
+            Terminal pending — T4–T7 will wire xterm.js here.
           </section>
         </div>
       </Show>
@@ -85,10 +59,4 @@ function Shell() {
   );
 }
 
-export default function App() {
-  return (
-    <ClaudeProvider>
-      <Shell />
-    </ClaudeProvider>
-  );
-}
+export default App;
