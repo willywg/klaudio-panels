@@ -4,9 +4,11 @@ import {
   createSignal,
   For,
   Show,
+  on,
   onMount,
 } from "solid-js";
-import { ProjectPicker } from "@/components/project-picker";
+import { HomeScreen } from "@/components/home-screen";
+import { ProjectsSidebar } from "@/components/projects-sidebar";
 import { SessionsList, type SessionMeta } from "@/components/sessions-list";
 import { TerminalView } from "@/components/terminal-view";
 import { TabStrip } from "@/components/tab-strip";
@@ -14,22 +16,56 @@ import {
   getLastSessionId,
   setLastSessionId,
 } from "@/components/last-session";
+import { projectLabel, touchProject } from "@/lib/recent-projects";
 import { TerminalProvider, useTerminal } from "@/context/terminal";
 import { displayLabel } from "@/lib/session-label";
 
 const AUTO_RESUME_FAIL_WINDOW_MS = 2000;
 
 function Shell() {
-  const [projectPath, setProjectPath] = createSignal<string | null>(
+  const [activeProjectPath, setActiveProjectPath] = createSignal<string | null>(
     localStorage.getItem("projectPath"),
   );
   const [sessionsRefresh, setSessionsRefresh] = createSignal(0);
   const term = useTerminal();
 
+  // Remember which tab was last active per project, so switching projects
+  // restores the right tab instead of always jumping to the first.
+  const activeByProject = new Map<string, string | null>();
+  // Track which projects have already consumed their auto-resume (runs once
+  // per project per app lifetime — switching away and back doesn't re-trigger).
+  const autoResumed = new Set<string>();
+
+  // Persist current project selection.
   createEffect(() => {
-    const p = projectPath();
-    if (p) localStorage.setItem("projectPath", p);
-    else localStorage.removeItem("projectPath");
+    const p = activeProjectPath();
+    if (p) {
+      localStorage.setItem("projectPath", p);
+      touchProject(p);
+    } else {
+      localStorage.removeItem("projectPath");
+    }
+  });
+
+  // Seed recent projects with the first-ever project if it's missing from the
+  // list (migration: pre-existing localStorage only had projectPath).
+  onMount(() => {
+    const p = activeProjectPath();
+    if (p) touchProject(p);
+  });
+
+  const projectTabs = createMemo(() => {
+    const p = activeProjectPath();
+    if (!p) return [];
+    return term.store.tabs.filter((t) => t.projectPath === p);
+  });
+
+  const openTabsByProject = createMemo(() => {
+    const map = new Map<string, number>();
+    for (const t of term.store.tabs) {
+      map.set(t.projectPath, (map.get(t.projectPath) ?? 0) + 1);
+    }
+    return map;
   });
 
   const activeTab = createMemo(() => {
@@ -38,45 +74,71 @@ function Shell() {
     return term.store.tabs.find((t) => t.id === id);
   });
 
-  const activeSessionId = () => activeTab()?.sessionId ?? null;
+  // Record the active tab per project whenever it changes — but only if the
+  // active tab belongs to the currently-selected project (avoid recording
+  // cross-project noise during transitions).
+  createEffect(
+    on(
+      () => term.store.activeTabId,
+      (id) => {
+        const p = activeProjectPath();
+        if (!p) return;
+        const tab = id ? term.store.tabs.find((t) => t.id === id) : undefined;
+        if (tab && tab.projectPath === p) {
+          activeByProject.set(p, id);
+        } else if (!tab) {
+          activeByProject.set(p, null);
+        }
+      },
+    ),
+  );
+
+  const activeSessionId = () => {
+    const a = activeTab();
+    if (!a || a.projectPath !== activeProjectPath()) return null;
+    return a.sessionId ?? null;
+  };
 
   const openSessionIds = createMemo(() => {
+    const p = activeProjectPath();
     const set = new Set<string>();
-    for (const t of term.store.tabs)
+    if (!p) return set;
+    for (const t of term.store.tabs) {
+      if (t.projectPath !== p) continue;
       if (t.sessionId && t.status !== "opening") set.add(t.sessionId);
+    }
     return set;
   });
 
   const openingSessionIds = createMemo(() => {
+    const p = activeProjectPath();
     const set = new Set<string>();
-    for (const t of term.store.tabs)
+    if (!p) return set;
+    for (const t of term.store.tabs) {
+      if (t.projectPath !== p) continue;
       if (t.sessionId && t.status === "opening") set.add(t.sessionId);
+    }
     return set;
   });
 
-  const anyTabOpening = createMemo(() =>
-    term.store.tabs.some((t) => t.status === "opening"),
+  const anyTabOpeningForActive = createMemo(() =>
+    projectTabs().some((t) => t.status === "opening"),
   );
 
-  // Persist the last sessionId for the current project whenever the active
-  // tab changes to one with a sessionId. Tabs without sessionId don't update
-  // the key — they stay invisible to persistence until Sprint 03 correlates
-  // them via JSONL watcher.
+  // Persist the last sessionId for the project whose active tab is currently
+  // focused. Only fires when the tab belongs to the active project.
   createEffect(() => {
-    const p = projectPath();
-    const sid = activeSessionId();
-    if (!p) return;
-    if (sid) setLastSessionId(p, sid);
+    const p = activeProjectPath();
+    const a = activeTab();
+    if (!p || !a || a.projectPath !== p) return;
+    if (a.sessionId) setLastSessionId(p, a.sessionId);
   });
 
   async function openNewTab() {
-    const p = projectPath();
+    const p = activeProjectPath();
     if (!p) return;
     try {
-      await term.openTab(p, [], {
-        label: "Nueva sesión",
-        sessionId: null,
-      });
+      await term.openTab(p, [], { label: "Nueva sesión", sessionId: null });
     } catch (err) {
       console.error("openTab(new) failed", err);
     } finally {
@@ -84,11 +146,13 @@ function Shell() {
     }
   }
 
-  async function openResumeTab(sessionId: string, label: string) {
-    const p = projectPath();
-    if (!p) return;
+  async function openResumeTab(
+    projectPath: string,
+    sessionId: string,
+    label: string,
+  ) {
     try {
-      await term.openTab(p, ["--resume", sessionId], {
+      await term.openTab(projectPath, ["--resume", sessionId], {
         label,
         sessionId,
       });
@@ -100,42 +164,46 @@ function Shell() {
   }
 
   function handleSelectSession(meta: SessionMeta) {
-    // Dedupe: if there's already a tab (pending or running) for this
-    // sessionId, just activate it. This is what prevents rapid-click spam.
-    const existing = term.findTabBySessionId(meta.id);
+    const p = activeProjectPath();
+    if (!p) return;
+    const existing = term.store.tabs.find(
+      (t) => t.projectPath === p && t.sessionId === meta.id,
+    );
     if (existing) {
       term.setActiveTab(existing.id);
       return;
     }
-    void openResumeTab(meta.id, displayLabel(meta));
+    void openResumeTab(p, meta.id, displayLabel(meta));
   }
 
-  function handleActivate(id: string) {
+  function handleActivateTab(id: string) {
     term.setActiveTab(id);
   }
 
-  async function handleClose(id: string) {
+  async function handleCloseTab(id: string) {
     await term.closeTab(id);
   }
 
-  async function handleChangeProject() {
-    await term.closeAll();
-    setProjectPath(null);
-  }
-
-  // Auto-resume on mount if the current project has a persisted lastSessionId.
-  // If the spawned PTY exits within AUTO_RESUME_FAIL_WINDOW_MS, treat it as a
-  // silent failure (session likely deleted), clear the key, and close the tab.
-  onMount(() => {
-    const p = projectPath();
-    if (!p) return;
-    const lastId = getLastSessionId(p);
+  // Attempt auto-resume for a project if it has a persisted lastSessionId and
+  // no tabs currently open. Marks the project as "resumed" so repeated
+  // switches don't keep spawning.
+  function maybeAutoResume(projectPath: string) {
+    if (autoResumed.has(projectPath)) return;
+    autoResumed.add(projectPath);
+    const existing = term.store.tabs.filter(
+      (t) => t.projectPath === projectPath,
+    );
+    if (existing.length > 0) return;
+    const lastId = getLastSessionId(projectPath);
     if (!lastId) return;
 
     const spawnedAt = Date.now();
     const label = `session ${lastId.slice(0, 8)}`;
     term
-      .openTab(p, ["--resume", lastId], { label, sessionId: lastId })
+      .openTab(projectPath, ["--resume", lastId], {
+        label,
+        sessionId: lastId,
+      })
       .then((tabId) => {
         const detach = term.onExit(tabId, (code) => {
           const elapsed = Date.now() - spawnedAt;
@@ -143,7 +211,7 @@ function Shell() {
             console.info(
               `auto-resume failed for ${lastId} (exit ${code} after ${elapsed}ms). Clearing lastSessionId.`,
             );
-            setLastSessionId(p, null);
+            setLastSessionId(projectPath, null);
             void term.closeTab(tabId);
           }
           detach();
@@ -151,18 +219,107 @@ function Shell() {
       })
       .catch((err) => {
         console.warn("auto-resume openTab threw", err);
-        setLastSessionId(p, null);
+        setLastSessionId(projectPath, null);
       })
       .finally(() => {
         setSessionsRefresh((k) => k + 1);
       });
+  }
+
+  function switchToProject(path: string) {
+    const prev = activeProjectPath();
+    if (prev === path) return;
+    if (prev && term.store.activeTabId) {
+      activeByProject.set(prev, term.store.activeTabId);
+    }
+    setActiveProjectPath(path);
+    // Restore saved active tab for this project, else pick the first tab if
+    // any, else null.
+    const remembered = activeByProject.get(path);
+    const tabsInProject = term.store.tabs.filter(
+      (t) => t.projectPath === path,
+    );
+    let nextActive: string | null = null;
+    if (remembered && tabsInProject.some((t) => t.id === remembered)) {
+      nextActive = remembered;
+    } else if (tabsInProject.length > 0) {
+      nextActive = tabsInProject[0].id;
+    }
+    term.setActiveTab(nextActive);
+    if (nextActive === null) maybeAutoResume(path);
+  }
+
+  function handleAddProject(path: string) {
+    touchProject(path);
+    switchToProject(path);
+  }
+
+  function goHome() {
+    const prev = activeProjectPath();
+    if (prev && term.store.activeTabId) {
+      activeByProject.set(prev, term.store.activeTabId);
+    }
+    setActiveProjectPath(null);
+    term.setActiveTab(null);
+  }
+
+  // Initial auto-resume for the project loaded from localStorage.
+  onMount(() => {
+    const p = activeProjectPath();
+    if (p) maybeAutoResume(p);
   });
 
+  // When the active project changes via the sidebar, keep the terminal's
+  // `activeTabId` in sync with the tabs actually visible.
+  createEffect(
+    on(
+      activeProjectPath,
+      (p) => {
+        if (!p) return;
+        // already handled in switchToProject, but cover edge cases where
+        // setActiveProjectPath was called directly (e.g. from HomeScreen).
+        const tabsInProject = term.store.tabs.filter(
+          (t) => t.projectPath === p,
+        );
+        const current = term.store.activeTabId;
+        const currentInProject =
+          current && tabsInProject.some((t) => t.id === current);
+        if (!currentInProject) {
+          const remembered = activeByProject.get(p);
+          let nextActive: string | null = null;
+          if (remembered && tabsInProject.some((t) => t.id === remembered)) {
+            nextActive = remembered;
+          } else if (tabsInProject.length > 0) {
+            nextActive = tabsInProject[0].id;
+          }
+          term.setActiveTab(nextActive);
+          if (nextActive === null) maybeAutoResume(p);
+        }
+      },
+      { defer: true },
+    ),
+  );
+
   return (
-    <main class="h-screen w-screen flex flex-col bg-neutral-950 text-neutral-200 overflow-hidden">
+    <main class="h-screen w-screen flex bg-neutral-950 text-neutral-200 overflow-hidden">
+      <ProjectsSidebar
+        activePath={activeProjectPath()}
+        onActivate={switchToProject}
+        onAdd={handleAddProject}
+        onGoHome={goHome}
+        openTabsByProject={openTabsByProject()}
+      />
+
       <Show
-        when={projectPath()}
-        fallback={<ProjectPicker onPick={(p) => setProjectPath(p)} />}
+        when={activeProjectPath()}
+        fallback={
+          <HomeScreen
+            onPick={(p) => {
+              touchProject(p);
+              setActiveProjectPath(p);
+            }}
+          />
+        }
       >
         <div class="flex-1 grid grid-cols-[280px_1fr] min-h-0 overflow-hidden">
           <aside class="border-r border-neutral-800 flex flex-col min-h-0 overflow-hidden">
@@ -170,18 +327,21 @@ function Shell() {
               <div class="text-[10px] uppercase tracking-wider text-neutral-500">
                 Proyecto
               </div>
-              <div class="text-xs text-neutral-300 truncate" title={projectPath()!}>
-                {projectPath()!.split("/").slice(-2).join("/")}
-              </div>
-              <button
-                class="mt-1 text-[11px] text-neutral-500 hover:text-neutral-300"
-                onClick={() => void handleChangeProject()}
+              <div
+                class="text-xs text-neutral-200 truncate font-medium"
+                title={activeProjectPath()!}
               >
-                ← cambiar
-              </button>
+                {projectLabel(activeProjectPath()!)}
+              </div>
+              <div
+                class="text-[10px] text-neutral-500 truncate font-mono"
+                title={activeProjectPath()!}
+              >
+                {activeProjectPath()!}
+              </div>
             </div>
             <SessionsList
-              projectPath={projectPath()!}
+              projectPath={activeProjectPath()!}
               activeSessionId={activeSessionId()}
               openSessionIds={openSessionIds()}
               openingSessionIds={openingSessionIds()}
@@ -193,37 +353,47 @@ function Shell() {
 
           <section class="min-w-0 min-h-0 flex flex-col overflow-hidden">
             <TabStrip
-              tabs={term.store.tabs}
+              tabs={projectTabs()}
               activeTabId={term.store.activeTabId}
-              onActivate={handleActivate}
-              onClose={(id) => void handleClose(id)}
+              onActivate={handleActivateTab}
+              onClose={(id) => void handleCloseTab(id)}
               onNew={() => void openNewTab()}
-              canOpenNew={!anyTabOpening()}
+              canOpenNew={!anyTabOpeningForActive()}
             />
             <div class="relative flex-1 min-h-0 overflow-hidden">
               <For each={term.store.tabs}>
                 {(tab) => {
                   const isActive = () => tab.id === term.store.activeTabId;
+                  const isForActiveProject = () =>
+                    tab.projectPath === activeProjectPath();
                   return (
                     <div
                       class="absolute inset-0 flex flex-col"
                       style={{
-                        visibility: isActive() ? "visible" : "hidden",
-                        "pointer-events": isActive() ? "auto" : "none",
-                        "z-index": isActive() ? 1 : 0,
+                        visibility:
+                          isActive() && isForActiveProject()
+                            ? "visible"
+                            : "hidden",
+                        "pointer-events":
+                          isActive() && isForActiveProject() ? "auto" : "none",
+                        "z-index":
+                          isActive() && isForActiveProject() ? 1 : 0,
                       }}
                     >
                       <Show
                         when={tab.status !== "opening"}
                         fallback={<LoadingPanel label={tab.label} />}
                       >
-                        <TerminalView id={tab.id} active={isActive()} />
+                        <TerminalView
+                          id={tab.id}
+                          active={isActive() && isForActiveProject()}
+                        />
                       </Show>
                     </div>
                   );
                 }}
               </For>
-              <Show when={term.store.tabs.length === 0}>
+              <Show when={projectTabs().length === 0}>
                 <div class="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm">
                   Elige una sesión o crea una nueva para empezar.
                 </div>
