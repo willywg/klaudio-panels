@@ -1,13 +1,16 @@
 import { createEffect, createSignal, Show } from "solid-js";
 import { ProjectPicker } from "@/components/project-picker";
 import { SessionsList } from "@/components/sessions-list";
+import { TerminalView } from "@/components/terminal-view";
+import { TerminalProvider, useTerminal } from "@/context/terminal";
 
-function App() {
+function Shell() {
   const [projectPath, setProjectPath] = createSignal<string | null>(
     localStorage.getItem("projectPath"),
   );
   const [activeSessionId, setActiveSessionId] = createSignal<string | null>(null);
-  const [sessionsRefresh] = createSignal(0);
+  const [sessionsRefresh, setSessionsRefresh] = createSignal(0);
+  const term = useTerminal();
 
   createEffect(() => {
     const p = projectPath();
@@ -15,7 +18,23 @@ function App() {
     else localStorage.removeItem("projectPath");
   });
 
-  function handleChangeProject() {
+  async function handleNew() {
+    const p = projectPath();
+    if (!p) return;
+    setActiveSessionId(null);
+    await term.open(p, []);
+    setSessionsRefresh((k) => k + 1);
+  }
+
+  async function handleSelect(id: string) {
+    const p = projectPath();
+    if (!p) return;
+    setActiveSessionId(id);
+    await term.open(p, ["--resume", id]);
+  }
+
+  async function handleChangeProject() {
+    await term.kill();
     setActiveSessionId(null);
     setProjectPath(null);
   }
@@ -37,7 +56,7 @@ function App() {
               </div>
               <button
                 class="mt-1 text-[11px] text-neutral-500 hover:text-neutral-300"
-                onClick={handleChangeProject}
+                onClick={() => void handleChangeProject()}
               >
                 ← cambiar
               </button>
@@ -45,13 +64,22 @@ function App() {
             <SessionsList
               projectPath={projectPath()!}
               activeSessionId={activeSessionId()}
-              onNew={() => setActiveSessionId(null)}
-              onSelect={(id) => setActiveSessionId(id)}
+              onNew={() => void handleNew()}
+              onSelect={(id) => void handleSelect(id)}
               refreshKey={sessionsRefresh()}
             />
           </aside>
-          <section class="min-w-0 flex items-center justify-center text-neutral-500 text-sm">
-            Terminal pending — T4–T7 will wire xterm.js here.
+          <section class="min-w-0 flex flex-col min-h-0">
+            <Show
+              when={term.store.id}
+              fallback={
+                <div class="flex-1 flex items-center justify-center text-neutral-500 text-sm">
+                  Elige una sesión o crea una nueva para empezar.
+                </div>
+              }
+            >
+              <TerminalView />
+            </Show>
           </section>
         </div>
       </Show>
@@ -59,4 +87,10 @@ function App() {
   );
 }
 
-export default App;
+export default function App() {
+  return (
+    <TerminalProvider>
+      <Shell />
+    </TerminalProvider>
+  );
+}
