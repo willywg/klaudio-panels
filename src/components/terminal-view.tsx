@@ -144,12 +144,15 @@ export function TerminalView(props: Props) {
   });
 
   // When the tab becomes visible again, re-measure (size may have changed
-  // while hidden). Also refocus so keyboard input lands in the active tab.
+  // while hidden), force a full redraw (xterm WebGL stops painting while the
+  // canvas is `visibility: hidden` — without refresh the panel stays blank),
+  // and refocus so keyboard input lands in the active tab.
   createEffect(() => {
     if (!props.active) return;
     requestAnimationFrame(() => {
       safeFit();
       try {
+        if (term) term.refresh(0, term.rows - 1);
         term?.focus();
       } catch {
         // ignore

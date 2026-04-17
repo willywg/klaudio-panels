@@ -1,16 +1,14 @@
-import { createSignal } from "solid-js";
-
-const KEY = "recentProjects";
-const MAX = 10;
-
 export type RecentProject = {
   path: string;
   lastOpened: number; // epoch ms
 };
 
-function load(): RecentProject[] {
+export const RECENT_PROJECTS_KEY = "recentProjects";
+export const MAX_RECENT_PROJECTS = 10;
+
+export function loadRecentProjects(): RecentProject[] {
   try {
-    const raw = localStorage.getItem(KEY);
+    const raw = localStorage.getItem(RECENT_PROJECTS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -26,34 +24,12 @@ function load(): RecentProject[] {
   }
 }
 
-function save(list: RecentProject[]): void {
+export function saveRecentProjects(list: RecentProject[]): void {
   try {
-    localStorage.setItem(KEY, JSON.stringify(list));
+    localStorage.setItem(RECENT_PROJECTS_KEY, JSON.stringify(list));
   } catch {
-    // ignore
+    // ignore — quota / private mode
   }
-}
-
-const [recents, setRecents] = createSignal<RecentProject[]>(load());
-
-export function getRecentProjects(): RecentProject[] {
-  return recents();
-}
-
-export const recentProjectsSignal = recents;
-
-export function touchProject(path: string): void {
-  const now = Date.now();
-  const filtered = recents().filter((p) => p.path !== path);
-  const next = [{ path, lastOpened: now }, ...filtered].slice(0, MAX);
-  setRecents(next);
-  save(next);
-}
-
-export function removeProject(path: string): void {
-  const next = recents().filter((p) => p.path !== path);
-  setRecents(next);
-  save(next);
 }
 
 export function projectLabel(path: string): string {
@@ -72,11 +48,10 @@ export function projectColor(path: string): string {
 }
 
 export function projectInitial(path: string): string {
-  const label = projectLabel(path);
-  return label.slice(0, 1).toUpperCase();
+  return projectLabel(path).slice(0, 1).toUpperCase();
 }
 
-/** Relative time string: "hace 3 segundos", "hace 5 min", "hace 2 h", "hace 3 d". */
+/** "hace 3 s", "hace 5 min", "hace 2 h", "hace 3 d". */
 export function relativeTime(ms: number): string {
   const diff = Math.max(0, Date.now() - ms);
   const s = Math.floor(diff / 1000);

@@ -1,4 +1,5 @@
 import { For } from "solid-js";
+import { Plus, X } from "lucide-solid";
 import type { TerminalTab } from "@/context/terminal";
 
 type Props = {
@@ -25,7 +26,7 @@ function statusDotClass(status: TerminalTab["status"]): string {
 
 export function TabStrip(props: Props) {
   return (
-    <div class="flex items-stretch h-8 border-b border-neutral-800 bg-neutral-950/80 overflow-x-auto overflow-y-hidden shrink-0">
+    <div class="flex items-stretch h-9 border-b border-neutral-800 bg-neutral-950/80 overflow-x-auto overflow-y-hidden shrink-0">
       <For each={props.tabs}>
         {(tab) => {
           const isActive = () => tab.id === props.activeTabId;
@@ -49,7 +50,7 @@ export function TabStrip(props: Props) {
               <span class="truncate flex-1">{tab.label}</span>
               <button
                 class={
-                  "shrink-0 w-4 h-4 rounded flex items-center justify-center text-neutral-500 hover:bg-neutral-700 hover:text-neutral-100 " +
+                  "shrink-0 w-5 h-5 rounded flex items-center justify-center text-neutral-500 hover:bg-neutral-700 hover:text-neutral-100 transition " +
                   (isActive() ? "opacity-100" : "opacity-0 group-hover:opacity-100")
                 }
                 title="Cerrar tab"
@@ -58,19 +59,19 @@ export function TabStrip(props: Props) {
                   props.onClose(tab.id);
                 }}
               >
-                <span class="text-[11px] leading-none">×</span>
+                <X size={12} strokeWidth={2.5} />
               </button>
             </div>
           );
         }}
       </For>
       <button
-        class="px-3 text-neutral-400 hover:text-neutral-100 hover:bg-neutral-900/60 text-[14px] shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+        class="px-3 text-neutral-400 hover:text-neutral-100 hover:bg-neutral-900/60 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed flex items-center"
         onClick={props.onNew}
         disabled={!props.canOpenNew}
         title="Nueva sesión"
       >
-        +
+        <Plus size={14} strokeWidth={2} />
       </button>
     </div>
   );

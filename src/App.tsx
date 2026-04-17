@@ -16,7 +16,8 @@ import {
   getLastSessionId,
   setLastSessionId,
 } from "@/components/last-session";
-import { projectLabel, touchProject } from "@/lib/recent-projects";
+import { projectLabel } from "@/lib/recent-projects";
+import { ProjectsProvider, useProjects } from "@/context/projects";
 import { TerminalProvider, useTerminal } from "@/context/terminal";
 import { displayLabel } from "@/lib/session-label";
 
@@ -28,6 +29,7 @@ function Shell() {
   );
   const [sessionsRefresh, setSessionsRefresh] = createSignal(0);
   const term = useTerminal();
+  const projects = useProjects();
 
   // Remember which tab was last active per project, so switching projects
   // restores the right tab instead of always jumping to the first.
@@ -41,7 +43,7 @@ function Shell() {
     const p = activeProjectPath();
     if (p) {
       localStorage.setItem("projectPath", p);
-      touchProject(p);
+      projects.touch(p);
     } else {
       localStorage.removeItem("projectPath");
     }
@@ -51,8 +53,21 @@ function Shell() {
   // list (migration: pre-existing localStorage only had projectPath).
   onMount(() => {
     const p = activeProjectPath();
-    if (p) touchProject(p);
+    if (p) projects.touch(p);
   });
+
+  // Auto-refresh sessions list whenever tabs open/close for the active project.
+  // This catches 80% of /rename cases: the user typically renames during a
+  // session then closes the tab, at which point we re-read the JSONL and pick
+  // up the new title. Real-time updates during a live session = Sprint 03
+  // (JSONL watcher).
+  createEffect(
+    on(
+      () => term.store.tabs.length,
+      () => setSessionsRefresh((k) => k + 1),
+      { defer: true },
+    ),
+  );
 
   const projectTabs = createMemo(() => {
     const p = activeProjectPath();
@@ -250,7 +265,7 @@ function Shell() {
   }
 
   function handleAddProject(path: string) {
-    touchProject(path);
+    projects.touch(path);
     switchToProject(path);
   }
 
@@ -315,7 +330,7 @@ function Shell() {
         fallback={
           <HomeScreen
             onPick={(p) => {
-              touchProject(p);
+              projects.touch(p);
               setActiveProjectPath(p);
             }}
           />
@@ -347,6 +362,7 @@ function Shell() {
               openingSessionIds={openingSessionIds()}
               onNew={() => void openNewTab()}
               onSelect={handleSelectSession}
+              onRefresh={() => setSessionsRefresh((k) => k + 1)}
               refreshKey={sessionsRefresh()}
             />
           </aside>
@@ -426,8 +442,10 @@ function LoadingPanel(props: { label?: string }) {
 
 export default function App() {
   return (
-    <TerminalProvider>
-      <Shell />
-    </TerminalProvider>
+    <ProjectsProvider>
+      <TerminalProvider>
+        <Shell />
+      </TerminalProvider>
+    </ProjectsProvider>
   );
 }

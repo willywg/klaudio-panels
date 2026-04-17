@@ -1,17 +1,15 @@
 import { For, Show } from "solid-js";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import {
-  projectLabel,
-  recentProjectsSignal,
-  relativeTime,
-} from "@/lib/recent-projects";
+import { FolderOpen } from "lucide-solid";
+import { projectLabel, relativeTime } from "@/lib/recent-projects";
+import { useProjects } from "@/context/projects";
 
 type Props = {
   onPick: (path: string) => void;
 };
 
 export function HomeScreen(props: Props) {
-  const recents = recentProjectsSignal;
+  const projects = useProjects();
 
   async function handleOpen() {
     const picked = await openDialog({ directory: true, multiple: false });
@@ -34,16 +32,17 @@ export function HomeScreen(props: Props) {
         <div class="flex items-center justify-between mb-3 px-1">
           <h2 class="text-sm text-neutral-300">Proyectos recientes</h2>
           <button
-            class="text-xs px-3 py-1.5 border border-neutral-700 rounded hover:bg-neutral-900 hover:border-neutral-600 text-neutral-200 transition"
+            class="text-xs px-3 py-1.5 border border-neutral-700 rounded hover:bg-neutral-900 hover:border-neutral-600 text-neutral-200 transition flex items-center gap-2"
             onClick={handleOpen}
           >
-            📁 Abrir proyecto
+            <FolderOpen size={14} strokeWidth={2} />
+            <span>Abrir proyecto</span>
           </button>
         </div>
 
         <div class="border border-neutral-800 rounded-lg overflow-hidden">
           <Show
-            when={recents().length > 0}
+            when={projects.recents().length > 0}
             fallback={
               <div class="px-4 py-8 text-center text-sm text-neutral-500">
                 No has abierto ningún proyecto todavía.
@@ -52,7 +51,7 @@ export function HomeScreen(props: Props) {
               </div>
             }
           >
-            <For each={recents()}>
+            <For each={projects.recents()}>
               {(p, i) => (
                 <button
                   onClick={() => props.onPick(p.path)}
@@ -83,24 +82,8 @@ export function HomeScreen(props: Props) {
 }
 
 function abbreviateHome(path: string): string {
-  const home = homePath();
-  if (home && path.startsWith(home)) return "~" + path.slice(home.length);
+  // Infer $HOME from any known project path (first segment "/Users/<name>").
+  const m = path.match(/^(\/Users\/[^/]+)/);
+  if (m) return "~" + path.slice(m[1].length);
   return path;
-}
-
-function homePath(): string | null {
-  // Rough heuristic — localStorage fallback. Tauri API call would be ideal
-  // but requires an async fetch on mount; for display-only we accept this.
-  const stored = localStorage.getItem("__home");
-  if (stored) return stored;
-  // Try to derive from an existing recent project.
-  const recents = recentProjectsSignal();
-  for (const r of recents) {
-    const m = r.path.match(/^(\/Users\/[^/]+)/);
-    if (m) {
-      localStorage.setItem("__home", m[1]);
-      return m[1];
-    }
-  }
-  return null;
 }

@@ -1,5 +1,6 @@
 import { createResource, For, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { RefreshCw } from "lucide-solid";
 import { displayLabel } from "@/lib/session-label";
 
 export type SessionMeta = {
@@ -18,6 +19,7 @@ export function SessionsList(props: {
   openingSessionIds: Set<string>;
   onNew: () => void;
   onSelect: (s: SessionMeta) => void;
+  onRefresh: () => void;
   refreshKey: number;
 }) {
   const [sessions] = createResource(
@@ -38,12 +40,25 @@ export function SessionsList(props: {
         + Nueva sesión
       </button>
 
-      <div class="px-3 text-xs uppercase tracking-wider text-neutral-500 mb-1">
-        Sesiones
+      <div class="px-3 mb-1 flex items-center justify-between">
+        <span class="text-xs uppercase tracking-wider text-neutral-500">
+          Sesiones
+        </span>
+        <button
+          class="p-1 text-neutral-500 hover:text-neutral-200 rounded transition"
+          onClick={props.onRefresh}
+          title="Refrescar lista"
+        >
+          <RefreshCw
+            size={12}
+            strokeWidth={2}
+            class={sessions.loading ? "animate-spin" : ""}
+          />
+        </button>
       </div>
 
       <div class="flex-1 overflow-y-auto">
-        <Show when={sessions.loading}>
+        <Show when={sessions.loading && !sessions.latest}>
           <div class="px-3 py-2 text-xs text-neutral-500">Cargando…</div>
         </Show>
         <Show when={sessions.error}>
