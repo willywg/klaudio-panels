@@ -1,32 +1,200 @@
-// Placeholder — real implementation in T4.
-
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
+
+use base64::{engine::general_purpose::STANDARD, Engine as _};
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use tauri::{AppHandle, Emitter, State};
+use tokio::sync::mpsc;
+use uuid::Uuid;
+
+pub struct PtySession {
+    pub master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
+    pub writer: Arc<Mutex<Box<dyn Write + Send>>>,
+}
 
 #[derive(Default)]
 pub struct PtyState {
-    pub sessions: Mutex<HashMap<String, ()>>,
+    pub sessions: Mutex<HashMap<String, PtySession>>,
 }
+
+const INITIAL_COLS: u16 = 80;
+const INITIAL_ROWS: u16 = 24;
+const READ_CHUNK: usize = 4096;
 
 #[tauri::command]
 pub async fn pty_open(
-    _project_path: String,
-    _args: Vec<String>,
+    app: AppHandle,
+    state: State<'_, PtyState>,
+    project_path: String,
+    args: Vec<String>,
 ) -> Result<String, String> {
-    Err("pty_open not implemented yet".into())
+    let bin = crate::binary::find_claude_binary()?;
+    let shell = crate::shell_env::get_user_shell();
+    let shell_env = crate::shell_env::load_shell_env(&shell);
+    let env = crate::shell_env::merge_shell_env(
+        shell_env,
+        vec![
+            ("TERM".into(), "xterm-256color".into()),
+            ("COLORTERM".into(), "truecolor".into()),
+            ("CLAUDE_DESKTOP".into(), "1".into()),
+        ],
+    );
+
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: INITIAL_ROWS,
+            cols: INITIAL_COLS,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| format!("openpty failed: {e}"))?;
+
+    let mut cmd = CommandBuilder::new(bin);
+    for a in &args {
+        cmd.arg(a);
+    }
+    cmd.cwd(&project_path);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e| format!("spawn failed: {e}"))?;
+    // Must drop the slave so the master sees EOF when the child exits.
+    drop(pair.slave);
+
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| format!("take_writer failed: {e}"))?;
+    let reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| format!("try_clone_reader failed: {e}"))?;
+
+    let id = Uuid::new_v4().to_string();
+    let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
+
+    // Blocking read loop — runs on a dedicated OS thread.
+    let tx_blocking = tx.clone();
+    tokio::task::spawn_blocking(move || {
+        let mut reader = reader;
+        let mut buf = [0u8; READ_CHUNK];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx_blocking.blocking_send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    // Async emitter — converts bytes to base64 and emits to the frontend.
+    let app_data = app.clone();
+    let id_data = id.clone();
+    tokio::spawn(async move {
+        while let Some(chunk) = rx.recv().await {
+            let b64 = STANDARD.encode(&chunk);
+            let _ = app_data.emit(&format!("pty:data:{id_data}"), b64);
+        }
+    });
+
+    // Child waiter — announces exit code when the process finishes.
+    let app_exit = app.clone();
+    let id_exit = id.clone();
+    tokio::task::spawn_blocking(move || {
+        let code = match child.wait() {
+            Ok(status) => status.exit_code() as i32,
+            Err(_) => -1,
+        };
+        let _ = app_exit.emit(&format!("pty:exit:{id_exit}"), code);
+    });
+
+    let session = PtySession {
+        master: Arc::new(Mutex::new(pair.master)),
+        writer: Arc::new(Mutex::new(writer)),
+    };
+
+    state
+        .sessions
+        .lock()
+        .map_err(|e| e.to_string())?
+        .insert(id.clone(), session);
+
+    Ok(id)
 }
 
 #[tauri::command]
-pub async fn pty_write(_id: String, _b64: String) -> Result<(), String> {
-    Err("pty_write not implemented yet".into())
+pub async fn pty_write(
+    state: State<'_, PtyState>,
+    id: String,
+    b64: String,
+) -> Result<(), String> {
+    let bytes = STANDARD
+        .decode(b64.as_bytes())
+        .map_err(|e| format!("invalid base64: {e}"))?;
+
+    let writer = {
+        let guard = state.sessions.lock().map_err(|e| e.to_string())?;
+        guard
+            .get(&id)
+            .map(|s| s.writer.clone())
+            .ok_or_else(|| format!("pty {id} not found"))?
+    };
+
+    let mut w = writer.lock().map_err(|e| e.to_string())?;
+    w.write_all(&bytes).map_err(|e| e.to_string())?;
+    w.flush().map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn pty_resize(_id: String, _cols: u16, _rows: u16) -> Result<(), String> {
-    Err("pty_resize not implemented yet".into())
+pub async fn pty_resize(
+    state: State<'_, PtyState>,
+    id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let master = {
+        let guard = state.sessions.lock().map_err(|e| e.to_string())?;
+        guard
+            .get(&id)
+            .map(|s| s.master.clone())
+            .ok_or_else(|| format!("pty {id} not found"))?
+    };
+
+    let m = master.lock().map_err(|e| e.to_string())?;
+    m.resize(PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    })
+    .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 #[tauri::command]
-pub async fn pty_kill(_id: String) -> Result<(), String> {
-    Err("pty_kill not implemented yet".into())
+pub async fn pty_kill(state: State<'_, PtyState>, id: String) -> Result<(), String> {
+    let removed = state
+        .sessions
+        .lock()
+        .map_err(|e| e.to_string())?
+        .remove(&id);
+
+    if let Some(session) = removed {
+        // Drop the master — this closes the PTY file descriptor, the child
+        // receives SIGHUP, and our read loop sees EOF.
+        drop(session.writer);
+        drop(session.master);
+    }
+    Ok(())
 }

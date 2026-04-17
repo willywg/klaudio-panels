@@ -30,7 +30,7 @@ fn canonical(path: &str) -> String {
 fn read_cwd(file: &Path) -> Option<String> {
     let f = fs::File::open(file).ok()?;
     let reader = BufReader::new(f);
-    for (i, line) in reader.lines().flatten().enumerate() {
+    for (i, line) in reader.lines().map_while(Result::ok).enumerate() {
         if i >= SCAN_LINES_FOR_CWD {
             break;
         }
@@ -83,7 +83,7 @@ fn extract_first_user_message(file: &Path) -> (Option<String>, Option<String>) {
     let Ok(f) = fs::File::open(file) else {
         return (None, None);
     };
-    for line in BufReader::new(f).lines().flatten() {
+    for line in BufReader::new(f).lines().map_while(Result::ok) {
         let Ok(v) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
