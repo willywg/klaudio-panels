@@ -2,6 +2,8 @@ import { onCleanup, onMount, Show } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { useTerminal } from "@/context/terminal";
 
@@ -48,7 +50,8 @@ export function TerminalView() {
     term = new Terminal({
       fontFamily: FONT_FAMILY,
       fontSize: 13,
-      lineHeight: 1.2,
+      lineHeight: 1.0,
+      letterSpacing: 0,
       theme: THEME,
       cursorBlink: true,
       allowProposedApi: true,
@@ -57,9 +60,28 @@ export function TerminalView() {
       convertEol: false,
     });
     fit = new FitAddon();
+    const unicode11 = new Unicode11Addon();
     term.loadAddon(fit);
+    term.loadAddon(unicode11);
     term.loadAddon(new WebLinksAddon());
+
     term.open(container!);
+
+    // Activate unicode11 width tables AFTER open. Essential for box-drawing
+    // chars, powerline glyphs and emojis (Claude's welcome icon, progress
+    // bar, Warp status, etc.) to render at the correct cell width.
+    term.unicode.activeVersion = "11";
+
+    // WebGL renderer — crisper glyph rendering and handles unicode widths
+    // more predictably than the default canvas renderer.
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
+    } catch (err) {
+      console.warn("WebGL renderer unavailable; falling back to canvas.", err);
+    }
+
     requestAnimationFrame(() => fit?.fit());
 
     term.onData((data) => {
@@ -69,8 +91,6 @@ export function TerminalView() {
       void ctx.resize(cols, rows);
     });
 
-    // Cmd+C / Cmd+V / Cmd+K handling. Returning false means xterm will NOT
-    // forward the key to the PTY.
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
       const mac = navigator.platform.toUpperCase().includes("MAC");
@@ -78,7 +98,6 @@ export function TerminalView() {
       if (!meta) return true;
       const key = e.key.toLowerCase();
       if (key === "c" && term!.hasSelection()) {
-        // Let the browser copy the selection; don't send Ctrl/Cmd-C to PTY.
         navigator.clipboard
           .writeText(term!.getSelection())
           .catch((err) => console.warn("clipboard write failed", err));
@@ -126,8 +145,8 @@ export function TerminalView() {
   });
 
   return (
-    <div class="h-full w-full flex flex-col min-h-0">
-      <div ref={container} class="flex-1 min-h-0 p-2" />
+    <div class="h-full w-full flex flex-col min-h-0 overflow-hidden">
+      <div ref={container} class="flex-1 min-h-0 min-w-0 overflow-hidden p-2" />
       <Show when={ctx.store.error}>
         <div class="border-t border-red-900/50 bg-red-950/40 px-3 py-1.5 text-[11px] text-red-300 font-mono">
           {ctx.store.error}

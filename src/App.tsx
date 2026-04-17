@@ -10,6 +10,7 @@ function Shell() {
   );
   const [activeSessionId, setActiveSessionId] = createSignal<string | null>(null);
   const [sessionsRefresh, setSessionsRefresh] = createSignal(0);
+  const [opening, setOpening] = createSignal(false);
   const term = useTerminal();
 
   createEffect(() => {
@@ -18,19 +19,26 @@ function Shell() {
     else localStorage.removeItem("projectPath");
   });
 
-  async function handleNew() {
+  async function openPty(args: string[]) {
     const p = projectPath();
     if (!p) return;
+    setOpening(true);
+    try {
+      await term.open(p, args);
+    } finally {
+      setOpening(false);
+      setSessionsRefresh((k) => k + 1);
+    }
+  }
+
+  async function handleNew() {
     setActiveSessionId(null);
-    await term.open(p, []);
-    setSessionsRefresh((k) => k + 1);
+    await openPty([]);
   }
 
   async function handleSelect(id: string) {
-    const p = projectPath();
-    if (!p) return;
     setActiveSessionId(id);
-    await term.open(p, ["--resume", id]);
+    await openPty(["--resume", id]);
   }
 
   async function handleChangeProject() {
@@ -40,13 +48,13 @@ function Shell() {
   }
 
   return (
-    <main class="h-screen w-screen flex flex-col bg-neutral-950 text-neutral-200">
+    <main class="h-screen w-screen flex flex-col bg-neutral-950 text-neutral-200 overflow-hidden">
       <Show
         when={projectPath()}
         fallback={<ProjectPicker onPick={(p) => setProjectPath(p)} />}
       >
-        <div class="flex-1 grid grid-cols-[280px_1fr] min-h-0">
-          <aside class="border-r border-neutral-800 flex flex-col min-h-0">
+        <div class="flex-1 grid grid-cols-[280px_1fr] min-h-0 overflow-hidden">
+          <aside class="border-r border-neutral-800 flex flex-col min-h-0 overflow-hidden">
             <div class="px-3 py-2 border-b border-neutral-800">
               <div class="text-[10px] uppercase tracking-wider text-neutral-500">
                 Proyecto
@@ -57,6 +65,7 @@ function Shell() {
               <button
                 class="mt-1 text-[11px] text-neutral-500 hover:text-neutral-300"
                 onClick={() => void handleChangeProject()}
+                disabled={opening()}
               >
                 ← cambiar
               </button>
@@ -69,13 +78,21 @@ function Shell() {
               refreshKey={sessionsRefresh()}
             />
           </aside>
-          <section class="min-w-0 flex flex-col min-h-0">
+
+          <section class="min-w-0 min-h-0 flex flex-col overflow-hidden">
             <Show
-              when={term.store.id}
+              when={term.store.id && !opening()}
               fallback={
-                <div class="flex-1 flex items-center justify-center text-neutral-500 text-sm">
-                  Elige una sesión o crea una nueva para empezar.
-                </div>
+                <Show
+                  when={opening()}
+                  fallback={
+                    <div class="flex-1 flex items-center justify-center text-neutral-500 text-sm">
+                      Elige una sesión o crea una nueva para empezar.
+                    </div>
+                  }
+                >
+                  <LoadingPanel />
+                </Show>
               }
             >
               <TerminalView />
@@ -84,6 +101,17 @@ function Shell() {
         </div>
       </Show>
     </main>
+  );
+}
+
+function LoadingPanel() {
+  return (
+    <div class="flex-1 flex items-center justify-center">
+      <div class="flex items-center gap-3 text-neutral-400 text-sm">
+        <div class="w-4 h-4 border-2 border-neutral-700 border-t-indigo-500 rounded-full animate-spin" />
+        <span>Iniciando Claude Code…</span>
+      </div>
+    </div>
   );
 }
 
