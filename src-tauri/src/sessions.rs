@@ -30,7 +30,7 @@ fn canonical(path: &str) -> String {
 fn read_cwd(file: &Path) -> Option<String> {
     let f = fs::File::open(file).ok()?;
     let reader = BufReader::new(f);
-    for (i, line) in reader.lines().flatten().enumerate() {
+    for (i, line) in reader.lines().map_while(Result::ok).enumerate() {
         if i >= SCAN_LINES_FOR_CWD {
             break;
         }
@@ -83,7 +83,7 @@ fn extract_first_user_message(file: &Path) -> (Option<String>, Option<String>) {
     let Ok(f) = fs::File::open(file) else {
         return (None, None);
     };
-    for line in BufReader::new(f).lines().flatten() {
+    for line in BufReader::new(f).lines().map_while(Result::ok) {
         let Ok(v) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
@@ -169,35 +169,3 @@ pub fn list_sessions_for_project(project_path: String) -> Result<Vec<SessionMeta
     Ok(out)
 }
 
-#[tauri::command]
-pub fn list_session_entries(session_id: String) -> Result<Vec<Value>, String> {
-    let projects_dir = claude_projects_dir().ok_or("cannot resolve ~/.claude/projects")?;
-    if !projects_dir.exists() {
-        return Ok(vec![]);
-    }
-
-    // Session id is the JSONL filename (without extension) somewhere under projects/
-    let target_name = format!("{session_id}.jsonl");
-    let mut found: Option<PathBuf> = None;
-    if let Ok(dirs) = fs::read_dir(&projects_dir) {
-        for d in dirs.flatten() {
-            let p = d.path().join(&target_name);
-            if p.exists() {
-                found = Some(p);
-                break;
-            }
-        }
-    }
-    let Some(path) = found else {
-        return Err(format!("session {session_id} not found"));
-    };
-
-    let f = fs::File::open(&path).map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    for line in BufReader::new(f).lines().flatten() {
-        if let Ok(v) = serde_json::from_str::<Value>(&line) {
-            out.push(v);
-        }
-    }
-    Ok(out)
-}

@@ -1,3 +1,33 @@
+# Sprint 00 — Exploración stream-json (archivado)
+
+> **Resultado:** APROBADO técnicamente (canal funciona) — DESCARTADO como approach de producto.
+> **Pivot a Sprint 01 "Claude en PTY":** ver `sprint-01-claude-in-pty.md`.
+> **Tag en git:** `v0.0.1-stream-json-poc`.
+
+## Por qué se descartó
+
+El usuario al ver la PoC funcionando identificó que reimplementar la UI de Claude Code renuncia a features clave del CLI que ya existen:
+
+- Slash commands (`/init`, `/help`, `/compact`, etc.)
+- Permission prompts interactivos
+- `-r` picker de sesiones y `-c` continuar
+- Autocomplete de paths
+- Hooks (SessionStart, PreToolUse, PostToolUse)
+- Modos interactivos de planning (`ExitPlanMode`)
+
+El approach correcto es **embeber el TUI real en un PTY** como hace OpenCode Desktop. Claude Code corre tal cual; la app da una ventana nativa alrededor.
+
+## Qué sobrevive del trabajo
+
+- `src-tauri/src/binary.rs` — detección del binary de `claude`.
+- `src-tauri/src/sessions.rs` — parser de `~/.claude/projects/**/*.jsonl` para la sidebar.
+- Scaffold completo de Tauri v2 + SolidJS + Tailwind v4.
+- `ProjectPicker` + `SessionsList` + layout 2-column.
+
+## Contenido original del sprint (referencia histórica)
+
+---
+
 # Sprint 01 — PoC: Claude Code dentro de Tauri
 
 > **Duración objetivo:** 3–5 días de trabajo efectivo

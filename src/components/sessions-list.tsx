@@ -1,6 +1,12 @@
 import { createResource, For, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import type { SessionMeta } from "@/lib/claude-events";
+
+type SessionMeta = {
+  id: string;
+  timestamp: string | null;
+  first_message_preview: string | null;
+  project_path: string;
+};
 
 export function SessionsList(props: {
   projectPath: string;

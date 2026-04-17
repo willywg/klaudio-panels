@@ -1,92 +1,72 @@
-# Sprint 01 — Resultados de la PoC
+# Sprint 01 — Resultados (Claude en PTY)
 
 > **Fecha:** 2026-04-16
-> **Commit probado:** (llenar al correr)
-> **Binario claude:** `/Users/willywg/.local/bin/claude` v2.1.112
-> **Plataforma:** macOS (Darwin 25.3.0)
-> **Estado:** ⏳ pendiente de validación manual del usuario
+> **Branch:** `sprint-01-pty`
+> **Tag al merge:** `v0.1.0-pty`
+> **Veredicto:** ✅ **APROBADA** — procedemos a Sprint 02.
 
-## Cómo correr la validación
+## Qué se validó
 
-```bash
-bun tauri dev
-```
+`claude` corre **interactivo en un PTY** (`portable-pty`) dentro de la ventana Tauri; xterm.js renderiza el TUI real sin ningún parsing de la app. El usuario confirmó que el flujo end-to-end funciona correctamente.
 
-Primer build de Rust ~3–5 min en frío. Después HMR es instantáneo.
+## Los 9 pasos
 
-Abre **devtools** en la ventana (Cmd+Option+I) antes de empezar; los eventos stream-json se logean ahí si algo falla.
+- [x] `bun tauri dev` abre ventana sin warnings.
+- [x] Elijo un proyecto con sesiones previas → sidebar muestra la lista.
+- [x] Layout 2-col con terminal vacío a la derecha.
+- [x] Click **"+ Nueva sesión"** → aparece el TUI de Claude Code v2.1.112 con greeting.
+- [x] Escribo prompt y Claude responde con formato nativo (colores, markdown, tool cards).
+- [x] Ctrl+C interrumpe turno (default de xterm).
+- [x] Resize de ventana re-acomoda el TUI (pty_resize + FitAddon).
+- [x] Click en sesión vieja → PTY actual muere, `claude --resume <id>` muestra historial real.
+- [x] Cmd+C / Cmd+V / Cmd+K funcionan como se espera.
 
-## User flow — 9 pasos
+## Problemas detectados en la primera corrida y resueltos
 
-Marca conforme avanzas. Si algo falla, anota en el bloque de *Bugs*.
+| # | Síntoma | Causa | Fix aplicado |
+|---|---------|-------|---------------|
+| 1 | Scrollbars externos horizontal y vertical sobre xterm | Capas del webview permitían overflow por fuera del control interno de xterm | `overflow-hidden` + `min-w/h-0` en `<main>`, grid, aside, section y container |
+| 2 | Delay sin feedback entre click "+ Nueva sesión" y primer byte del PTY | No había estado intermedio entre el invoke y el primer `pty:data` | Signal `opening`, `<LoadingPanel>` con spinner + "Iniciando Claude Code…" |
+| 3 | Icono ASCII-art de Claude desfasado / con fantasma entre celdas | `lineHeight: 1.2` + renderer canvas default miscalculaban ancho de box-drawing y emojis | `lineHeight: 1.0`, `@xterm/addon-unicode11` (`activeVersion = "11"`), `@xterm/addon-webgl` con fallback a canvas |
 
-- [ ] **1.** La ventana abre sin warnings rojos en consola de Tauri/Vite.
-- [ ] **2.** Veo la pantalla inicial con el botón **"Abrir proyecto…"**. Click → dialog nativo → elijo una carpeta con sesiones previas (sugerencia: `/Users/willywg/proyectos/construct-ai/copilot-agent` tiene 5 sesiones).
-- [ ] **3.** La UI cambia a layout de dos columnas. La izquierda muestra el proyecto + lista de sesiones previas con fecha y preview. La derecha muestra header vacío + input.
-- [ ] **4.** Click en **"+ Nueva sesión"** → la derecha queda lista, header dice `— · idle`.
-- [ ] **5.** Escribo un prompt corto (ej. `hola, lista los archivos en este repo`) y envío con ⌘+Enter o click Enviar.
-- [ ] **6.** Observo en orden:
-  - Mi mensaje aparece inmediatamente en índigo.
-  - Status cambia a `running`.
-  - Header muestra session id real (8 chars + …).
-  - Línea `init` con `cwd=...` y `model=sonnet` (o el que llegue).
-  - Una o más tarjetas `Bash`/`Read`/`Glob`/etc. con su input y luego su result.
-  - Mensaje del assistant con la respuesta.
-  - Línea final `done · $0.00xx · Xs`.
-  - Status vuelve a `idle`.
-- [ ] **7.** Cmd+R (reload): mismo proyecto recordado, misma lista de sesiones. La sesión recién creada **aparece arriba** con preview de mi prompt.
-- [ ] **8.** Click en esa sesión → chat se limpia. Escribo `y cuántos archivos eran?` → Claude responde con contexto de la conversación anterior (el `--resume <id>` funciona).
-- [ ] **9.** Mientras un turno está corriendo (status=`running`), click **Cancelar** → el botón desaparece y status vuelve a `idle`. En terminal externa: `ps aux | grep -v grep | grep "claude -p"` no muestra nada.
+## Métricas
 
-## Métricas a capturar
+- **LOC Rust** (`src-tauri/src/*.rs`): 657
+- **LOC TypeScript/TSX** (`src/**/*`): 557
+- **Commits del sprint:** 7
+- **Tiempo real:** ~1 día efectivo (más corto que el estimado de 2–4 días — la base que sobrevivió de Sprint 00 ayudó mucho)
 
-- **Primer evento** (send → aparece `init` o `hook_started` en UI): ___ ms
-- **Primer token de assistant** (send → primer `assistant_text`): ___ s
-- **LOC** (llenar corriendo `cloc src src-tauri/src --exclude-dir=target`):
-  - Rust: ___
-  - TypeScript/TSX: ___
-- **Warnings** `cargo clippy -- -D warnings`: ___
-- **Warnings** `bun run typecheck`: ___
+## Qué sobrevivió de Sprint 00
 
-## Bugs encontrados
+- `src-tauri/src/binary.rs` — detección de `claude` vía `which` + fallbacks
+- `src-tauri/src/sessions.rs` — parser de `~/.claude/projects/**/*.jsonl`
+- Scaffold Tauri + SolidJS + Tailwind v4
+- `ProjectPicker`, `SessionsList`, layout 2-column, localStorage
 
-> Formato: impacto, pasos para reproducir, stack/log si aplica.
+## Qué se agregó en este sprint
 
-- [ ] (ninguno por ahora)
+- `src-tauri/src/shell_env.rs` — probe/load/merge del env del login shell (port directo de OpenCode). Crítico para que `Bash`/`git`/`rg`/`node` funcionen dentro de Claude en macOS GUI.
+- `src-tauri/src/pty.rs` — `portable-pty` con `pty_open/write/resize/kill`, lectura en `spawn_blocking`, emit `pty:data:<id>` y `pty:exit:<id>` vía base64.
+- `src/context/terminal.tsx` — store single-PTY con pub/sub para `onData`/`onExit`.
+- `src/components/terminal-view.tsx` — xterm.js con FitAddon, Unicode11Addon, WebGL, WebLinks, keybinds custom.
+- Wiring en `App.tsx`: sesiones `--resume <id>`, "+ Nueva sesión" sin args, cambio de proyecto mata PTY.
 
-## Decisiones confirmadas
+## Decisiones confirmadas por la validación
 
-- [ ] Stream-json funciona como canal primario dentro de Tauri v2.
-- [ ] `~/.claude/projects/` es parseable sin inventar storage propio.
-- [ ] `--resume <session_id>` mantiene contexto entre turnos.
-- [ ] `process-wrap` no fue necesario en la PoC — `kill_on_drop` + `Child::kill()` bastaron para un proceso single-child. Reevaluar cuando Claude lance subshells con Bash.
+- **PTY puro > parsing stream-json.** El TUI real funciona sin fricción; el usuario obtiene 100% de las features del CLI.
+- **Shell env hydration es obligatorio.** Sin `probe_shell_env`, Claude no encontraría `node`/`git`/etc. Funcionó al primer intento.
+- **base64 para bytes PTY ↔ frontend.** Tauri serializa payload como string; base64 es el transporte robusto.
+- **WebGL renderer + Unicode 11 es no-negociable** para el TUI de Claude (iconos ASCII-art, progress bars, glyphs Warp).
 
-## Gaps conocidos (scope para Sprint 02)
+## Sprint 02 — Próximo
 
-1. **Sesiones continuadas abren chat vacío.** `list_session_entries` está implementado pero no se usa al hacer `onSelect`. En Sprint 02, al seleccionar una sesión se deberían rehidratar los eventos en la timeline.
-2. **stderr solo va a devtools console.** Si `claude` falla por auth o model inválido, el usuario no lo ve en la UI. Agregar toast o banner.
-3. **Model picker hardcodeado (`sonnet`).** Sprint 02 debería leer modelos disponibles de algún lado y permitir switch.
-4. **Sin markdown rendering.** `assistant_text` se muestra como texto plano (`whitespace-pre-wrap`). Sprint 02: `marked` + `shiki`.
-5. **Sin syntax highlighting en tool input/result.** JSON pretty solamente.
-6. **Sin indicador visual de streaming.** El mensaje del assistant aparece de golpe cuando llega el evento, no token-por-token (limitación del stream-json que emite bloques completos).
-7. **Sin persistencia del último `activeSessionId`** (solo del proyecto). Esto es intencional — el reload arranca "limpio" para evitar rehidratar algo que aún no sabemos mostrar bien.
+Backlog inmediato (decidir prioridad en kickoff):
 
-## Siguiente sprint (borrador)
+1. **Multi-tab de sesiones** — varios PTYs concurrentes con tabs, cada uno con su propio xterm.
+2. **File tree básico** — lateral navegación lazy + `notify` watcher (Fase 2 de `PROJECT.md`).
+3. **Persistir última sesión activa por proyecto** — al reabrir, auto-resume.
+4. **SQLite de app settings** — primeras entradas: proyectos favoritos, last session id, window size.
 
-1. Rehidratar histórico al abrir sesión existente (`list_session_entries` → timeline).
-2. Markdown + syntax highlight para assistant text y tool results.
-3. Model picker + persistencia de última selección.
-4. Toast / banner para errores de `stderr`.
-5. Empezar Fase 2 de PROJECT.md: file tree + file viewer.
-
-## Veredicto (llenar al final)
-
-- [ ] **APROBADA** — 9/9 pasos, procedemos con Sprint 02
-- [ ] **APROBADA con cambios** — describe ajustes necesarios
-- [ ] **BLOQUEADA** — describe el problema y plan
-
-Tag `v0.0.1-poc` al aprobar:
-
-```bash
-git tag -a v0.0.1-poc -m "PoC de Claude Code en Tauri aprobada"
-```
+Open questions para Sprint 02:
+- ¿Multi-tab como pestañas (browser-style) o como lista en sidebar con múltiples checkmark?
+- ¿File tree como panel adicional colapsable, o reemplaza la sidebar de sesiones?
