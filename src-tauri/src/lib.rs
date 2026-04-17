@@ -1,6 +1,6 @@
-mod binary;
-mod claude;
-mod sessions;
+pub mod binary;
+pub mod claude;
+pub mod sessions;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
