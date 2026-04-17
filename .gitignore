@@ -3,6 +3,9 @@ dist
 .DS_Store
 *.log
 
+# Claude Code local state
+.claude/scheduled_tasks.lock
+
 # Rust / Tauri
 src-tauri/target/
 src-tauri/gen/schemas
