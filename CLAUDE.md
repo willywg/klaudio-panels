@@ -4,59 +4,86 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository status
 
-**Pre-scaffold.** Only `PROJECT.md` (the blueprint) exists. No `package.json`, no `Cargo.toml`, no source code yet. When asked to "start Phase 1" or similar, scaffold with:
+**Sprint 01 in progress — PTY pivot.** Branch `sprint-01-pty`.
+
+Sprint 00 (stream-json PoC) is tagged `v0.0.1-stream-json-poc` and archived. See `docs/sprint-00-stream-json-exploration.md` for why it was discarded. Full blueprint in `PROJECT.md`.
+
+Build/test commands once the Sprint 01 code lands:
 
 ```bash
-bun create tauri-app claude-desktop --template solid-ts
+bun install
+bun tauri dev              # dev server + Tauri window
+bun run typecheck          # tsc --noEmit
+cd src-tauri && cargo check
+cd src-tauri && cargo clippy -- -D warnings
 ```
-
-Until that happens, there are no build/lint/test commands to run.
 
 ## What this project is
 
-Tauri v2 + SolidJS desktop wrapper around the **Claude Code CLI** (`claude`). Full blueprint in `PROJECT.md` — read it before making architectural suggestions.
+Tauri v2 + SolidJS desktop app that **embeds the real Claude Code TUI inside a native window** via PTY. The app is a shell around `claude`, not a reimplementation of it. Sidebar lists projects and past sessions read from `~/.claude/projects/**/*.jsonl`; clicking a session spawns `claude --resume <id>` in the PTY.
 
 ## Non-negotiable architectural decisions
 
-These were debated and settled. Don't re-propose the rejected alternatives without a new reason.
+Settled after the Sprint 00 pivot. Don't re-propose rejected alternatives without new evidence.
 
-1. **Two channels to Claude Code, not one.**
-   - **Primary (chat):** `claude -p --output-format stream-json --verbose` spawned as a **normal subprocess with piped stdio** (`tokio::Command` + `Stdio::piped()`). Parse stdout line-by-line as JSON. The first `system`/`init` event carries `session_id`; isolate all subsequent events per session.
-   - **Secondary (free terminal):** `portable-pty` + xterm.js. Independent of the chat.
-   - **Rejected:** spawning `claude` in a PTY and ANSI-parsing the TUI. Brittle across CLI updates.
+1. **Claude Code runs interactively in a PTY.** No `-p`, no `--output-format`, no flag that changes behavior to non-interactive. The user sees the real TUI (colors, slash commands, permission prompts, `-r` picker, autocomplete) rendered by xterm.js.
 
-2. **Don't invent session storage.** Claude Code already persists sessions at `~/.claude/projects/<encoded-path>/<session-id>.jsonl`. Parse those files for history. Resume via `claude -p --resume <id>` or `-c`.
+2. **Don't parse the PTY output.** Ever. Only render bytes into xterm.js. If a feature seems to need "what did Claude just do?", solve it by watching the **filesystem + git**, not the PTY.
 
-3. **SQLite (rusqlite, bundled) only for app settings** — window state, theme, favorite projects, binary path overrides. Not for chat history.
+3. **Shell env hydration is mandatory.** macOS GUI apps inherit a stripped PATH. Spawning `claude` without merging the login shell's env breaks `node`/`nvm`/`git`/`rg` inside Claude's Bash tool. Copy `probe_shell_env` + `load_shell_env` + `merge_shell_env` from OpenCode's `packages/desktop/src-tauri/src/cli.rs` (lines ~220-365). Always set `TERM=xterm-256color`.
 
-4. **Filesystem + git are the source of truth for file state.** No custom index. File tree reacts to `notify` events; diff badges come from `git status`; diff content comes from `git2`.
+4. **`current_dir` on every spawn** must be the project path. Claude uses cwd to choose the encoded directory under `~/.claude/projects/`; getting this wrong means the new session never shows up in our sidebar.
 
-5. **Diff rendering uses `@pierre/diffs`** (npm `^1.1.0-beta.18`). Normalize git output into its format.
+5. **Session storage lives in `~/.claude/projects/<encoded>/<id>.jsonl`.** We read it for sidebar previews only. We never write there. Resume is delegated to `claude --resume <id>`; we don't rehydrate messages in the UI.
+
+6. **SQLite (rusqlite) only for app settings** — window state, theme, favorite projects. Never for conversation history. `localStorage` is fine through the PoC.
+
+7. **Filesystem + git are the source of truth for file state.** No custom index. File tree reacts to `notify`; diff badges from `git status`; diff content from `git2`. File tree/diff viewer arrive in Sprint 02–03.
+
+8. **Diff rendering uses `@pierre/diffs`** (npm `^1.1.0-beta.18`) — Sprint 03.
+
+9. **Single PTY per window in Sprint 01.** Switching session kills the current child and spawns a new one. Multi-tab is Sprint 02; don't pre-build state for it.
+
+## PTY integration cheatsheet
+
+Three modes, all interactive, all in a PTY with hydrated shell env:
+
+| UI action                   | Command                    |
+| --------------------------- | -------------------------- |
+| Click "+ Nueva sesión"      | `claude`                   |
+| Click "Continuar última"    | `claude -c`                |
+| Click a session in sidebar  | `claude --resume <id>`     |
+
+Rust commands to expose:
+
+- `pty_open(project_path, args: Vec<String>) -> String` (returns pty id)
+- `pty_write(id, bytes)`
+- `pty_resize(id, cols, rows)`
+- `pty_kill(id)`
+- Events: `pty:data:<id>` (base64 or raw bytes) and `pty:exit:<id>`
 
 ## Reference repos (local clones)
 
-Two local clones exist for pattern mining. Treat them as read-only documentation.
-
 | Repo | Path | Use for | Don't copy |
 |---|---|---|---|
-| **Claudia** (getAsterisk/claudia) | `~/proyectos/open-source/claudia` | Claude Code integration patterns: `claude_binary.rs` (binary detection), `commands/claude.rs` (stream-json spawn, session_id extraction, event emission), `list_projects` (JSONL parsing) | React stack, UI components |
-| **OpenCode** (anomalyco/opencode) | `~/proyectos/open-source/opencode` | UI patterns: `packages/ui/src/pierre/` and `session-review.tsx` (diff viewer), `packages/app/src/components/file-tree.tsx`, `packages/app/src/context/file.tsx` (LRU cache, watcher) | `packages/desktop/src-tauri/src/cli.rs` is **not** a PTY spawner — it's a sidecar-over-pipes HTTP server pattern and does not apply here. `terminal.tsx` uses `ghostty-web` + WebSocket to a remote PTY, not local xterm.js — don't cite it as precedent. Everything under `packages/opencode/`, `packages/sdk/`, `packages/shared/` is OpenCode's own LLM server and irrelevant. |
+| **OpenCode Desktop** (anomalyco/opencode) | `~/proyectos/open-source/opencode` | **Primary reference now**: `packages/desktop/src-tauri/src/cli.rs` L220-L365 for shell env hydration (verbatim); `packages/app/src/components/terminal.tsx` and `context/terminal.tsx` for xterm-like integration patterns (they use ghostty-web, we use xterm.js; structure transfers); `packages/app/src/pages/session/terminal-panel.tsx` for Sprint 02 tabs. | `cli.rs` **above line 220** — that's sidecar-HTTP for their OpenCode server CLI, doesn't apply to `claude` which has no server. Anything under `packages/opencode/`, `packages/sdk/`, `packages/shared/` (their LLM server). `ghostty-web` — they fork it; we use xterm.js. |
+| **Claudia** (getAsterisk/claudia) | `~/proyectos/open-source/claudia` | Sprint 00 archive only. Used for initial stream-json PoC. `src-tauri/src/claude_binary.rs` was the base for our `binary.rs` and `src-tauri/src/commands/claude.rs` lines 180-230 were the base for `extract_first_user_message` in `sessions.rs`. | Everything else — it's the approach we pivoted away from. |
 
-Claudia is the primary reference for anything Claude-CLI-adjacent. OpenCode is the reference for diff/file-tree UI only.
-
-## Module boundaries (planned, see PROJECT.md)
+## Module boundaries
 
 Rust (`src-tauri/src/`):
-- `binary.rs` — detect `claude` via `which` crate + nvm/volta/asdf fallbacks
-- `claude.rs` — stream-json spawn, per-session event emission, cancel/resume
-- `pty.rs` — `portable-pty` for the free terminal only
-- `sessions.rs` — read-only parser for `~/.claude/projects/**/*.jsonl`
-- `git.rs` — `git2` diffs (working / staged / branch / turn-snapshot)
-- `fs.rs` — readdir/read/write + `notify` watcher → Tauri events
-- `config.rs` — SQLite for app settings
+- `binary.rs` — detect `claude` (which + nvm/volta/asdf fallbacks + `--version` validation). Kept from Sprint 00.
+- `sessions.rs` — parse `~/.claude/projects/**/*.jsonl` for sidebar previews (read-only). Kept from Sprint 00.
+- `shell_env.rs` — `probe_shell_env`, `load_shell_env`, `merge_shell_env` (port from OpenCode).
+- `pty.rs` — `portable-pty` lifecycle, `pty_open/write/resize/kill`, streaming events.
 
-Frontend contexts (`src/context/`): `claude`, `pty`, `project`, `file-tree`, `editor`, `diff`, `git`, `config`, `session`. Each context owns one concern; cross-context calls go through signals, not direct imports.
+Frontend (`src/`):
+- `context/terminal.tsx` — single active PTY id, write/resize bindings.
+- `components/terminal-view.tsx` — xterm.js mount, fit-addon, resize observer, clipboard keybinds.
+- `components/project-picker.tsx` + `components/sessions-list.tsx` — survived from Sprint 00.
+
+Cross-context communication goes through Tauri events (`pty:data:*`, `pty:exit:*`), never direct imports between contexts.
 
 ## Language
 
-The blueprint (`PROJECT.md`) and commit messages so far are a mix of Spanish and English. Match the surrounding style — user-facing strings and PROJECT.md content tend toward Spanish; code identifiers, commit subjects, and technical docs are English.
+PROJECT.md and commit bodies mix Spanish (user-facing narrative) and English (code identifiers, technical decisions). Match the surrounding style. Docstrings, variable names and structured logs in English.
