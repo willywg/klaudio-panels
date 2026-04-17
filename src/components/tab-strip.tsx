@@ -12,6 +12,8 @@ type Props = {
 
 function statusDotClass(status: TerminalTab["status"]): string {
   switch (status) {
+    case "opening":
+      return "bg-indigo-400 animate-pulse";
     case "running":
       return "bg-green-500";
     case "exited":
@@ -30,7 +32,7 @@ export function TabStrip(props: Props) {
           return (
             <div
               class={
-                "group flex items-center gap-2 px-3 min-w-[120px] max-w-[220px] border-r border-neutral-800 cursor-pointer select-none text-[12px] " +
+                "group flex items-center gap-2 px-3 min-w-[140px] max-w-[240px] border-r border-neutral-800 cursor-pointer select-none text-[12px] " +
                 (isActive()
                   ? "bg-neutral-900 text-neutral-100"
                   : "text-neutral-400 hover:bg-neutral-900/50 hover:text-neutral-200")

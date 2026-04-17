@@ -8,9 +8,11 @@ import { createStore, produce } from "solid-js/store";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type TabStatus = "running" | "exited" | "error";
+export type TabStatus = "opening" | "running" | "exited" | "error";
 
 export type TerminalTab = {
+  /** Stable identity of the tab. Starts as a temp id ("pending:...") while
+   *  `pty_open` is in-flight, then swapped to the PTY UUID on success. */
   id: string;
   projectPath: string;
   sessionId: string | null;
@@ -32,6 +34,12 @@ export type OpenTabOpts = {
   label: string;
   sessionId: string | null;
 };
+
+let tempCounter = 0;
+function nextTempId(): string {
+  tempCounter += 1;
+  return `pending:${Date.now().toString(36)}-${tempCounter}`;
+}
 
 export function makeTerminalContext() {
   const [store, setStore] = createStore<TerminalStore>({
@@ -69,47 +77,78 @@ export function makeTerminalContext() {
     args: string[],
     opts: OpenTabOpts,
   ): Promise<string> {
-    let id: string;
-    try {
-      id = (await invoke("pty_open", { projectPath, args })) as string;
-    } catch (err) {
-      const msg = String(err);
-      console.error("pty_open failed", msg);
-      throw err;
-    }
-    const tab: TerminalTab = {
-      id,
+    // Step 1 — create a pending tab immediately. This is what dedupes rapid
+    // clicks: the next `tabs.find(sessionId)` check sees the pending tab.
+    const tempId = nextTempId();
+    const pending: TerminalTab = {
+      id: tempId,
       projectPath,
       sessionId: opts.sessionId,
       label: opts.label,
-      status: "running",
+      status: "opening",
       exitCode: null,
       error: null,
     };
     setStore(
       produce((s) => {
-        s.tabs.push(tab);
-        s.activeTabId = id;
+        s.tabs.push(pending);
+        s.activeTabId = tempId;
       }),
     );
-    await attachListeners(id);
-    return id;
+
+    // Step 2 — actually spawn.
+    let realId: string;
+    try {
+      realId = (await invoke("pty_open", { projectPath, args })) as string;
+    } catch (err) {
+      const msg = String(err);
+      console.error("pty_open failed", msg);
+      setStore(
+        produce((s) => {
+          const idx = s.tabs.findIndex((t) => t.id === tempId);
+          if (idx >= 0) {
+            s.tabs[idx].status = "error";
+            s.tabs[idx].error = msg;
+          }
+        }),
+      );
+      throw err;
+    }
+
+    // Step 3 — swap tempId → realId atomically, keeping active-ness.
+    setStore(
+      produce((s) => {
+        const idx = s.tabs.findIndex((t) => t.id === tempId);
+        if (idx >= 0) {
+          s.tabs[idx].id = realId;
+          s.tabs[idx].status = "running";
+        }
+        if (s.activeTabId === tempId) s.activeTabId = realId;
+      }),
+    );
+
+    await attachListeners(realId);
+    return realId;
   }
 
   async function closeTab(id: string): Promise<void> {
-    try {
-      await invoke("pty_kill", { id });
-    } catch (err) {
-      console.warn("pty_kill failed", err);
+    // Pending tabs may not have a backing PTY yet — skip the kill invoke.
+    const isPending = id.startsWith("pending:");
+    if (!isPending) {
+      try {
+        await invoke("pty_kill", { id });
+      } catch (err) {
+        console.warn("pty_kill failed", err);
+      }
+      const un = unlistens.get(id);
+      if (un) {
+        un.data();
+        un.exit();
+        unlistens.delete(id);
+      }
+      dataHandlers.delete(id);
+      exitHandlers.delete(id);
     }
-    const un = unlistens.get(id);
-    if (un) {
-      un.data();
-      un.exit();
-      unlistens.delete(id);
-    }
-    dataHandlers.delete(id);
-    exitHandlers.delete(id);
     setStore(
       produce((s) => {
         const idx = s.tabs.findIndex((t) => t.id === id);
@@ -141,6 +180,7 @@ export function makeTerminalContext() {
   }
 
   async function write(id: string, bytes: Uint8Array) {
+    if (id.startsWith("pending:")) return;
     const b64 = bytesToBase64(bytes);
     try {
       await invoke("pty_write", { id, b64 });
@@ -150,6 +190,7 @@ export function makeTerminalContext() {
   }
 
   async function resize(id: string, cols: number, rows: number) {
+    if (id.startsWith("pending:")) return;
     try {
       await invoke("pty_resize", { id, cols, rows });
     } catch (err) {
@@ -187,6 +228,12 @@ export function makeTerminalContext() {
     return store.tabs.find((t) => t.id === id);
   }
 
+  /** Returns the tab currently opening a given sessionId (pending or running),
+   *  or undefined. Used by handleSelect to dedupe rapid clicks. */
+  function findTabBySessionId(sessionId: string): TerminalTab | undefined {
+    return store.tabs.find((t) => t.sessionId === sessionId);
+  }
+
   onCleanup(() => {
     void closeAll();
   });
@@ -202,6 +249,7 @@ export function makeTerminalContext() {
     onData,
     onExit,
     getTab,
+    findTabBySessionId,
   };
 }
 

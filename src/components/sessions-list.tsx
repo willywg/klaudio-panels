@@ -1,10 +1,13 @@
 import { createResource, For, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { displayLabel } from "@/lib/session-label";
 
-type SessionMeta = {
+export type SessionMeta = {
   id: string;
   timestamp: string | null;
   first_message_preview: string | null;
+  custom_title: string | null;
+  summary: string | null;
   project_path: string;
 };
 
@@ -12,8 +15,9 @@ export function SessionsList(props: {
   projectPath: string;
   activeSessionId: string | null;
   openSessionIds: Set<string>;
+  openingSessionIds: Set<string>;
   onNew: () => void;
-  onSelect: (id: string) => void;
+  onSelect: (s: SessionMeta) => void;
   refreshKey: number;
 }) {
   const [sessions] = createResource(
@@ -57,11 +61,14 @@ export function SessionsList(props: {
           {(s) => {
             const isActive = () => props.activeSessionId === s.id;
             const isOpen = () => props.openSessionIds.has(s.id);
+            const isOpening = () => props.openingSessionIds.has(s.id);
+            const label = () => displayLabel(s);
             return (
               <button
-                onClick={() => props.onSelect(s.id)}
+                onClick={() => !isOpening() && props.onSelect(s)}
+                disabled={isOpening()}
                 class={
-                  "w-full text-left px-3 py-2 border-l-2 flex gap-2 items-start " +
+                  "w-full text-left px-3 py-2 border-l-2 flex gap-2 items-start disabled:cursor-wait " +
                   (isActive()
                     ? "border-indigo-500 bg-neutral-900"
                     : isOpen()
@@ -73,7 +80,11 @@ export function SessionsList(props: {
                 <span
                   class={
                     "mt-1.5 inline-block w-1.5 h-1.5 rounded-full shrink-0 " +
-                    (isOpen() ? "bg-green-500" : "bg-transparent")
+                    (isOpening()
+                      ? "bg-indigo-400 animate-pulse"
+                      : isOpen()
+                        ? "bg-green-500"
+                        : "bg-transparent")
                   }
                 />
                 <span class="flex-1 min-w-0">
@@ -81,7 +92,7 @@ export function SessionsList(props: {
                     {formatTs(s.timestamp)}
                   </div>
                   <div class="text-xs text-neutral-200 line-clamp-2 mt-0.5">
-                    {s.first_message_preview ?? "(sin contenido)"}
+                    {label()}
                   </div>
                 </span>
               </button>

@@ -1,6 +1,13 @@
-import { createEffect, createMemo, createSignal, For, Show, onMount } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  For,
+  Show,
+  onMount,
+} from "solid-js";
 import { ProjectPicker } from "@/components/project-picker";
-import { SessionsList } from "@/components/sessions-list";
+import { SessionsList, type SessionMeta } from "@/components/sessions-list";
 import { TerminalView } from "@/components/terminal-view";
 import { TabStrip } from "@/components/tab-strip";
 import {
@@ -8,20 +15,15 @@ import {
   setLastSessionId,
 } from "@/components/last-session";
 import { TerminalProvider, useTerminal } from "@/context/terminal";
+import { displayLabel } from "@/lib/session-label";
 
 const AUTO_RESUME_FAIL_WINDOW_MS = 2000;
-
-function truncate(s: string, n: number): string {
-  if (s.length <= n) return s;
-  return s.slice(0, n - 1) + "…";
-}
 
 function Shell() {
   const [projectPath, setProjectPath] = createSignal<string | null>(
     localStorage.getItem("projectPath"),
   );
   const [sessionsRefresh, setSessionsRefresh] = createSignal(0);
-  const [opening, setOpening] = createSignal(false);
   const term = useTerminal();
 
   createEffect(() => {
@@ -40,9 +42,21 @@ function Shell() {
 
   const openSessionIds = createMemo(() => {
     const set = new Set<string>();
-    for (const t of term.store.tabs) if (t.sessionId) set.add(t.sessionId);
+    for (const t of term.store.tabs)
+      if (t.sessionId && t.status !== "opening") set.add(t.sessionId);
     return set;
   });
+
+  const openingSessionIds = createMemo(() => {
+    const set = new Set<string>();
+    for (const t of term.store.tabs)
+      if (t.sessionId && t.status === "opening") set.add(t.sessionId);
+    return set;
+  });
+
+  const anyTabOpening = createMemo(() =>
+    term.store.tabs.some((t) => t.status === "opening"),
+  );
 
   // Persist the last sessionId for the current project whenever the active
   // tab changes to one with a sessionId. Tabs without sessionId don't update
@@ -58,13 +72,14 @@ function Shell() {
   async function openNewTab() {
     const p = projectPath();
     if (!p) return;
-    setOpening(true);
     try {
-      await term.openTab(p, [], { label: "Nueva sesión", sessionId: null });
+      await term.openTab(p, [], {
+        label: "Nueva sesión",
+        sessionId: null,
+      });
     } catch (err) {
       console.error("openTab(new) failed", err);
     } finally {
-      setOpening(false);
       setSessionsRefresh((k) => k + 1);
     }
   }
@@ -72,25 +87,27 @@ function Shell() {
   async function openResumeTab(sessionId: string, label: string) {
     const p = projectPath();
     if (!p) return;
-    setOpening(true);
     try {
-      await term.openTab(p, ["--resume", sessionId], { label, sessionId });
+      await term.openTab(p, ["--resume", sessionId], {
+        label,
+        sessionId,
+      });
     } catch (err) {
       console.error("openTab(resume) failed", err);
     } finally {
-      setOpening(false);
       setSessionsRefresh((k) => k + 1);
     }
   }
 
-  function handleSelect(sessionId: string) {
-    const existing = term.store.tabs.find((t) => t.sessionId === sessionId);
+  function handleSelectSession(meta: SessionMeta) {
+    // Dedupe: if there's already a tab (pending or running) for this
+    // sessionId, just activate it. This is what prevents rapid-click spam.
+    const existing = term.findTabBySessionId(meta.id);
     if (existing) {
       term.setActiveTab(existing.id);
       return;
     }
-    const label = truncate(`session ${sessionId.slice(0, 8)}`, 28);
-    void openResumeTab(sessionId, label);
+    void openResumeTab(meta.id, displayLabel(meta));
   }
 
   function handleActivate(id: string) {
@@ -116,8 +133,7 @@ function Shell() {
     if (!lastId) return;
 
     const spawnedAt = Date.now();
-    const label = truncate(`session ${lastId.slice(0, 8)}`, 28);
-    setOpening(true);
+    const label = `session ${lastId.slice(0, 8)}`;
     term
       .openTab(p, ["--resume", lastId], { label, sessionId: lastId })
       .then((tabId) => {
@@ -138,7 +154,6 @@ function Shell() {
         setLastSessionId(p, null);
       })
       .finally(() => {
-        setOpening(false);
         setSessionsRefresh((k) => k + 1);
       });
   });
@@ -161,7 +176,6 @@ function Shell() {
               <button
                 class="mt-1 text-[11px] text-neutral-500 hover:text-neutral-300"
                 onClick={() => void handleChangeProject()}
-                disabled={opening()}
               >
                 ← cambiar
               </button>
@@ -170,8 +184,9 @@ function Shell() {
               projectPath={projectPath()!}
               activeSessionId={activeSessionId()}
               openSessionIds={openSessionIds()}
+              openingSessionIds={openingSessionIds()}
               onNew={() => void openNewTab()}
-              onSelect={handleSelect}
+              onSelect={handleSelectSession}
               refreshKey={sessionsRefresh()}
             />
           </aside>
@@ -183,7 +198,7 @@ function Shell() {
               onActivate={handleActivate}
               onClose={(id) => void handleClose(id)}
               onNew={() => void openNewTab()}
-              canOpenNew={!opening()}
+              canOpenNew={!anyTabOpening()}
             />
             <div class="relative flex-1 min-h-0 overflow-hidden">
               <For each={term.store.tabs}>
@@ -198,18 +213,20 @@ function Shell() {
                         "z-index": isActive() ? 1 : 0,
                       }}
                     >
-                      <TerminalView id={tab.id} active={isActive()} />
+                      <Show
+                        when={tab.status !== "opening"}
+                        fallback={<LoadingPanel label={tab.label} />}
+                      >
+                        <TerminalView id={tab.id} active={isActive()} />
+                      </Show>
                     </div>
                   );
                 }}
               </For>
-              <Show when={term.store.tabs.length === 0 && !opening()}>
+              <Show when={term.store.tabs.length === 0}>
                 <div class="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm">
                   Elige una sesión o crea una nueva para empezar.
                 </div>
-              </Show>
-              <Show when={opening() && term.store.tabs.length === 0}>
-                <LoadingPanel />
               </Show>
             </div>
           </section>
@@ -219,12 +236,19 @@ function Shell() {
   );
 }
 
-function LoadingPanel() {
+function LoadingPanel(props: { label?: string }) {
   return (
     <div class="absolute inset-0 flex items-center justify-center">
-      <div class="flex items-center gap-3 text-neutral-400 text-sm">
-        <div class="w-4 h-4 border-2 border-neutral-700 border-t-indigo-500 rounded-full animate-spin" />
-        <span>Iniciando Claude Code…</span>
+      <div class="flex flex-col items-center gap-3 text-neutral-400 text-sm">
+        <div class="flex items-center gap-3">
+          <div class="w-4 h-4 border-2 border-neutral-700 border-t-indigo-500 rounded-full animate-spin" />
+          <span>Iniciando Claude Code…</span>
+        </div>
+        <Show when={props.label}>
+          <span class="text-[11px] text-neutral-600 font-mono truncate max-w-[300px]">
+            {props.label}
+          </span>
+        </Show>
       </div>
     </div>
   );
