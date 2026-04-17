@@ -1,12 +1,12 @@
 [package]
-name = "claude-desktop"
+name = "cc-ui"
 version = "0.0.1"
-description = "IDE desktop wrapping Claude Code CLI"
+description = "Claude Code UI — native window embedding the Claude Code CLI"
 authors = ["willywg"]
 edition = "2021"
 
 [lib]
-name = "claude_desktop_lib"
+name = "cc_ui_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

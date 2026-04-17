@@ -1,4 +1,4 @@
-# Claude Desktop — Project Blueprint
+# Claude Code UI — Project Blueprint
 
 > Ventana nativa que **embebe Claude Code corriendo en PTY**, con sidebar de proyectos/sesiones y (más adelante) file tree, diff viewer y terminal libre.
 
@@ -103,7 +103,7 @@ App de escritorio construida con Tauri v2 + SolidJS que **muestra el TUI real de
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  Claude Desktop                            ─ □ ✕          │
+│  Claude Code UI                            ─ □ ✕          │
 ├───────────────┬──────────────────────────────────────────────┤
 │  Proyecto     │                                              │
 │  psicolab     │  $ claude                                    │
@@ -128,7 +128,7 @@ Un solo PTY activo. Cambiar sesión mata el PTY anterior y spawnea uno nuevo con
 ## Estructura del Proyecto
 
 ```
-claude-desktop/
+cc-ui/
 ├── src-tauri/
 │   ├── Cargo.toml
 │   ├── tauri.conf.json
