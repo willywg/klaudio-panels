@@ -39,7 +39,7 @@ export function ProjectsSidebar(props: Props) {
         <Home size={18} strokeWidth={2} />
       </button>
       <div class="w-8 h-px bg-neutral-800 my-1" />
-      <For each={projects.recents()}>
+      <For each={projects.list}>
         {(proj) => {
           const isActive = () => props.activePath === proj.path;
           const openCount = () => props.openTabsByProject.get(proj.path) ?? 0;

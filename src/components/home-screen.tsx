@@ -42,7 +42,7 @@ export function HomeScreen(props: Props) {
 
         <div class="border border-neutral-800 rounded-lg overflow-hidden">
           <Show
-            when={projects.recents().length > 0}
+            when={projects.list.length > 0}
             fallback={
               <div class="px-4 py-8 text-center text-sm text-neutral-500">
                 No has abierto ningún proyecto todavía.
@@ -51,7 +51,7 @@ export function HomeScreen(props: Props) {
               </div>
             }
           >
-            <For each={projects.recents()}>
+            <For each={projects.list}>
               {(p, i) => (
                 <button
                   onClick={() => props.onPick(p.path)}

@@ -1,9 +1,9 @@
 import {
   createContext,
-  createSignal,
   useContext,
   type ParentProps,
 } from "solid-js";
+import { createStore, produce } from "solid-js/store";
 import {
   type RecentProject,
   loadRecentProjects,
@@ -11,29 +11,49 @@ import {
   MAX_RECENT_PROJECTS,
 } from "@/lib/recent-projects";
 
+type State = {
+  list: RecentProject[];
+};
+
 function makeProjectsContext() {
-  const [recents, setRecents] = createSignal<RecentProject[]>(
-    loadRecentProjects(),
-  );
+  const [state, setState] = createStore<State>({
+    list: loadRecentProjects(),
+  });
 
   function touch(path: string): void {
     const now = Date.now();
-    const filtered = recents().filter((p) => p.path !== path);
-    const next = [{ path, lastOpened: now }, ...filtered].slice(
-      0,
-      MAX_RECENT_PROJECTS,
+    setState(
+      "list",
+      produce((list: RecentProject[]) => {
+        const idx = list.findIndex((p) => p.path === path);
+        if (idx >= 0) list.splice(idx, 1);
+        list.unshift({ path, lastOpened: now });
+        if (list.length > MAX_RECENT_PROJECTS) {
+          list.length = MAX_RECENT_PROJECTS;
+        }
+      }),
     );
-    setRecents(next);
-    saveRecentProjects(next);
+    saveRecentProjects(state.list);
   }
 
   function remove(path: string): void {
-    const next = recents().filter((p) => p.path !== path);
-    setRecents(next);
-    saveRecentProjects(next);
+    setState(
+      "list",
+      produce((list: RecentProject[]) => {
+        const idx = list.findIndex((p) => p.path === path);
+        if (idx >= 0) list.splice(idx, 1);
+      }),
+    );
+    saveRecentProjects(state.list);
   }
 
-  return { recents, touch, remove };
+  return {
+    get list(): RecentProject[] {
+      return state.list;
+    },
+    touch,
+    remove,
+  };
 }
 
 const Ctx = createContext<ReturnType<typeof makeProjectsContext>>();

@@ -24,21 +24,34 @@ import { displayLabel } from "@/lib/session-label";
 const AUTO_RESUME_FAIL_WINDOW_MS = 2000;
 
 function Shell() {
-  const [activeProjectPath, setActiveProjectPath] = createSignal<string | null>(
-    localStorage.getItem("projectPath"),
-  );
+  const [activeProjectPath, setActiveProjectPathSignal] = createSignal<
+    string | null
+  >(localStorage.getItem("projectPath"));
   const [sessionsRefresh, setSessionsRefresh] = createSignal(0);
   const term = useTerminal();
   const projects = useProjects();
 
-  // Remember which tab was last active per project, so switching projects
-  // restores the right tab instead of always jumping to the first.
+  // Remembered active tab per project. Set BEFORE changing activeProjectPath
+  // (inside setActiveProjectPath) so it's never wrong when the switch effect
+  // reads it.
   const activeByProject = new Map<string, string | null>();
-  // Track which projects have already consumed their auto-resume (runs once
-  // per project per app lifetime — switching away and back doesn't re-trigger).
+  // Track which projects have already consumed their auto-resume (once per
+  // app lifetime — switching away and back doesn't re-trigger).
   const autoResumed = new Set<string>();
 
-  // Persist current project selection.
+  /** Single entry point for changing which project is active. Always save the
+   *  current active tab for the OUTGOING project first, so coming back lands
+   *  on the right tab. */
+  function setActiveProjectPath(next: string | null) {
+    const prev = activeProjectPath();
+    if (prev === next) return;
+    if (prev !== null) {
+      activeByProject.set(prev, term.store.activeTabId);
+    }
+    setActiveProjectPathSignal(next);
+  }
+
+  // Persist + touch on active project change.
   createEffect(() => {
     const p = activeProjectPath();
     if (p) {
@@ -49,18 +62,33 @@ function Shell() {
     }
   });
 
-  // Seed recent projects with the first-ever project if it's missing from the
-  // list (migration: pre-existing localStorage only had projectPath).
-  onMount(() => {
-    const p = activeProjectPath();
-    if (p) projects.touch(p);
-  });
+  // On active project change, pick the right tab to show (remembered > first
+  // existing > null). If none, consider auto-resume. This is the SOLE place
+  // that calls term.setActiveTab as a response to project switch.
+  createEffect(
+    on(activeProjectPath, (p) => {
+      if (!p) {
+        term.setActiveTab(null);
+        return;
+      }
+      const tabsInProject = term.store.tabs.filter(
+        (t) => t.projectPath === p,
+      );
+      const remembered = activeByProject.get(p) ?? null;
+      let nextActive: string | null = null;
+      if (remembered && tabsInProject.some((t) => t.id === remembered)) {
+        nextActive = remembered;
+      } else if (tabsInProject.length > 0) {
+        nextActive = tabsInProject[0].id;
+      }
+      term.setActiveTab(nextActive);
+      if (nextActive === null) maybeAutoResume(p);
+    }),
+  );
 
-  // Auto-refresh sessions list whenever tabs open/close for the active project.
-  // This catches 80% of /rename cases: the user typically renames during a
-  // session then closes the tab, at which point we re-read the JSONL and pick
-  // up the new title. Real-time updates during a live session = Sprint 03
-  // (JSONL watcher).
+  // Auto-refresh sessions list whenever tabs open/close for the active
+  // project. Captures 80% of /rename cases (rename during session, then close
+  // tab, reopen -> new title picked up).
   createEffect(
     on(
       () => term.store.tabs.length,
@@ -68,6 +96,12 @@ function Shell() {
       { defer: true },
     ),
   );
+
+  // Seed recent projects with the project loaded from localStorage on boot.
+  onMount(() => {
+    const p = activeProjectPath();
+    if (p) projects.touch(p);
+  });
 
   const projectTabs = createMemo(() => {
     const p = activeProjectPath();
@@ -89,20 +123,19 @@ function Shell() {
     return term.store.tabs.find((t) => t.id === id);
   });
 
-  // Record the active tab per project whenever it changes — but only if the
-  // active tab belongs to the currently-selected project (avoid recording
-  // cross-project noise during transitions).
+  // Whenever the user activates a tab manually (TabStrip click) within the
+  // active project, remember that as the project's preferred tab.
   createEffect(
     on(
       () => term.store.activeTabId,
       (id) => {
         const p = activeProjectPath();
         if (!p) return;
-        const tab = id ? term.store.tabs.find((t) => t.id === id) : undefined;
+        const tab = id
+          ? term.store.tabs.find((t) => t.id === id)
+          : undefined;
         if (tab && tab.projectPath === p) {
           activeByProject.set(p, id);
-        } else if (!tab) {
-          activeByProject.set(p, null);
         }
       },
     ),
@@ -140,8 +173,7 @@ function Shell() {
     projectTabs().some((t) => t.status === "opening"),
   );
 
-  // Persist the last sessionId for the project whose active tab is currently
-  // focused. Only fires when the tab belongs to the active project.
+  // Persist lastSessionId for the active project.
   createEffect(() => {
     const p = activeProjectPath();
     const a = activeTab();
@@ -199,9 +231,6 @@ function Shell() {
     await term.closeTab(id);
   }
 
-  // Attempt auto-resume for a project if it has a persisted lastSessionId and
-  // no tabs currently open. Marks the project as "resumed" so repeated
-  // switches don't keep spawning.
   function maybeAutoResume(projectPath: string) {
     if (autoResumed.has(projectPath)) return;
     autoResumed.add(projectPath);
@@ -241,85 +270,25 @@ function Shell() {
       });
   }
 
-  function switchToProject(path: string) {
-    const prev = activeProjectPath();
-    if (prev === path) return;
-    if (prev && term.store.activeTabId) {
-      activeByProject.set(prev, term.store.activeTabId);
-    }
-    setActiveProjectPath(path);
-    // Restore saved active tab for this project, else pick the first tab if
-    // any, else null.
-    const remembered = activeByProject.get(path);
-    const tabsInProject = term.store.tabs.filter(
-      (t) => t.projectPath === path,
-    );
-    let nextActive: string | null = null;
-    if (remembered && tabsInProject.some((t) => t.id === remembered)) {
-      nextActive = remembered;
-    } else if (tabsInProject.length > 0) {
-      nextActive = tabsInProject[0].id;
-    }
-    term.setActiveTab(nextActive);
-    if (nextActive === null) maybeAutoResume(path);
-  }
-
   function handleAddProject(path: string) {
     projects.touch(path);
-    switchToProject(path);
+    setActiveProjectPath(path);
+  }
+
+  function handlePickFromHome(path: string) {
+    projects.touch(path);
+    setActiveProjectPath(path);
   }
 
   function goHome() {
-    const prev = activeProjectPath();
-    if (prev && term.store.activeTabId) {
-      activeByProject.set(prev, term.store.activeTabId);
-    }
     setActiveProjectPath(null);
-    term.setActiveTab(null);
   }
-
-  // Initial auto-resume for the project loaded from localStorage.
-  onMount(() => {
-    const p = activeProjectPath();
-    if (p) maybeAutoResume(p);
-  });
-
-  // When the active project changes via the sidebar, keep the terminal's
-  // `activeTabId` in sync with the tabs actually visible.
-  createEffect(
-    on(
-      activeProjectPath,
-      (p) => {
-        if (!p) return;
-        // already handled in switchToProject, but cover edge cases where
-        // setActiveProjectPath was called directly (e.g. from HomeScreen).
-        const tabsInProject = term.store.tabs.filter(
-          (t) => t.projectPath === p,
-        );
-        const current = term.store.activeTabId;
-        const currentInProject =
-          current && tabsInProject.some((t) => t.id === current);
-        if (!currentInProject) {
-          const remembered = activeByProject.get(p);
-          let nextActive: string | null = null;
-          if (remembered && tabsInProject.some((t) => t.id === remembered)) {
-            nextActive = remembered;
-          } else if (tabsInProject.length > 0) {
-            nextActive = tabsInProject[0].id;
-          }
-          term.setActiveTab(nextActive);
-          if (nextActive === null) maybeAutoResume(p);
-        }
-      },
-      { defer: true },
-    ),
-  );
 
   return (
     <main class="h-screen w-screen flex bg-neutral-950 text-neutral-200 overflow-hidden">
       <ProjectsSidebar
         activePath={activeProjectPath()}
-        onActivate={switchToProject}
+        onActivate={setActiveProjectPath}
         onAdd={handleAddProject}
         onGoHome={goHome}
         openTabsByProject={openTabsByProject()}
@@ -327,14 +296,7 @@ function Shell() {
 
       <Show
         when={activeProjectPath()}
-        fallback={
-          <HomeScreen
-            onPick={(p) => {
-              projects.touch(p);
-              setActiveProjectPath(p);
-            }}
-          />
-        }
+        fallback={<HomeScreen onPick={handlePickFromHome} />}
       >
         <div class="flex-1 grid grid-cols-[280px_1fr] min-h-0 overflow-hidden">
           <aside class="border-r border-neutral-800 flex flex-col min-h-0 overflow-hidden">
@@ -382,28 +344,21 @@ function Shell() {
                   const isActive = () => tab.id === term.store.activeTabId;
                   const isForActiveProject = () =>
                     tab.projectPath === activeProjectPath();
+                  const visible = () => isActive() && isForActiveProject();
                   return (
                     <div
                       class="absolute inset-0 flex flex-col"
                       style={{
-                        visibility:
-                          isActive() && isForActiveProject()
-                            ? "visible"
-                            : "hidden",
-                        "pointer-events":
-                          isActive() && isForActiveProject() ? "auto" : "none",
-                        "z-index":
-                          isActive() && isForActiveProject() ? 1 : 0,
+                        visibility: visible() ? "visible" : "hidden",
+                        "pointer-events": visible() ? "auto" : "none",
+                        "z-index": visible() ? 1 : 0,
                       }}
                     >
                       <Show
                         when={tab.status !== "opening"}
                         fallback={<LoadingPanel label={tab.label} />}
                       >
-                        <TerminalView
-                          id={tab.id}
-                          active={isActive() && isForActiveProject()}
-                        />
+                        <TerminalView id={tab.id} active={visible()} />
                       </Show>
                     </div>
                   );
