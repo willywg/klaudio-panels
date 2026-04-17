@@ -4,71 +4,143 @@ import {
   useContext,
   type ParentProps,
 } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createStore, produce } from "solid-js/store";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-type Status = "idle" | "running" | "exited" | "error";
+export type TabStatus = "running" | "exited" | "error";
 
-type Store = {
-  id: string | null;
-  status: Status;
+export type TerminalTab = {
+  id: string;
+  projectPath: string;
+  sessionId: string | null;
+  label: string;
+  status: TabStatus;
   exitCode: number | null;
   error: string | null;
+};
+
+type TerminalStore = {
+  tabs: TerminalTab[];
+  activeTabId: string | null;
 };
 
 type DataHandler = (bytes: Uint8Array) => void;
 type ExitHandler = (code: number) => void;
 
+export type OpenTabOpts = {
+  label: string;
+  sessionId: string | null;
+};
+
 export function makeTerminalContext() {
-  const [store, setStore] = createStore<Store>({
-    id: null,
-    status: "idle",
-    exitCode: null,
-    error: null,
+  const [store, setStore] = createStore<TerminalStore>({
+    tabs: [],
+    activeTabId: null,
   });
 
-  const dataHandlers = new Set<DataHandler>();
-  const exitHandlers = new Set<ExitHandler>();
-  let unlistenData: UnlistenFn | undefined;
-  let unlistenExit: UnlistenFn | undefined;
+  const unlistens = new Map<string, { data: UnlistenFn; exit: UnlistenFn }>();
+  const dataHandlers = new Map<string, Set<DataHandler>>();
+  const exitHandlers = new Map<string, Set<ExitHandler>>();
 
   async function attachListeners(id: string) {
-    await detachListeners();
-    unlistenData = await listen<string>(`pty:data:${id}`, (e) => {
+    const dUn = await listen<string>(`pty:data:${id}`, (e) => {
       const bytes = base64ToBytes(e.payload);
-      for (const h of dataHandlers) h(bytes);
+      const set = dataHandlers.get(id);
+      if (set) for (const h of set) h(bytes);
     });
-    unlistenExit = await listen<number>(`pty:exit:${id}`, (e) => {
-      setStore({ status: "exited", exitCode: e.payload });
-      for (const h of exitHandlers) h(e.payload);
+    const xUn = await listen<number>(`pty:exit:${id}`, (e) => {
+      setStore(
+        "tabs",
+        (t) => t.id === id,
+        produce((tab: TerminalTab) => {
+          tab.status = "exited";
+          tab.exitCode = e.payload;
+        }),
+      );
+      const set = exitHandlers.get(id);
+      if (set) for (const h of set) h(e.payload);
     });
+    unlistens.set(id, { data: dUn, exit: xUn });
   }
 
-  async function detachListeners() {
-    unlistenData?.();
-    unlistenExit?.();
-    unlistenData = undefined;
-    unlistenExit = undefined;
-  }
-
-  async function open(projectPath: string, args: string[] = []): Promise<string> {
-    await kill();
-    setStore({ status: "running", exitCode: null, error: null });
+  async function openTab(
+    projectPath: string,
+    args: string[],
+    opts: OpenTabOpts,
+  ): Promise<string> {
+    let id: string;
     try {
-      const id = (await invoke("pty_open", { projectPath, args })) as string;
-      setStore("id", id);
-      await attachListeners(id);
-      return id;
+      id = (await invoke("pty_open", { projectPath, args })) as string;
     } catch (err) {
-      setStore({ status: "error", error: String(err) });
+      const msg = String(err);
+      console.error("pty_open failed", msg);
       throw err;
+    }
+    const tab: TerminalTab = {
+      id,
+      projectPath,
+      sessionId: opts.sessionId,
+      label: opts.label,
+      status: "running",
+      exitCode: null,
+      error: null,
+    };
+    setStore(
+      produce((s) => {
+        s.tabs.push(tab);
+        s.activeTabId = id;
+      }),
+    );
+    await attachListeners(id);
+    return id;
+  }
+
+  async function closeTab(id: string): Promise<void> {
+    try {
+      await invoke("pty_kill", { id });
+    } catch (err) {
+      console.warn("pty_kill failed", err);
+    }
+    const un = unlistens.get(id);
+    if (un) {
+      un.data();
+      un.exit();
+      unlistens.delete(id);
+    }
+    dataHandlers.delete(id);
+    exitHandlers.delete(id);
+    setStore(
+      produce((s) => {
+        const idx = s.tabs.findIndex((t) => t.id === id);
+        if (idx < 0) return;
+        s.tabs.splice(idx, 1);
+        if (s.activeTabId === id) {
+          if (s.tabs.length === 0) {
+            s.activeTabId = null;
+          } else {
+            const next = Math.max(0, idx - 1);
+            s.activeTabId = s.tabs[Math.min(next, s.tabs.length - 1)].id;
+          }
+        }
+      }),
+    );
+  }
+
+  async function closeAll(): Promise<void> {
+    const ids = store.tabs.map((t) => t.id);
+    for (const id of ids) {
+      // eslint-disable-next-line no-await-in-loop
+      await closeTab(id);
     }
   }
 
-  async function write(bytes: Uint8Array) {
-    const id = store.id;
-    if (!id) return;
+  function setActiveTab(id: string | null) {
+    if (id !== null && !store.tabs.find((t) => t.id === id)) return;
+    setStore("activeTabId", id);
+  }
+
+  async function write(id: string, bytes: Uint8Array) {
     const b64 = bytesToBase64(bytes);
     try {
       await invoke("pty_write", { id, b64 });
@@ -77,9 +149,7 @@ export function makeTerminalContext() {
     }
   }
 
-  async function resize(cols: number, rows: number) {
-    const id = store.id;
-    if (!id) return;
+  async function resize(id: string, cols: number, rows: number) {
     try {
       await invoke("pty_resize", { id, cols, rows });
     } catch (err) {
@@ -87,35 +157,52 @@ export function makeTerminalContext() {
     }
   }
 
-  async function kill() {
-    const id = store.id;
-    if (!id) return;
-    try {
-      await invoke("pty_kill", { id });
-    } catch (err) {
-      console.error("pty_kill failed", err);
-    } finally {
-      await detachListeners();
-      setStore({ id: null, status: "idle", exitCode: null });
+  function onData(id: string, h: DataHandler) {
+    let set = dataHandlers.get(id);
+    if (!set) {
+      set = new Set();
+      dataHandlers.set(id, set);
     }
+    set.add(h);
+    return () => {
+      const s = dataHandlers.get(id);
+      s?.delete(h);
+    };
   }
 
-  function onData(h: DataHandler) {
-    dataHandlers.add(h);
-    return () => dataHandlers.delete(h);
+  function onExit(id: string, h: ExitHandler) {
+    let set = exitHandlers.get(id);
+    if (!set) {
+      set = new Set();
+      exitHandlers.set(id, set);
+    }
+    set.add(h);
+    return () => {
+      const s = exitHandlers.get(id);
+      s?.delete(h);
+    };
   }
 
-  function onExit(h: ExitHandler) {
-    exitHandlers.add(h);
-    return () => exitHandlers.delete(h);
+  function getTab(id: string): TerminalTab | undefined {
+    return store.tabs.find((t) => t.id === id);
   }
 
   onCleanup(() => {
-    void detachListeners();
-    void kill();
+    void closeAll();
   });
 
-  return { store, open, write, resize, kill, onData, onExit };
+  return {
+    store,
+    openTab,
+    closeTab,
+    closeAll,
+    setActiveTab,
+    write,
+    resize,
+    onData,
+    onExit,
+    getTab,
+  };
 }
 
 function base64ToBytes(b64: string): Uint8Array {

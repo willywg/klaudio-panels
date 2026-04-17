@@ -1,4 +1,4 @@
-import { onCleanup, onMount, Show } from "solid-js";
+import { createEffect, onCleanup, onMount, Show } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -34,7 +34,12 @@ const THEME = {
 const FONT_FAMILY =
   "ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace";
 
-export function TerminalView() {
+type Props = {
+  id: string;
+  active: boolean;
+};
+
+export function TerminalView(props: Props) {
   const ctx = useTerminal();
   let container: HTMLDivElement | undefined;
   let term: Terminal | undefined;
@@ -45,6 +50,17 @@ export function TerminalView() {
   let fitDebounce: number | undefined;
 
   const encoder = new TextEncoder();
+
+  function safeFit() {
+    if (!fit || !container) return;
+    const rect = container.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return;
+    try {
+      fit.fit();
+    } catch (err) {
+      console.warn("fit failed", err);
+    }
+  }
 
   onMount(() => {
     term = new Terminal({
@@ -66,14 +82,8 @@ export function TerminalView() {
     term.loadAddon(new WebLinksAddon());
 
     term.open(container!);
-
-    // Activate unicode11 width tables AFTER open. Essential for box-drawing
-    // chars, powerline glyphs and emojis (Claude's welcome icon, progress
-    // bar, Warp status, etc.) to render at the correct cell width.
     term.unicode.activeVersion = "11";
 
-    // WebGL renderer — crisper glyph rendering and handles unicode widths
-    // more predictably than the default canvas renderer.
     try {
       const webgl = new WebglAddon();
       webgl.onContextLoss(() => webgl.dispose());
@@ -82,13 +92,13 @@ export function TerminalView() {
       console.warn("WebGL renderer unavailable; falling back to canvas.", err);
     }
 
-    requestAnimationFrame(() => fit?.fit());
+    requestAnimationFrame(() => safeFit());
 
     term.onData((data) => {
-      void ctx.write(encoder.encode(data));
+      void ctx.write(props.id, encoder.encode(data));
     });
     term.onResize(({ cols, rows }) => {
-      void ctx.resize(cols, rows);
+      void ctx.resize(props.id, cols, rows);
     });
 
     term.attachCustomKeyEventHandler((e) => {
@@ -107,7 +117,7 @@ export function TerminalView() {
         navigator.clipboard
           .readText()
           .then((text) => {
-            if (text) void ctx.write(encoder.encode(text));
+            if (text) void ctx.write(props.id, encoder.encode(text));
           })
           .catch((err) => console.warn("clipboard read failed", err));
         return false;
@@ -119,20 +129,32 @@ export function TerminalView() {
       return true;
     });
 
-    detachData = ctx.onData((bytes) => {
+    detachData = ctx.onData(props.id, (bytes) => {
       term?.write(bytes);
     });
-    detachExit = ctx.onExit((code) => {
-      term?.writeln(
-        `\x1b[2m\r\n[claude exited with code ${code}]\x1b[0m`,
-      );
+    detachExit = ctx.onExit(props.id, (code) => {
+      term?.writeln(`\x1b[2m\r\n[claude exited with code ${code}]\x1b[0m`);
     });
 
     resizeObs = new ResizeObserver(() => {
       if (fitDebounce) window.clearTimeout(fitDebounce);
-      fitDebounce = window.setTimeout(() => fit?.fit(), 50);
+      fitDebounce = window.setTimeout(() => safeFit(), 50);
     });
     resizeObs.observe(container!);
+  });
+
+  // When the tab becomes visible again, re-measure (size may have changed
+  // while hidden). Also refocus so keyboard input lands in the active tab.
+  createEffect(() => {
+    if (!props.active) return;
+    requestAnimationFrame(() => {
+      safeFit();
+      try {
+        term?.focus();
+      } catch {
+        // ignore
+      }
+    });
   });
 
   onCleanup(() => {
@@ -141,20 +163,24 @@ export function TerminalView() {
     detachData?.();
     detachExit?.();
     term?.dispose();
-    void ctx.kill();
+    // NOTE: intentionally NOT calling ctx.closeTab here — unmounting the view
+    // (e.g. changing project) is separate from killing the PTY. The shell owns
+    // the tab lifecycle.
   });
+
+  const tab = () => ctx.getTab(props.id);
 
   return (
     <div class="h-full w-full flex flex-col min-h-0 overflow-hidden">
       <div ref={container} class="flex-1 min-h-0 min-w-0 overflow-hidden p-2" />
-      <Show when={ctx.store.error}>
+      <Show when={tab()?.error}>
         <div class="border-t border-red-900/50 bg-red-950/40 px-3 py-1.5 text-[11px] text-red-300 font-mono">
-          {ctx.store.error}
+          {tab()!.error}
         </div>
       </Show>
-      <Show when={ctx.store.status === "exited" && ctx.store.id === null}>
+      <Show when={tab()?.status === "exited"}>
         <div class="border-t border-neutral-800 bg-neutral-900/50 px-3 py-1.5 text-[11px] text-neutral-500 font-mono">
-          PTY cerrado (código {ctx.store.exitCode ?? "?"}). Abre una sesión nueva.
+          PTY cerrado (código {tab()?.exitCode ?? "?"}). Cierra este tab o abre otra sesión.
         </div>
       </Show>
     </div>

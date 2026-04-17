@@ -11,6 +11,7 @@ type SessionMeta = {
 export function SessionsList(props: {
   projectPath: string;
   activeSessionId: string | null;
+  openSessionIds: Set<string>;
   onNew: () => void;
   onSelect: (id: string) => void;
   refreshKey: number;
@@ -53,24 +54,39 @@ export function SessionsList(props: {
         </Show>
 
         <For each={sessions() ?? []}>
-          {(s) => (
-            <button
-              onClick={() => props.onSelect(s.id)}
-              class={
-                "w-full text-left px-3 py-2 border-l-2 " +
-                (props.activeSessionId === s.id
-                  ? "border-indigo-500 bg-neutral-900"
-                  : "border-transparent hover:bg-neutral-900/50")
-              }
-            >
-              <div class="text-[11px] text-neutral-500 font-mono">
-                {formatTs(s.timestamp)}
-              </div>
-              <div class="text-xs text-neutral-200 line-clamp-2 mt-0.5">
-                {s.first_message_preview ?? "(sin contenido)"}
-              </div>
-            </button>
-          )}
+          {(s) => {
+            const isActive = () => props.activeSessionId === s.id;
+            const isOpen = () => props.openSessionIds.has(s.id);
+            return (
+              <button
+                onClick={() => props.onSelect(s.id)}
+                class={
+                  "w-full text-left px-3 py-2 border-l-2 flex gap-2 items-start " +
+                  (isActive()
+                    ? "border-indigo-500 bg-neutral-900"
+                    : isOpen()
+                      ? "border-green-600/60 hover:bg-neutral-900/50"
+                      : "border-transparent hover:bg-neutral-900/50")
+                }
+                title={isOpen() ? "Abierta en un tab" : undefined}
+              >
+                <span
+                  class={
+                    "mt-1.5 inline-block w-1.5 h-1.5 rounded-full shrink-0 " +
+                    (isOpen() ? "bg-green-500" : "bg-transparent")
+                  }
+                />
+                <span class="flex-1 min-w-0">
+                  <div class="text-[11px] text-neutral-500 font-mono">
+                    {formatTs(s.timestamp)}
+                  </div>
+                  <div class="text-xs text-neutral-200 line-clamp-2 mt-0.5">
+                    {s.first_message_preview ?? "(sin contenido)"}
+                  </div>
+                </span>
+              </button>
+            );
+          }}
         </For>
       </div>
     </div>
