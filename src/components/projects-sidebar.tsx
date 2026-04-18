@@ -1,6 +1,6 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Home, Plus } from "lucide-solid";
+import { Home, Plus, X } from "lucide-solid";
 import {
   projectColor,
   projectInitial,
@@ -13,15 +13,29 @@ type Props = {
   onActivate: (path: string) => void;
   onAdd: (path: string) => void;
   onGoHome: () => void;
+  onCloseProject: (path: string) => void;
   openTabsByProject: Map<string, number>;
 };
 
 export function ProjectsSidebar(props: Props) {
   const projects = useProjects();
+  const [draggingPath, setDraggingPath] = createSignal<string | null>(null);
+  const [dragOverPath, setDragOverPath] = createSignal<string | null>(null);
 
   async function handleAdd() {
     const picked = await openDialog({ directory: true, multiple: false });
     if (typeof picked === "string") props.onAdd(picked);
+  }
+
+  function handleCloseClick(e: MouseEvent, path: string) {
+    e.stopPropagation();
+    const label = projectLabel(path);
+    const openCount = props.openTabsByProject.get(path) ?? 0;
+    const msg =
+      openCount > 0
+        ? `Cerrar "${label}"?\nEsto matará ${openCount} tab(s) abiertos y lo quitará del sidebar.`
+        : `Cerrar "${label}"?\nSe quitará del sidebar.`;
+    if (confirm(msg)) props.onCloseProject(path);
   }
 
   return (
@@ -46,34 +60,74 @@ export function ProjectsSidebar(props: Props) {
           const label = () => projectLabel(proj.path);
           const initial = () => projectInitial(proj.path);
           const color = () => projectColor(proj.path);
+          const isDragging = () => draggingPath() === proj.path;
+          const isDragOver = () =>
+            dragOverPath() === proj.path && draggingPath() !== proj.path;
           return (
-            <div class="relative">
+            <div
+              class="relative group"
+              draggable={true}
+              onDragStart={(e) => {
+                setDraggingPath(proj.path);
+                e.dataTransfer!.effectAllowed = "move";
+                e.dataTransfer!.setData("text/plain", proj.path);
+              }}
+              onDragEnd={() => {
+                setDraggingPath(null);
+                setDragOverPath(null);
+              }}
+              onDragOver={(e) => {
+                if (!draggingPath() || draggingPath() === proj.path) return;
+                e.preventDefault();
+                e.dataTransfer!.dropEffect = "move";
+                setDragOverPath(proj.path);
+              }}
+              onDragLeave={() => {
+                if (dragOverPath() === proj.path) setDragOverPath(null);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                const from = draggingPath();
+                if (from && from !== proj.path) {
+                  projects.reorder(from, proj.path);
+                }
+                setDraggingPath(null);
+                setDragOverPath(null);
+              }}
+              style={{ opacity: isDragging() ? "0.4" : "1" }}
+            >
+              <Show when={isDragOver()}>
+                <span class="absolute -left-2 top-0 bottom-0 w-0.5 rounded-full bg-indigo-400" />
+              </Show>
               <button
                 onClick={() => props.onActivate(proj.path)}
                 onContextMenu={(e) => {
                   e.preventDefault();
-                  if (
-                    confirm(`Remover "${label()}" del historial de proyectos?`)
-                  ) {
-                    projects.remove(proj.path);
-                  }
+                  handleCloseClick(e, proj.path);
                 }}
                 class={
-                  "w-10 h-10 rounded-lg flex items-center justify-center text-[15px] font-semibold text-white transition shadow-sm " +
+                  "w-10 h-10 rounded-lg flex items-center justify-center text-[15px] font-semibold text-white transition shadow-sm cursor-grab active:cursor-grabbing " +
                   (isActive()
                     ? "ring-2 ring-indigo-500 ring-offset-2 ring-offset-neutral-950"
                     : "opacity-85 hover:opacity-100 hover:scale-[1.03]")
                 }
                 style={{ "background-color": color() }}
-                title={`${label()}\n${proj.path}${openCount() > 0 ? `\n${openCount()} tab(s) abiertos` : ""}`}
+                title={`${label()}\n${proj.path}${openCount() > 0 ? `\n${openCount()} tab(s) abiertos` : ""}\n\nArrastra para reordenar. Right-click o × para cerrar.`}
               >
                 {initial()}
               </button>
               <Show when={openCount() > 0}>
-                <span class="absolute -bottom-0.5 -right-0.5 min-w-[16px] h-[16px] rounded-full bg-green-500 text-[10px] font-bold text-neutral-950 flex items-center justify-center px-1 border-2 border-neutral-950">
+                <span class="absolute -bottom-0.5 -right-0.5 min-w-[16px] h-[16px] rounded-full bg-green-500 text-[10px] font-bold text-neutral-950 flex items-center justify-center px-1 border-2 border-neutral-950 pointer-events-none">
                   {openCount()}
                 </span>
               </Show>
+              <button
+                class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-neutral-800 text-neutral-300 hover:bg-red-600 hover:text-white border border-neutral-950 flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
+                title="Cerrar proyecto"
+                onClick={(e) => handleCloseClick(e, proj.path)}
+              >
+                <X size={9} strokeWidth={3} />
+              </button>
             </div>
           );
         }}

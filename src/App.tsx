@@ -275,6 +275,26 @@ function Shell() {
     setActiveProjectPath(path);
   }
 
+  async function handleCloseProject(path: string) {
+    // Kill all PTYs for the project.
+    const ids = term.store.tabs
+      .filter((t) => t.projectPath === path)
+      .map((t) => t.id);
+    for (const id of ids) {
+      // eslint-disable-next-line no-await-in-loop
+      await term.closeTab(id);
+    }
+    // If this project was active, pivot away BEFORE removing it from the list
+    // so the active-tab effect has a valid target.
+    if (activeProjectPath() === path) {
+      setActiveProjectPath(null);
+    }
+    activeByProject.delete(path);
+    autoResumed.delete(path);
+    setLastSessionId(path, null);
+    projects.remove(path);
+  }
+
   function handlePickFromHome(path: string) {
     projects.touch(path);
     setActiveProjectPath(path);
@@ -291,6 +311,7 @@ function Shell() {
         onActivate={setActiveProjectPath}
         onAdd={handleAddProject}
         onGoHome={goHome}
+        onCloseProject={(path) => void handleCloseProject(path)}
         openTabsByProject={openTabsByProject()}
       />
 

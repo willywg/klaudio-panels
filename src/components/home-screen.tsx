@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { FolderOpen } from "lucide-solid";
 import { projectLabel, relativeTime } from "@/lib/recent-projects";
@@ -10,6 +10,9 @@ type Props = {
 
 export function HomeScreen(props: Props) {
   const projects = useProjects();
+  const sortedByRecency = createMemo(() =>
+    [...projects.list].sort((a, b) => b.lastOpened - a.lastOpened),
+  );
 
   async function handleOpen() {
     const picked = await openDialog({ directory: true, multiple: false });
@@ -42,7 +45,7 @@ export function HomeScreen(props: Props) {
 
         <div class="border border-neutral-800 rounded-lg overflow-hidden">
           <Show
-            when={projects.list.length > 0}
+            when={sortedByRecency().length > 0}
             fallback={
               <div class="px-4 py-8 text-center text-sm text-neutral-500">
                 No has abierto ningún proyecto todavía.
@@ -51,7 +54,7 @@ export function HomeScreen(props: Props) {
               </div>
             }
           >
-            <For each={projects.list}>
+            <For each={sortedByRecency()}>
               {(p, i) => (
                 <button
                   onClick={() => props.onPick(p.path)}

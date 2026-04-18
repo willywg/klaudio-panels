@@ -20,16 +20,31 @@ function makeProjectsContext() {
     list: loadRecentProjects(),
   });
 
+  /** Idempotent insert by path. If new, appends at the END (insertion order).
+   *  If existing, only updates `lastOpened` without changing position. */
   function touch(path: string): void {
     const now = Date.now();
     setState(
       "list",
       produce((list: RecentProject[]) => {
         const idx = list.findIndex((p) => p.path === path);
-        if (idx >= 0) list.splice(idx, 1);
-        list.unshift({ path, lastOpened: now });
-        if (list.length > MAX_RECENT_PROJECTS) {
-          list.length = MAX_RECENT_PROJECTS;
+        if (idx >= 0) {
+          list[idx].lastOpened = now;
+        } else {
+          list.push({ path, lastOpened: now });
+          if (list.length > MAX_RECENT_PROJECTS) {
+            // Drop the OLDEST-used entry (lowest lastOpened), not the first
+            // in insertion order — keep the user's curated sequence.
+            let oldestIdx = 0;
+            let oldestTs = list[0].lastOpened;
+            for (let i = 1; i < list.length; i++) {
+              if (list[i].lastOpened < oldestTs) {
+                oldestTs = list[i].lastOpened;
+                oldestIdx = i;
+              }
+            }
+            list.splice(oldestIdx, 1);
+          }
         }
       }),
     );
@@ -47,12 +62,30 @@ function makeProjectsContext() {
     saveRecentProjects(state.list);
   }
 
+  /** Move the project identified by `fromPath` to occupy the slot currently
+   *  held by `toPath`. Position of other items shifts accordingly. */
+  function reorder(fromPath: string, toPath: string): void {
+    if (fromPath === toPath) return;
+    setState(
+      "list",
+      produce((list: RecentProject[]) => {
+        const fromIdx = list.findIndex((p) => p.path === fromPath);
+        const toIdx = list.findIndex((p) => p.path === toPath);
+        if (fromIdx < 0 || toIdx < 0) return;
+        const [moved] = list.splice(fromIdx, 1);
+        list.splice(toIdx, 0, moved);
+      }),
+    );
+    saveRecentProjects(state.list);
+  }
+
   return {
     get list(): RecentProject[] {
       return state.list;
     },
     touch,
     remove,
+    reorder,
   };
 }
 
