@@ -7,6 +7,7 @@ import {
   on,
   onMount,
 } from "solid-js";
+import { invoke } from "@tauri-apps/api/core";
 import { HomeScreen } from "@/components/home-screen";
 import { ProjectsSidebar } from "@/components/projects-sidebar";
 import { SessionsList, type SessionMeta } from "@/components/sessions-list";
@@ -241,14 +242,34 @@ function Shell() {
     const lastId = getLastSessionId(projectPath);
     if (!lastId) return;
 
-    const spawnedAt = Date.now();
-    const label = `session ${lastId.slice(0, 8)}`;
-    term
-      .openTab(projectPath, ["--resume", lastId], {
-        label,
-        sessionId: lastId,
-      })
-      .then((tabId) => {
+    // Resolve the real session label (custom-title / summary) before opening
+    // the tab, so auto-resumed tabs show the rename, not "session xxxxxxxx".
+    void (async () => {
+      const spawnedAt = Date.now();
+      let label = `session ${lastId.slice(0, 8)}`;
+      try {
+        const sessions = (await invoke("list_sessions_for_project", {
+          projectPath,
+        })) as SessionMeta[];
+        const meta = sessions.find((s) => s.id === lastId);
+        if (!meta) {
+          console.info(
+            `auto-resume target ${lastId} no longer exists in ${projectPath}. Clearing lastSessionId.`,
+          );
+          setLastSessionId(projectPath, null);
+          return;
+        }
+        label = displayLabel(meta);
+      } catch (err) {
+        console.warn("list_sessions_for_project failed during auto-resume", err);
+      }
+
+      try {
+        const tabId = await term.openTab(
+          projectPath,
+          ["--resume", lastId],
+          { label, sessionId: lastId },
+        );
         const detach = term.onExit(tabId, (code) => {
           const elapsed = Date.now() - spawnedAt;
           if (elapsed < AUTO_RESUME_FAIL_WINDOW_MS && code !== 0) {
@@ -260,14 +281,13 @@ function Shell() {
           }
           detach();
         });
-      })
-      .catch((err) => {
+      } catch (err) {
         console.warn("auto-resume openTab threw", err);
         setLastSessionId(projectPath, null);
-      })
-      .finally(() => {
+      } finally {
         setSessionsRefresh((k) => k + 1);
-      });
+      }
+    })();
   }
 
   function handleAddProject(path: string) {

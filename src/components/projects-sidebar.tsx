@@ -1,4 +1,4 @@
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Home, Plus, X } from "lucide-solid";
 import {
@@ -17,10 +17,105 @@ type Props = {
   openTabsByProject: Map<string, number>;
 };
 
+const HOLD_MS = 180; // press duration that promotes the gesture to a drag
+const DRAG_THRESHOLD_PX = 4; // pointer movement that promotes early to drag
+
 export function ProjectsSidebar(props: Props) {
   const projects = useProjects();
   const [draggingPath, setDraggingPath] = createSignal<string | null>(null);
   const [dragOverPath, setDragOverPath] = createSignal<string | null>(null);
+
+  // Press state — mutated synchronously by handlers, not reactive.
+  let pressPath: string | null = null;
+  let pressTimer: number | null = null;
+  let pressStart: { x: number; y: number } | null = null;
+  let didDrag = false;
+
+  function clearPress() {
+    if (pressTimer !== null) {
+      clearTimeout(pressTimer);
+      pressTimer = null;
+    }
+    pressPath = null;
+    pressStart = null;
+  }
+
+  function onPointerDown(e: PointerEvent, path: string) {
+    if (e.button !== 0) return; // left-click only
+    pressPath = path;
+    pressStart = { x: e.clientX, y: e.clientY };
+    didDrag = false;
+    pressTimer = window.setTimeout(() => {
+      pressTimer = null;
+      if (pressPath === path) {
+        setDraggingPath(path);
+        didDrag = true;
+      }
+    }, HOLD_MS);
+  }
+
+  function onWindowPointerMove(e: PointerEvent) {
+    // Pre-drag: movement threshold promotes to drag early (typical behaviour).
+    if (pressPath && !draggingPath() && pressStart) {
+      const dx = e.clientX - pressStart.x;
+      const dy = e.clientY - pressStart.y;
+      if (dx * dx + dy * dy > DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) {
+        if (pressTimer !== null) {
+          clearTimeout(pressTimer);
+          pressTimer = null;
+        }
+        setDraggingPath(pressPath);
+        didDrag = true;
+      }
+    }
+    // Active drag: find the avatar under the pointer by data attribute.
+    if (!draggingPath()) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY) as Element | null;
+    const match = el?.closest("[data-project-path]") as HTMLElement | null;
+    const path = match?.dataset.projectPath ?? null;
+    if (path && path !== draggingPath()) {
+      setDragOverPath(path);
+    } else if (!path) {
+      setDragOverPath(null);
+    }
+  }
+
+  function onWindowPointerUp() {
+    const from = draggingPath();
+    if (from) {
+      const to = dragOverPath();
+      if (to && to !== from) {
+        projects.reorder(from, to);
+      }
+      setDraggingPath(null);
+      setDragOverPath(null);
+    }
+    clearPress();
+    // Let the click-guard stale flag linger for a tick so onClick (fired after
+    // pointerup) can check it.
+    requestAnimationFrame(() => {
+      didDrag = false;
+    });
+  }
+
+  function onClickAvatar(e: MouseEvent, path: string) {
+    if (didDrag) {
+      e.preventDefault();
+      return;
+    }
+    props.onActivate(path);
+  }
+
+  onMount(() => {
+    window.addEventListener("pointermove", onWindowPointerMove);
+    window.addEventListener("pointerup", onWindowPointerUp);
+    window.addEventListener("pointercancel", onWindowPointerUp);
+  });
+  onCleanup(() => {
+    window.removeEventListener("pointermove", onWindowPointerMove);
+    window.removeEventListener("pointerup", onWindowPointerUp);
+    window.removeEventListener("pointercancel", onWindowPointerUp);
+  });
 
   async function handleAdd() {
     const picked = await openDialog({ directory: true, multiple: false });
@@ -68,41 +163,15 @@ export function ProjectsSidebar(props: Props) {
                 <span class="absolute -left-2 top-0 bottom-0 w-0.5 rounded-full bg-indigo-400 pointer-events-none" />
               </Show>
               <button
-                draggable={true}
-                onDragStart={(e) => {
-                  setDraggingPath(proj.path);
-                  e.dataTransfer!.effectAllowed = "move";
-                  e.dataTransfer!.setData("text/plain", proj.path);
-                }}
-                onDragEnd={() => {
-                  setDraggingPath(null);
-                  setDragOverPath(null);
-                }}
-                onDragOver={(e) => {
-                  if (!draggingPath() || draggingPath() === proj.path) return;
-                  e.preventDefault();
-                  e.dataTransfer!.dropEffect = "move";
-                  setDragOverPath(proj.path);
-                }}
-                onDragLeave={() => {
-                  if (dragOverPath() === proj.path) setDragOverPath(null);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  const from = draggingPath();
-                  if (from && from !== proj.path) {
-                    projects.reorder(from, proj.path);
-                  }
-                  setDraggingPath(null);
-                  setDragOverPath(null);
-                }}
-                onClick={() => props.onActivate(proj.path)}
+                data-project-path={proj.path}
+                onPointerDown={(e) => onPointerDown(e, proj.path)}
+                onClick={(e) => onClickAvatar(e, proj.path)}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   requestClose(proj.path);
                 }}
                 class={
-                  "w-10 h-10 rounded-lg flex items-center justify-center text-[15px] font-semibold text-white transition shadow-sm " +
+                  "w-10 h-10 rounded-lg flex items-center justify-center text-[15px] font-semibold text-white transition shadow-sm select-none " +
                   (isActive()
                     ? "ring-2 ring-indigo-500 ring-offset-2 ring-offset-neutral-950"
                     : "opacity-85 hover:opacity-100 hover:scale-[1.03]")
@@ -110,8 +179,9 @@ export function ProjectsSidebar(props: Props) {
                 style={{
                   "background-color": color(),
                   opacity: isDragging() ? 0.4 : undefined,
+                  cursor: isDragging() ? "grabbing" : "pointer",
                 }}
-                title={`${label()}\n${proj.path}${openCount() > 0 ? `\n${openCount()} tab(s) abiertos` : ""}\n\nClick: abrir. Arrastrar: reordenar. Right-click o ×: cerrar.`}
+                title={`${label()}\n${proj.path}${openCount() > 0 ? `\n${openCount()} tab(s) abiertos` : ""}\n\nClick: abrir. Hold + arrastrar: reordenar. Right-click o ×: cerrar.`}
               >
                 {initial()}
               </button>
