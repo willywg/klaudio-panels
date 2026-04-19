@@ -186,7 +186,7 @@ function Shell() {
     const p = activeProjectPath();
     if (!p) return;
     try {
-      await term.openTab(p, [], { label: "Nueva sesión", sessionId: null });
+      await term.openTab(p, [], { label: "New session", sessionId: null });
     } catch (err) {
       console.error("openTab(new) failed", err);
     } finally {
@@ -344,7 +344,7 @@ function Shell() {
           <aside class="border-r border-neutral-800 flex flex-col min-h-0 overflow-hidden">
             <div class="px-3 py-2 border-b border-neutral-800">
               <div class="text-[10px] uppercase tracking-wider text-neutral-500">
-                Proyecto
+                Project
               </div>
               <div
                 class="text-xs text-neutral-200 truncate font-medium"
@@ -408,7 +408,7 @@ function Shell() {
               </For>
               <Show when={projectTabs().length === 0}>
                 <div class="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm">
-                  Elige una sesión o crea una nueva para empezar.
+                  Pick a session or start a new one.
                 </div>
               </Show>
             </div>
@@ -425,7 +425,7 @@ function LoadingPanel(props: { label?: string }) {
       <div class="flex flex-col items-center gap-3 text-neutral-400 text-sm">
         <div class="flex items-center gap-3">
           <div class="w-4 h-4 border-2 border-neutral-700 border-t-indigo-500 rounded-full animate-spin" />
-          <span>Iniciando Claude Code…</span>
+          <span>Starting Claude Code…</span>
         </div>
         <Show when={props.label}>
           <span class="text-[11px] text-neutral-600 font-mono truncate max-w-[300px]">

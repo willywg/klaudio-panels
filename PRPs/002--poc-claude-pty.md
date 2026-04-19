@@ -1,4 +1,4 @@
-# PRP 002: PoC — Claude Code embebido en PTY
+# PRP 002: PoC — Claude Code embedded in a PTY
 
 > **Version:** 1.0
 > **Created:** 2026-04-16
@@ -9,28 +9,28 @@
 
 ## Goal
 
-Reemplazar el approach stream-json del Sprint 00 por un PTY que corre `claude` interactivo. Al final del sprint, al hacer click en "+ Nueva sesión" o en una sesión de la sidebar, el usuario ve el TUI real de Claude Code (colores, slash commands, permisos interactivos, autocomplete) dentro de la ventana Tauri via xterm.js, sin ninguna reimplementación de la UI.
+Replace Sprint 00's stream-json approach with a PTY that runs `claude` interactively. By the end of the sprint, when the user clicks "+ New session" or a session in the sidebar, they see the real Claude Code TUI (colors, slash commands, interactive permissions, autocomplete) inside the Tauri window via xterm.js, with zero UI reimplementation.
 
 ## Why
 
-- **Obtiene Claude Code completo gratis.** Slash commands, `-r` picker, permission prompts, autocomplete, hooks — todo funciona sin escribir una línea de UI.
-- **Cero parsing frágil.** Si Claude Code cambia su output, nuestra app no se rompe — xterm.js solo pinta bytes.
-- **Alinea con OpenCode Desktop.** Mismo paradigma (ventana nativa + CLI embebido).
-- **Desbloquea el resto de PROJECT.md.** File tree / diff viewer (Sprints 2-3) son paneles **alrededor** del terminal, no dentro de él.
+- **Get full Claude Code for free.** Slash commands, `-r` picker, permission prompts, autocomplete, hooks — all work without writing a line of UI.
+- **Zero fragile parsing.** If Claude Code changes its output, our app does not break — xterm.js just paints bytes.
+- **Aligns with OpenCode Desktop.** Same paradigm (native window + embedded CLI).
+- **Unblocks the rest of PROJECT.md.** File tree / diff viewer (Sprints 2-3) are panels **around** the terminal, not inside it.
 
 ## What
 
-Single-PTY per window. Spawn interactivo de `claude` con env del login shell. xterm.js renderiza, resize cablea, keybinds Cmd+C/V/K configurados, cambio de sesión kills+respawns.
+Single-PTY per window. Interactive `claude` spawn with the login shell's env. xterm.js renders, resize is wired, Cmd+C/V/K keybinds configured, switching sessions kills+respawns.
 
 ### Success Criteria
-- [ ] `bun tauri dev` abre ventana sin warnings.
-- [ ] "+ Nueva sesión" → veo TUI de `claude` nativo (greeting + `> _`).
-- [ ] Escribo "lista archivos" → Claude responde con colores y formato completos.
-- [ ] Ctrl+C interrumpe turno; Cmd+C copia selección; Cmd+V pega; Cmd+K limpia.
-- [ ] Redimensiono ventana → TUI se acomoda.
-- [ ] Click en sesión previa → PTY actual muere, nuevo `claude --resume <id>` muestra historial real.
-- [ ] `ps aux | grep claude` no deja zombies tras cerrar ventana.
-- [ ] `cargo check` + `cargo clippy -- -D warnings` + `bun run typecheck` limpios.
+- [ ] `bun tauri dev` opens the window without warnings.
+- [ ] "+ New session" → I see the native `claude` TUI (greeting + `> _`).
+- [ ] I type "list files" → Claude replies with full colors and formatting.
+- [ ] Ctrl+C interrupts the turn; Cmd+C copies the selection; Cmd+V pastes; Cmd+K clears.
+- [ ] Resize the window → TUI reflows.
+- [ ] Click on a previous session → current PTY dies, new `claude --resume <id>` shows real history.
+- [ ] `ps aux | grep claude` leaves no zombies after closing the window.
+- [ ] `cargo check` + `cargo clippy -- -D warnings` + `bun run typecheck` clean.
 
 ---
 
@@ -39,62 +39,62 @@ Single-PTY per window. Spawn interactivo de `claude` con env del login shell. xt
 ### Project-level
 ```yaml
 - file: PROJECT.md
-  why: Blueprint con pivot a PTY reflejado
+  why: Blueprint with the pivot to PTY reflected
 - file: CLAUDE.md
-  why: Reglas no-negociables del pivot
+  why: Non-negotiable rules after the pivot
 - file: docs/sprint-01-claude-in-pty.md
-  why: Scope detallado, 9-step acceptance, riesgos y mitigaciones
+  why: Detailed scope, 9-step acceptance, risks and mitigations
 - file: docs/sprint-00-stream-json-exploration.md
-  why: Contexto del approach descartado (lo que sobrevive y por qué)
+  why: Context of the discarded approach (what survives and why)
 ```
 
-### Referencias de OpenCode (primarias ahora)
+### OpenCode references (primary now)
 ```yaml
 - file: ~/proyectos/open-source/opencode/packages/desktop/src-tauri/src/cli.rs
-  why: Port de probe_shell_env + load_shell_env + merge_shell_env (shell env hydration)
+  why: Port of probe_shell_env + load_shell_env + merge_shell_env (shell env hydration)
   lines: 220-365
   critical: |
-    - Usa `env -0` (null-delimited) para parseo robusto
-    - Timeout 5s en el probe; si falla, fallback de `-il` a `-l`
-    - Skip nushell (no soporta el pattern)
-    - Mergea con overrides; overrides ganan
+    - Uses `env -0` (null-delimited) for robust parsing
+    - 5s timeout on the probe; on failure, fallback from `-il` to `-l`
+    - Skip nushell (it does not support the pattern)
+    - Merge with overrides; overrides win
 
 - file: ~/proyectos/open-source/opencode/packages/app/src/components/terminal.tsx
-  why: Patrón de integración xterm-like con resize, addons, theming
-  critical: Usan ghostty-web; el shape transfiere a xterm.js pero los APIs difieren
+  why: xterm-like integration pattern with resize, addons, theming
+  critical: They use ghostty-web; the shape transfers to xterm.js but the APIs differ
 
 - file: ~/proyectos/open-source/opencode/packages/app/src/context/terminal.tsx
-  why: Lifecycle de PTY, cleanup, persistencia de state
+  why: PTY lifecycle, cleanup, state persistence
 ```
 
-### Referencias externas
+### External references
 ```yaml
 - url: https://github.com/wez/wezterm/tree/main/pty
-  why: Docs de portable-pty (PtyPair, CommandBuilder, read/write APIs)
+  why: portable-pty docs (PtyPair, CommandBuilder, read/write APIs)
   critical: |
-    - MasterPty::try_clone_reader() para leer desde otro thread
-    - MasterPty::take_writer() para escribir
-    - read es BLOCKING → usar tokio::task::spawn_blocking
+    - MasterPty::try_clone_reader() to read from another thread
+    - MasterPty::take_writer() to write
+    - read is BLOCKING → use tokio::task::spawn_blocking
     - resize via master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
 
 - url: https://xtermjs.org/docs/api/terminal/classes/terminal/
-  why: API de xterm.js (write, onData, onResize, attachCustomKeyEventHandler)
+  why: xterm.js API (write, onData, onResize, attachCustomKeyEventHandler)
   critical: |
-    - term.write() acepta string o Uint8Array
-    - term.onData callback recibe string (ya decodificado)
-    - Para bytes crudos del PTY: decode server-side O pasar Uint8Array
-    - Usar @xterm/addon-fit para resize al contenedor
+    - term.write() accepts string or Uint8Array
+    - term.onData callback receives a string (already decoded)
+    - For raw PTY bytes: decode server-side OR pass Uint8Array
+    - Use @xterm/addon-fit to resize to the container
 
 - url: https://v2.tauri.app/develop/calling-frontend/
-  why: emit / listen patterns para bytes
-  critical: payload serializable; bytes como base64 o Vec<u8>
+  why: emit / listen patterns for bytes
+  critical: payload must be serializable; bytes as base64 or Vec<u8>
 ```
 
-### Current state (branch sprint-01-pty, tras Sprint 00)
+### Current state (branch sprint-01-pty, after Sprint 00)
 ```
 src-tauri/src/
-├── binary.rs      # KEEP — detección de claude
-├── sessions.rs    # KEEP pero remover list_session_entries
+├── binary.rs      # KEEP — claude detection
+├── sessions.rs    # KEEP but remove list_session_entries
 ├── claude.rs      # DELETE
 ├── lib.rs         # EDIT — unregister claude_*, register pty_*
 └── main.rs        # KEEP
@@ -198,10 +198,10 @@ type TerminalStore = {
 };
 ```
 
-### Tasks (orden)
+### Tasks (order)
 
 ```yaml
-T1 — Limpiar Sprint 00:
+T1 — Clean up Sprint 00:
   - DELETE src-tauri/src/claude.rs
   - DELETE src/context/claude.tsx
   - DELETE src/components/chat-view.tsx
@@ -267,13 +267,13 @@ T7 — App.tsx wiring:
   - handleChangeProject: await term.kill(); reset state
   - Guard: don't spawn second PTY while status === "running"
 
-T8 — Validación:
+T8 — Validation:
   - Execute 9-step flow
   - Write docs/sprint-01-results.md
   - Tag v0.1.0-pty after merge
 ```
 
-### Pseudocódigo clave
+### Key pseudocode
 
 ```rust
 // src-tauri/src/pty.rs
@@ -364,7 +364,7 @@ pub async fn pty_open(
 }
 ```
 
-> **Nota:** el pseudocódigo arriba tiene un problema — `child` se mueve a dos tasks (waiter + storage). La implementación real guarda el child en `PtySession` y lo `wait()`ea al hacer `pty_kill`. O, alternativa: no guardar el child y depender del EOF del reader para emitir exit. Resolver en T4.
+> **Note:** the pseudocode above has an issue — `child` is moved into two tasks (waiter + storage). The real implementation stores the child in `PtySession` and `wait()`s on `pty_kill`. Alternative: don't store the child and rely on the reader's EOF to emit exit. Resolve in T4.
 
 ```typescript
 // src/components/terminal-view.tsx
@@ -457,51 +457,51 @@ cd src-tauri && cargo check && cargo clippy -- -D warnings
 ```
 
 ### Level 2: Smoke tests (Rust probes)
-Crear un `bin/probe-shell-env.rs` que imprima `PATH` hidratado y verifique que incluye nvm/homebrew.
+Create a `bin/probe-shell-env.rs` that prints the hydrated `PATH` and verifies it includes nvm/homebrew.
 
-### Level 3: Integración manual — 9 pasos de `sprint-01-claude-in-pty.md`
+### Level 3: Manual integration — 9 steps from `sprint-01-claude-in-pty.md`
 
 ```bash
 bun tauri dev
 ```
 
-Ejecutar flujo completo. Si algo falla, anotar en `docs/sprint-01-results.md`.
+Run the full flow. If anything fails, note it in `docs/sprint-01-results.md`.
 
 ---
 
 ## Final Checklist
 
-- [ ] Código del Sprint 00 eliminado (claude.rs, chat-view, context/claude, claude-events)
-- [ ] `portable-pty`, `@xterm/xterm` y addons instalados
-- [ ] `shell_env.rs` porta `probe_shell_env` y verifica contra el shell del user
-- [ ] `pty.rs` expone 4 comandos + 2 eventos; child terminations emit code
-- [ ] `context/terminal.tsx` conecta eventos a createEffect con cleanup
-- [ ] `terminal-view.tsx` monta xterm, resize + keybinds funcionan
-- [ ] `App.tsx` mata + respawnea al cambiar sesión/proyecto
-- [ ] 9 pasos del sprint pasan
-- [ ] cargo check + clippy + typecheck limpios
-- [ ] `docs/sprint-01-results.md` firmado
-- [ ] Merge a `main` + tag `v0.1.0-pty`
+- [ ] Sprint 00 code removed (claude.rs, chat-view, context/claude, claude-events)
+- [ ] `portable-pty`, `@xterm/xterm` and addons installed
+- [ ] `shell_env.rs` ports `probe_shell_env` and verifies against the user's shell
+- [ ] `pty.rs` exposes 4 commands + 2 events; child terminations emit code
+- [ ] `context/terminal.tsx` wires events to createEffect with cleanup
+- [ ] `terminal-view.tsx` mounts xterm, resize + keybinds work
+- [ ] `App.tsx` kills + respawns on session/project switch
+- [ ] 9 sprint steps pass
+- [ ] cargo check + clippy + typecheck clean
+- [ ] `docs/sprint-01-results.md` signed off
+- [ ] Merge to `main` + tag `v0.1.0-pty`
 
 ---
 
 ## Anti-Patterns to Avoid
 
-- ❌ Usar `-p`/`--output-format` — eso es el approach abandonado
-- ❌ Parsear stdout del PTY en Rust para "detectar" algo
-- ❌ Omitir shell env hydration (falla silenciosa de nvm)
-- ❌ Sin `TERM=xterm-256color` (sin colores)
-- ❌ `term.onData` directo a `invoke` sin batching (10+ invokes por key press)
-- ❌ Olvidar `drop(pair.slave)` tras spawn (master no recibe EOF al exit)
-- ❌ Guardar child + wait en sitios distintos (ownership conflict)
-- ❌ Fit por cada ResizeObserver event sin debounce (jitter de UI)
-- ❌ Multi-PTY en Sprint 01 (fuera de scope)
-- ❌ Persistir buffer entre reloads (fuera de scope; PTY muere con la ventana)
+- ❌ Use `-p`/`--output-format` — that is the abandoned approach
+- ❌ Parse PTY stdout in Rust to "detect" something
+- ❌ Omit shell env hydration (silent nvm failure)
+- ❌ No `TERM=xterm-256color` (no colors)
+- ❌ `term.onData` directly into `invoke` without batching (10+ invokes per keypress)
+- ❌ Forget `drop(pair.slave)` after spawn (master won't see EOF on exit)
+- ❌ Store child + wait in different places (ownership conflict)
+- ❌ Fit on every ResizeObserver event without debounce (UI jitter)
+- ❌ Multi-PTY in Sprint 01 (out of scope)
+- ❌ Persist buffer across reloads (out of scope; PTY dies with the window)
 
 ---
 
 ## Notes
 
-- **Confidence: 7/10.** Shell env hydration + portable-pty lifecycle son las dos áreas con más probabilidad de sorpresas. Todo lo demás es cablear APIs conocidas.
-- **Branch:** `sprint-01-pty`. Al validar, merge a `main`.
-- **Tiempo estimado:** 2–4 días efectivos.
+- **Confidence: 7/10.** Shell env hydration + portable-pty lifecycle are the two areas most likely to bring surprises. Everything else is wiring known APIs.
+- **Branch:** `sprint-01-pty`. On validation, merge to `main`.
+- **Estimated time:** 2–4 effective days.

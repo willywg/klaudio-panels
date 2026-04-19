@@ -1,72 +1,72 @@
-# Sprint 01 — Resultados (Claude en PTY)
+# Sprint 01 — Results (Claude in PTY)
 
-> **Fecha:** 2026-04-16
+> **Date:** 2026-04-16
 > **Branch:** `sprint-01-pty`
-> **Tag al merge:** `v0.1.0-pty`
-> **Veredicto:** ✅ **APROBADA** — procedemos a Sprint 02.
+> **Tag on merge:** `v0.1.0-pty`
+> **Verdict:** ✅ **APPROVED** — proceeding to Sprint 02.
 
-## Qué se validó
+## What was validated
 
-`claude` corre **interactivo en un PTY** (`portable-pty`) dentro de la ventana Tauri; xterm.js renderiza el TUI real sin ningún parsing de la app. El usuario confirmó que el flujo end-to-end funciona correctamente.
+`claude` runs **interactively in a PTY** (`portable-pty`) inside the Tauri window; xterm.js renders the real TUI without any parsing by the app. The user confirmed that the end-to-end flow works correctly.
 
-## Los 9 pasos
+## The 9 steps
 
-- [x] `bun tauri dev` abre ventana sin warnings.
-- [x] Elijo un proyecto con sesiones previas → sidebar muestra la lista.
-- [x] Layout 2-col con terminal vacío a la derecha.
-- [x] Click **"+ Nueva sesión"** → aparece el TUI de Claude Code v2.1.112 con greeting.
-- [x] Escribo prompt y Claude responde con formato nativo (colores, markdown, tool cards).
-- [x] Ctrl+C interrumpe turno (default de xterm).
-- [x] Resize de ventana re-acomoda el TUI (pty_resize + FitAddon).
-- [x] Click en sesión vieja → PTY actual muere, `claude --resume <id>` muestra historial real.
-- [x] Cmd+C / Cmd+V / Cmd+K funcionan como se espera.
+- [x] `bun tauri dev` opens the window without warnings.
+- [x] I pick a project with previous sessions → sidebar shows the list.
+- [x] 2-col layout with empty terminal on the right.
+- [x] Click **"+ New session"** → the Claude Code v2.1.112 TUI appears with a greeting.
+- [x] I type a prompt and Claude responds with native formatting (colors, markdown, tool cards).
+- [x] Ctrl+C interrupts the turn (xterm default).
+- [x] Window resize reflows the TUI (pty_resize + FitAddon).
+- [x] Click on an old session → current PTY dies, `claude --resume <id>` shows the real history.
+- [x] Cmd+C / Cmd+V / Cmd+K behave as expected.
 
-## Problemas detectados en la primera corrida y resueltos
+## Problems detected on the first run and resolved
 
-| # | Síntoma | Causa | Fix aplicado |
+| # | Symptom | Cause | Applied fix |
 |---|---------|-------|---------------|
-| 1 | Scrollbars externos horizontal y vertical sobre xterm | Capas del webview permitían overflow por fuera del control interno de xterm | `overflow-hidden` + `min-w/h-0` en `<main>`, grid, aside, section y container |
-| 2 | Delay sin feedback entre click "+ Nueva sesión" y primer byte del PTY | No había estado intermedio entre el invoke y el primer `pty:data` | Signal `opening`, `<LoadingPanel>` con spinner + "Iniciando Claude Code…" |
-| 3 | Icono ASCII-art de Claude desfasado / con fantasma entre celdas | `lineHeight: 1.2` + renderer canvas default miscalculaban ancho de box-drawing y emojis | `lineHeight: 1.0`, `@xterm/addon-unicode11` (`activeVersion = "11"`), `@xterm/addon-webgl` con fallback a canvas |
+| 1 | External horizontal and vertical scrollbars over xterm | Webview layers allowed overflow beyond xterm's internal control | `overflow-hidden` + `min-w/h-0` on `<main>`, grid, aside, section and container |
+| 2 | Delay without feedback between "+ New session" click and the first PTY byte | No intermediate state between the invoke and the first `pty:data` | `opening` signal, `<LoadingPanel>` with spinner + "Starting Claude Code…" |
+| 3 | Claude's ASCII-art icon misaligned / ghosting between cells | `lineHeight: 1.2` + default canvas renderer miscomputed the width of box-drawing chars and emojis | `lineHeight: 1.0`, `@xterm/addon-unicode11` (`activeVersion = "11"`), `@xterm/addon-webgl` with canvas fallback |
 
-## Métricas
+## Metrics
 
 - **LOC Rust** (`src-tauri/src/*.rs`): 657
 - **LOC TypeScript/TSX** (`src/**/*`): 557
-- **Commits del sprint:** 7
-- **Tiempo real:** ~1 día efectivo (más corto que el estimado de 2–4 días — la base que sobrevivió de Sprint 00 ayudó mucho)
+- **Sprint commits:** 7
+- **Real time:** ~1 effective day (shorter than the 2–4 day estimate — the surviving base from Sprint 00 helped a lot)
 
-## Qué sobrevivió de Sprint 00
+## What survived from Sprint 00
 
-- `src-tauri/src/binary.rs` — detección de `claude` vía `which` + fallbacks
-- `src-tauri/src/sessions.rs` — parser de `~/.claude/projects/**/*.jsonl`
-- Scaffold Tauri + SolidJS + Tailwind v4
-- `ProjectPicker`, `SessionsList`, layout 2-column, localStorage
+- `src-tauri/src/binary.rs` — `claude` detection via `which` + fallbacks
+- `src-tauri/src/sessions.rs` — parser for `~/.claude/projects/**/*.jsonl`
+- Tauri + SolidJS + Tailwind v4 scaffold
+- `ProjectPicker`, `SessionsList`, 2-column layout, localStorage
 
-## Qué se agregó en este sprint
+## What was added in this sprint
 
-- `src-tauri/src/shell_env.rs` — probe/load/merge del env del login shell (port directo de OpenCode). Crítico para que `Bash`/`git`/`rg`/`node` funcionen dentro de Claude en macOS GUI.
-- `src-tauri/src/pty.rs` — `portable-pty` con `pty_open/write/resize/kill`, lectura en `spawn_blocking`, emit `pty:data:<id>` y `pty:exit:<id>` vía base64.
-- `src/context/terminal.tsx` — store single-PTY con pub/sub para `onData`/`onExit`.
-- `src/components/terminal-view.tsx` — xterm.js con FitAddon, Unicode11Addon, WebGL, WebLinks, keybinds custom.
-- Wiring en `App.tsx`: sesiones `--resume <id>`, "+ Nueva sesión" sin args, cambio de proyecto mata PTY.
+- `src-tauri/src/shell_env.rs` — probe/load/merge of the login shell's env (direct port from OpenCode). Critical so that `Bash`/`git`/`rg`/`node` work inside Claude on a macOS GUI app.
+- `src-tauri/src/pty.rs` — `portable-pty` with `pty_open/write/resize/kill`, reading in `spawn_blocking`, emitting `pty:data:<id>` and `pty:exit:<id>` via base64.
+- `src/context/terminal.tsx` — single-PTY store with pub/sub for `onData`/`onExit`.
+- `src/components/terminal-view.tsx` — xterm.js with FitAddon, Unicode11Addon, WebGL, WebLinks, custom keybinds.
+- Wiring in `App.tsx`: sessions `--resume <id>`, "+ New session" with no args, switching project kills the PTY.
 
-## Decisiones confirmadas por la validación
+## Decisions confirmed by validation
 
-- **PTY puro > parsing stream-json.** El TUI real funciona sin fricción; el usuario obtiene 100% de las features del CLI.
-- **Shell env hydration es obligatorio.** Sin `probe_shell_env`, Claude no encontraría `node`/`git`/etc. Funcionó al primer intento.
-- **base64 para bytes PTY ↔ frontend.** Tauri serializa payload como string; base64 es el transporte robusto.
-- **WebGL renderer + Unicode 11 es no-negociable** para el TUI de Claude (iconos ASCII-art, progress bars, glyphs Warp).
+- **Pure PTY > stream-json parsing.** The real TUI works without friction; the user gets 100% of the CLI's features.
+- **Shell env hydration is mandatory.** Without `probe_shell_env`, Claude wouldn't find `node`/`git`/etc. Worked on the first try.
+- **base64 for PTY bytes ↔ frontend.** Tauri serializes the payload as a string; base64 is the robust transport.
+- **WebGL renderer + Unicode 11 is non-negotiable** for Claude's TUI (ASCII-art icons, progress bars, Warp glyphs).
 
-## Sprint 02 — Próximo
+## Sprint 02 — Next
 
-Backlog inmediato (decidir prioridad en kickoff):
+Immediate backlog (prioritize at kickoff):
 
-1. **Multi-tab de sesiones** — varios PTYs concurrentes con tabs, cada uno con su propio xterm.
-2. **File tree básico** — lateral navegación lazy + `notify` watcher (Fase 2 de `PROJECT.md`).
-3. **Persistir última sesión activa por proyecto** — al reabrir, auto-resume.
-4. **SQLite de app settings** — primeras entradas: proyectos favoritos, last session id, window size.
+1. **Multi-tab sessions** — several concurrent PTYs with tabs, each with its own xterm.
+2. **Basic file tree** — lazy side navigation + `notify` watcher (Phase 2 of `PROJECT.md`).
+3. **Persist the last active session per project** — auto-resume on reopen.
+4. **SQLite for app settings** — first entries: favorite projects, last session id, window size.
 
-Open questions para Sprint 02:
-- ¿Multi-tab como pestañas (browser-style) o como lista en sidebar con múltiples checkmark?
-- ¿File tree como panel adicional colapsable, o reemplaza la sidebar de sesiones?
+Open questions for Sprint 02:
+- Multi-tab as tabs (browser-style) or as a sidebar list with multiple checkmarks?
+- File tree as an additional collapsible panel, or does it replace the sessions sidebar?

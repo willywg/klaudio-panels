@@ -28,18 +28,18 @@ export function HomeScreen(props: Props) {
           </h1>
           <div class="flex items-center justify-center gap-2 text-xs text-neutral-500">
             <span class="inline-block w-1.5 h-1.5 rounded-full bg-green-500" />
-            <span>Listo</span>
+            <span>Ready</span>
           </div>
         </div>
 
         <div class="flex items-center justify-between mb-3 px-1">
-          <h2 class="text-sm text-neutral-300">Proyectos recientes</h2>
+          <h2 class="text-sm text-neutral-300">Recent projects</h2>
           <button
             class="text-xs px-3 py-1.5 border border-neutral-700 rounded hover:bg-neutral-900 hover:border-neutral-600 text-neutral-200 transition flex items-center gap-2"
             onClick={handleOpen}
           >
             <FolderOpen size={14} strokeWidth={2} />
-            <span>Abrir proyecto</span>
+            <span>Open project</span>
           </button>
         </div>
 
@@ -48,9 +48,9 @@ export function HomeScreen(props: Props) {
             when={sortedByRecency().length > 0}
             fallback={
               <div class="px-4 py-8 text-center text-sm text-neutral-500">
-                No has abierto ningún proyecto todavía.
+                You haven't opened any project yet.
                 <br />
-                Click <strong class="text-neutral-300">Abrir proyecto</strong> para empezar.
+                Click <strong class="text-neutral-300">Open project</strong> to get started.
               </div>
             }
           >

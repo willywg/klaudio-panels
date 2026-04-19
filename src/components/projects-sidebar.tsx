@@ -127,8 +127,8 @@ export function ProjectsSidebar(props: Props) {
     const openCount = props.openTabsByProject.get(path) ?? 0;
     const msg =
       openCount > 0
-        ? `Cerrar "${label}"?\nEsto matará ${openCount} tab(s) abiertos y lo quitará del sidebar.\nSeguirá disponible en "Proyectos recientes" del inicio.`
-        : `Cerrar "${label}"?\nSe quitará del sidebar. Seguirá disponible en "Proyectos recientes" del inicio.`;
+        ? `Close "${label}"?\nThis will kill ${openCount} open tab(s) and remove it from the sidebar.\nIt will still be available under "Recent projects" on the home screen.`
+        : `Close "${label}"?\nIt will be removed from the sidebar. Still available under "Recent projects" on the home screen.`;
     if (confirm(msg)) props.onCloseProject(path);
   }
 
@@ -141,7 +141,7 @@ export function ProjectsSidebar(props: Props) {
             ? "bg-neutral-800 text-neutral-100"
             : "text-neutral-500 hover:text-neutral-200 hover:bg-neutral-900")
         }
-        title="Inicio"
+        title="Home"
         onClick={props.onGoHome}
       >
         <Home size={18} strokeWidth={2} />
@@ -181,7 +181,7 @@ export function ProjectsSidebar(props: Props) {
                   opacity: isDragging() ? 0.4 : undefined,
                   cursor: isDragging() ? "grabbing" : "pointer",
                 }}
-                title={`${label()}\n${proj.path}${openCount() > 0 ? `\n${openCount()} tab(s) abiertos` : ""}\n\nClick: abrir. Hold + arrastrar: reordenar. Right-click o ×: cerrar.`}
+                title={`${label()}\n${proj.path}${openCount() > 0 ? `\n${openCount()} open tab(s)` : ""}\n\nClick: open. Hold + drag: reorder. Right-click or ×: close.`}
               >
                 {initial()}
               </button>
@@ -192,7 +192,7 @@ export function ProjectsSidebar(props: Props) {
               </Show>
               <button
                 class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-neutral-800 text-neutral-300 hover:bg-red-600 hover:text-white border border-neutral-950 flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
-                title="Cerrar proyecto (sigue en el historial)"
+                title="Close project (still in history)"
                 onClick={(e) => {
                   e.stopPropagation();
                   requestClose(proj.path);
@@ -206,7 +206,7 @@ export function ProjectsSidebar(props: Props) {
       </For>
       <button
         class="w-10 h-10 rounded-lg border border-dashed border-neutral-700 text-neutral-500 hover:border-neutral-500 hover:text-neutral-200 flex items-center justify-center transition"
-        title="Agregar proyecto"
+        title="Add project"
         onClick={handleAdd}
       >
         <Plus size={18} strokeWidth={2} />

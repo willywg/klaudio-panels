@@ -1,24 +1,24 @@
 # Claude Code UI — Project Blueprint
 
-> Ventana nativa que **embebe Claude Code corriendo en PTY**, con sidebar de proyectos/sesiones y (más adelante) file tree, diff viewer y terminal libre.
+> Native window that **embeds Claude Code running in a PTY**, with a projects/sessions sidebar and (later) file tree, diff viewer, and free-form terminal.
 
-## Objetivo
+## Goal
 
-App de escritorio construida con Tauri v2 + SolidJS que **muestra el TUI real de Claude Code** dentro de un panel de la ventana, sin reimplementar su UI ni parsear su output. El usuario obtiene todo el CLI gratis (slash commands, permisos interactivos, `-r` picker, autocomplete, hooks) y la app agrega UX alrededor:
+A desktop app built with Tauri v2 + SolidJS that **shows the real Claude Code TUI** inside a window panel, without reimplementing its UI nor parsing its output. The user gets the full CLI for free (slash commands, interactive permissions, `-r` picker, autocomplete, hooks) and the app adds UX around it:
 
-1. **Terminal central con Claude Code** — `claude` nativo corriendo en PTY; xterm.js renderiza bytes tal cual.
-2. **Sidebar de proyectos y sesiones** — selector de carpeta + lista de sesiones leídas de `~/.claude/projects/`. Click en sesión → `claude --resume <id>` en el PTY.
-3. **File tree** (Fase 2) — lateral, navegación rápida, badges de git status.
-4. **Diff viewer** (Fase 3) — panel de revisión basado en `@pierre/diffs`.
-5. **Terminal libre adicional** (Fase 4) — tabs extra para shell/otros CLIs.
+1. **Central terminal with Claude Code** — native `claude` running in a PTY; xterm.js renders bytes as-is.
+2. **Projects and sessions sidebar** — folder picker + session list read from `~/.claude/projects/`. Click a session → `claude --resume <id>` in the PTY.
+3. **File tree** (Phase 2) — side panel, fast navigation, git status badges.
+4. **Diff viewer** (Phase 3) — review panel based on `@pierre/diffs`.
+5. **Additional free-form terminal** (Phase 4) — extra tabs for shell/other CLIs.
 
-## Estrategia de Integración — PTY puro
+## Integration Strategy — Pure PTY
 
-**Claude Code corre como proceso interactivo en PTY.** La app no parsea su output, solo lo renderiza.
+**Claude Code runs as an interactive process in a PTY.** The app does not parse its output, it only renders it.
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  Usuario escribe en xterm.js                    │
+│  User types into xterm.js                       │
 │       │ bytes                                    │
 │       ▼                                          │
 │  Tauri invoke("pty_write", id, bytes)           │
@@ -27,49 +27,49 @@ App de escritorio construida con Tauri v2 + SolidJS que **muestra el TUI real de
 │  portable-pty master.write() → PTY slave        │
 │       │                                          │
 │       ▼                                          │
-│  claude CLI (TUI nativo: colores, cursor, etc.) │
+│  claude CLI (native TUI: colors, cursor, etc.)  │
 │       │ stdout/stderr                            │
 │       ▼                                          │
 │  portable-pty master.read() → emit              │
-│  event "pty:data:<id>" con bytes                │
+│  event "pty:data:<id>" with bytes               │
 │       │                                          │
 │       ▼                                          │
-│  xterm.js term.write(bytes) → pantalla          │
+│  xterm.js term.write(bytes) → screen            │
 └─────────────────────────────────────────────────┘
 ```
 
-**Modos de invocar `claude`** (todos en PTY):
+**Ways to invoke `claude`** (all in a PTY):
 
-| Acción en la UI                      | Comando                    |
-| ------------------------------------ | -------------------------- |
-| Click "+ Nueva sesión"               | `claude`                   |
-| Click "Continuar última"             | `claude -c`                |
-| Click en una sesión de la sidebar    | `claude --resume <id>`     |
+| UI action                         | Command                    |
+| --------------------------------- | -------------------------- |
+| Click "+ New session"             | `claude`                   |
+| Click "Continue last"             | `claude -c`                |
+| Click a session in the sidebar    | `claude --resume <id>`     |
 
-### Persistencia de sesiones
+### Session persistence
 
-**Reutilizamos el storage nativo de Claude Code.** Las sesiones viven en `~/.claude/projects/<encoded-project-path>/<session-id>.jsonl`. La app:
-- Lee estos JSONL para listar sesiones en la sidebar (timestamp + preview del primer mensaje).
-- No escribe nada ahí. No rehidrata mensajes en UI — `claude --resume` lo hace por nosotros dentro del PTY.
-- Para settings propios (proyecto activo, window state) usa `localStorage` y, más adelante, SQLite.
+**We reuse Claude Code's native storage.** Sessions live in `~/.claude/projects/<encoded-project-path>/<session-id>.jsonl`. The app:
+- Reads these JSONL files to list sessions in the sidebar (timestamp + first-message preview).
+- Writes nothing there. Does not rehydrate messages in the UI — `claude --resume` does that for us inside the PTY.
+- For its own settings (active project, window state) it uses `localStorage` and, later, SQLite.
 
-## Stack Tecnológico
+## Tech Stack
 
-| Capa                 | Tecnología                              | Justificación                                                  |
+| Layer                | Technology                              | Rationale                                                      |
 | -------------------- | --------------------------------------- | -------------------------------------------------------------- |
-| **Shell nativo**     | Tauri v2 (Rust)                         | Binario pequeño, auto-update, IPC rápida                       |
-| **Frontend UI**      | SolidJS 1.9                             | Signals + stores, ergonómico                                   |
+| **Native shell**     | Tauri v2 (Rust)                         | Small binary, auto-update, fast IPC                            |
+| **Frontend UI**      | SolidJS 1.9                             | Signals + stores, ergonomic                                    |
 | **CSS**              | TailwindCSS v4                          | Utility-first                                                  |
-| **Componentes**      | Kobalte (headless) + custom             | Accesibles                                                     |
+| **Components**       | Kobalte (headless) + custom             | Accessible                                                     |
 | **Build**            | Vite 7                                  | HMR                                                            |
-| **PTY**              | `portable-pty` (Rust) + `xterm.js` (TS) | Spawn interactivo de `claude`, render completo de TUI          |
-| **Diff Engine**      | `@pierre/diffs` (Fase 3)                | Motor probado en OpenCode                                      |
-| **Syntax Highlight** | Shiki (Fase 2)                          | Grammar lazy loading                                           |
-| **Git**              | `git2` (Fase 3)                         | Diff, status, log                                              |
-| **File Watching**    | `notify` (Fase 2)                       | Refresco file tree                                             |
-| **App state**        | `localStorage` (PoC) → `rusqlite` (F5)  | Settings, proyecto activo                                      |
+| **PTY**              | `portable-pty` (Rust) + `xterm.js` (TS) | Interactive `claude` spawn, full TUI rendering                 |
+| **Diff engine**      | `@pierre/diffs` (Phase 3)               | Battle-tested engine from OpenCode                             |
+| **Syntax highlight** | Shiki (Phase 2)                         | Lazy grammar loading                                           |
+| **Git**              | `git2` (Phase 3)                        | Diff, status, log                                              |
+| **File watching**    | `notify` (Phase 2)                      | File tree refresh                                              |
+| **App state**        | `localStorage` (PoC) → `rusqlite` (F5)  | Settings, active project                                       |
 
-## Arquitectura
+## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -80,19 +80,19 @@ App de escritorio construida con Tauri v2 + SolidJS que **muestra el TUI real de
 │  │  ┌──────────────┐ ┌─────────────────────────────────┐ │ │
 │  │  │  Sidebar     │ │  Terminal (xterm.js)            │ │ │
 │  │  │              │ │                                 │ │ │
-│  │  │ Projects     │ │  ┌─ renderiza bytes del PTY ─┐ │ │ │
+│  │  │ Projects     │ │  ┌─ renders PTY bytes ───────┐ │ │ │
 │  │  │ Sessions     │ │  │                            │ │ │ │
 │  │  │ (JSONL list) │ │  │   claude > _              │ │ │ │
 │  │  │              │ │  │                            │ │ │ │
-│  │  │ [+ Nueva]    │ │  └────────────────────────────┘ │ │ │
+│  │  │ [+ New]      │ │  └────────────────────────────┘ │ │ │
 │  │  └──────────────┘ └─────────────────────────────────┘ │ │
 │  └─────────────────────────────────────────────────────────┘ │
 │                                                              │
 │  Rust Backend (Tauri Commands + Events)                     │
-│  ├─ binary.rs   : detectar `claude` en PATH                  │
-│  ├─ sessions.rs : listar sesiones de ~/.claude/projects/    │
+│  ├─ binary.rs   : detect `claude` on PATH                    │
+│  ├─ sessions.rs : list sessions from ~/.claude/projects/    │
 │  ├─ pty.rs      : portable-pty + shell env hydration        │
-│  └─ (fases posteriores)                                      │
+│  └─ (later phases)                                           │
 │     ├─ fs.rs    : readdir + notify watcher                  │
 │     ├─ git.rs   : diff/status via git2                       │
 │     └─ config.rs: SQLite settings                            │
@@ -105,27 +105,27 @@ App de escritorio construida con Tauri v2 + SolidJS que **muestra el TUI real de
 ┌──────────────────────────────────────────────────────────────┐
 │  Claude Code UI                            ─ □ ✕          │
 ├───────────────┬──────────────────────────────────────────────┤
-│  Proyecto     │                                              │
+│  Project      │                                              │
 │  psicolab     │  $ claude                                    │
-│  ← cambiar    │  │ ✻ Claude Code v2.1.112                   │
+│  ← change     │  │ ✻ Claude Code v2.1.112                   │
 │               │  │                                            │
-│  [+ Nueva]    │  │ Hola! ¿Qué quieres hacer hoy?             │
+│  [+ New]      │  │ Hi! What do you want to do today?         │
 │               │  │                                            │
-│  SESIONES     │  │ > _                                       │
+│  SESSIONS     │  │ > _                                       │
 │  7:21pm       │                                              │
-│  archivos en… │                                              │
+│  files in…    │                                              │
 │               │                                              │
 │  5:58pm       │                                              │
 │  langsmith    │                                              │
 │               │                                              │
-│  2 abr        │                                              │
+│  Apr 2        │                                              │
 │  ssh docker   │                                              │
 └───────────────┴──────────────────────────────────────────────┘
 ```
 
-Un solo PTY activo. Cambiar sesión mata el PTY anterior y spawnea uno nuevo con `--resume <id>`. Multi-tab llega en Sprint 02.
+A single active PTY. Switching sessions kills the previous PTY and spawns a new one with `--resume <id>`. Multi-tab arrives in Sprint 02.
 
-## Estructura del Proyecto
+## Project Structure
 
 ```
 cc-ui/
@@ -135,101 +135,101 @@ cc-ui/
 │   ├── capabilities/default.json
 │   └── src/
 │       ├── main.rs
-│       ├── lib.rs              # Tauri setup, registra comandos
-│       ├── binary.rs           # Detección de `claude` (reusado de Sprint 00)
-│       ├── sessions.rs         # Parseo de ~/.claude/projects (reusado de Sprint 00)
+│       ├── lib.rs              # Tauri setup, registers commands
+│       ├── binary.rs           # Detect `claude` (reused from Sprint 00)
+│       ├── sessions.rs         # Parse ~/.claude/projects (reused from Sprint 00)
 │       ├── pty.rs              # portable-pty + shell env
 │       └── shell_env.rs        # probe_shell_env / load_shell_env
 │
 ├── src/
-│   ├── App.tsx                 # Layout 2-column
+│   ├── App.tsx                 # 2-column layout
 │   ├── index.tsx               # Entry
 │   ├── index.css               # Tailwind
 │   │
 │   ├── context/
-│   │   └── terminal.tsx        # PTY activo: id, write, resize, kill
+│   │   └── terminal.tsx        # Active PTY: id, write, resize, kill
 │   │
 │   ├── components/
-│   │   ├── project-picker.tsx  # Dialog de directorio
-│   │   ├── sessions-list.tsx   # Sidebar + "+ Nueva sesión"
+│   │   ├── project-picker.tsx  # Directory dialog
+│   │   ├── sessions-list.tsx   # Sidebar + "+ New session"
 │   │   └── terminal-view.tsx   # xterm.js mount + addon-fit + keybinds
 │   │
 │   └── lib/
-│       └── paths.ts            # Helpers path
+│       └── paths.ts            # Path helpers
 │
 ├── package.json
 ├── vite.config.ts
-├── tailwind.config.ts (v4: solo @import)
+├── tailwind.config.ts (v4: @import only)
 └── tsconfig.json
 ```
 
-## File Tree, Diff, File Viewer — Fases posteriores
+## File Tree, Diff, File Viewer — Later Phases
 
-Estos componentes **se alimentan de filesystem + git, no del PTY**. No hay integración entre Claude Code y la UI fuera del PTY mismo. Cuando Claude edita un archivo, el watcher de `notify` lo detecta, el file tree se refresca, el diff panel se recalcula. La app nunca "mira dentro" del PTY.
+These components **feed off filesystem + git, not the PTY**. There is no integration between Claude Code and the UI beyond the PTY itself. When Claude edits a file, the `notify` watcher detects it, the file tree refreshes, the diff panel recomputes. The app never "peeks into" the PTY.
 
-Esto mantiene dos disciplinas separadas:
-- **Lo que Claude hace** → visible en el TUI nativo.
-- **Lo que cambia en el repo** → visible via filesystem/git en paneles propios.
+This keeps two disciplines separated:
+- **What Claude does** → visible in the native TUI.
+- **What changes in the repo** → visible via filesystem/git in dedicated panels.
 
-## Referencias del Ecosistema
+## Ecosystem References
 
-### OpenCode Desktop (anomalyco/opencode) — referencia principal
+### OpenCode Desktop (anomalyco/opencode) — primary reference
 
-Ahora SÍ aplica. OpenCode Desktop es el modelo: ventana nativa con CLI embebido.
+Now it does apply. OpenCode Desktop is the template: a native window with an embedded CLI.
 
-| Path de OpenCode                                              | Qué aprender                                                   |
+| OpenCode path                                                 | What to learn                                                  |
 | ------------------------------------------------------------- | -------------------------------------------------------------- |
-| `packages/desktop/src-tauri/src/cli.rs` L220-L365             | `probe_shell_env` + `load_shell_env` + `merge_shell_env` — **crítico para nvm/volta/asdf** |
-| `packages/app/src/components/terminal.tsx`                    | Integración terminal (ellos usan ghostty-web, nosotros xterm.js, patrón transfiere) |
-| `packages/app/src/context/terminal.tsx`                       | Lifecycle, persistencia de buffer, resize                      |
-| `packages/app/src/pages/session/terminal-panel.tsx`           | Tabs (para Sprint 02)                                          |
+| `packages/desktop/src-tauri/src/cli.rs` L220-L365             | `probe_shell_env` + `load_shell_env` + `merge_shell_env` — **critical for nvm/volta/asdf** |
+| `packages/app/src/components/terminal.tsx`                    | Terminal integration (they use ghostty-web, we use xterm.js, pattern transfers) |
+| `packages/app/src/context/terminal.tsx`                       | Lifecycle, buffer persistence, resize                          |
+| `packages/app/src/pages/session/terminal-panel.tsx`           | Tabs (for Sprint 02)                                           |
 
-**Qué NO copiar de OpenCode**:
-- El patrón sidecar-HTTP de `cli.rs` (arriba de L220) — asume que el CLI es un server con endpoints WebSocket. `claude` no tiene server; spawneamos PTY directo.
-- `ghostty-web` — es su fork propio, usamos xterm.js por ser estándar.
-- `packages/opencode/`, `packages/sdk/`, `packages/shared/` — su server LLM, irrelevante.
+**What NOT to copy from OpenCode**:
+- The sidecar-HTTP pattern in `cli.rs` (above L220) — it assumes the CLI is a server with WebSocket endpoints. `claude` has no server; we spawn the PTY directly.
+- `ghostty-web` — it's their own fork, we use xterm.js as the standard.
+- `packages/opencode/`, `packages/sdk/`, `packages/shared/` — their LLM server, irrelevant.
 
-### Claudia (getAsterisk/claudia) — archivo
+### Claudia (getAsterisk/claudia) — archived
 
-Referencia del approach descartado (stream-json wrapper). Sirvió en Sprint 00 para validar parser de sesiones y binary detection. Ya no se consulta para arquitectura.
+Reference for the discarded approach (stream-json wrapper). It served in Sprint 00 to validate the session parser and binary detection. No longer consulted for architecture.
 
-## Plan de Implementación — Fases
+## Implementation Plan — Phases
 
-### Sprint 00 ✅ (archivado)
-PoC con stream-json. Validó binary detection + JSONL parser + scaffold. Descartado como approach. Ver `docs/sprint-00-stream-json-exploration.md`.
+### Sprint 00 ✅ (archived)
+stream-json PoC. Validated binary detection + JSONL parser + scaffold. Discarded as an approach. See `docs/sprint-00-stream-json-exploration.md`.
 
-### Sprint 01 — Claude en PTY (actual, 2–4 días)
-- [ ] Limpiar código stream-json
-- [ ] Agregar `portable-pty` + xterm.js + addons
-- [ ] `shell_env.rs` con probe/load/merge de login shell
-- [ ] `pty.rs` con comandos `pty_open`, `pty_write`, `pty_resize`, `pty_kill`
+### Sprint 01 — Claude in PTY (done, 2–4 days)
+- [ ] Clean up stream-json code
+- [ ] Add `portable-pty` + xterm.js + addons
+- [ ] `shell_env.rs` with probe/load/merge of login shell
+- [ ] `pty.rs` with `pty_open`, `pty_write`, `pty_resize`, `pty_kill` commands
 - [ ] `context/terminal.tsx` + `components/terminal-view.tsx`
-- [ ] Wire: sidebar → `pty_open` con args apropiados
-- [ ] Validar 9 pasos de `docs/sprint-01-claude-in-pty.md`
+- [ ] Wire: sidebar → `pty_open` with appropriate args
+- [ ] Validate the 9 steps in `docs/sprint-01-claude-in-pty.md`
 
-### Sprint 02 — Multi-tab + File tree básico (1 sem)
-- [ ] Multi-PTY con tabs
+### Sprint 02 — Multi-tab + basic File tree (1 week)
+- [ ] Multi-PTY with tabs
 - [ ] `fs.rs` + notify watcher
-- [ ] File tree lazy con expand/collapse
-- [ ] File viewer simple (leer archivo, syntax highlight)
+- [ ] Lazy file tree with expand/collapse
+- [ ] Simple file viewer (read file, syntax highlight)
 
-### Sprint 03 — Git + Diff viewer (1-2 sem)
+### Sprint 03 — Git + Diff viewer (1-2 weeks)
 - [ ] `git.rs` (diff/status/log)
-- [ ] Diff viewer con `@pierre/diffs`
-- [ ] Badges A/M/D en file tree
+- [ ] Diff viewer with `@pierre/diffs`
+- [ ] A/M/D badges in file tree
 
-### Sprint 04 — Terminal libre extra + SQLite settings (1 sem)
-- [ ] Tabs de terminales adicionales (shell/zsh/arbitrario)
-- [ ] `config.rs` con rusqlite
-- [ ] Persistir proyectos favoritos, layout, theme
+### Sprint 04 — Extra free-form terminal + SQLite settings (1 week)
+- [ ] Additional terminal tabs (shell/zsh/arbitrary)
+- [ ] `config.rs` with rusqlite
+- [ ] Persist favorite projects, layout, theme
 
-### Sprint 05 — Polish & Distribución (1-2 sem)
+### Sprint 05 — Polish & Distribution (1-2 weeks)
 - [ ] Theming (dark/light)
-- [ ] Keybindings configurables
-- [ ] Auto-update con `tauri-plugin-updater`
+- [ ] Configurable keybindings
+- [ ] Auto-update with `tauri-plugin-updater`
 - [ ] Packaging: dmg / nsis / deb
 
-## Dependencias Clave
+## Key Dependencies
 
 ### Rust (`src-tauri/Cargo.toml`)
 
@@ -238,8 +238,8 @@ PoC con stream-json. Validó binary detection + JSONL parser + scaffold. Descart
 tauri = { version = "2" }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
-portable-pty = "0.8"         # PTY interactivo
-which = "7"                  # detectar `claude`
+portable-pty = "0.8"         # Interactive PTY
+which = "7"                  # detect `claude`
 dirs = "6"                   # ~/.claude/projects
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -273,7 +273,7 @@ tracing = "0.1"
 }
 ```
 
-## Comandos de Desarrollo
+## Development Commands
 
 ```bash
 bun install
@@ -283,14 +283,14 @@ bun run typecheck    # tsc --noEmit
 cd src-tauri && cargo check
 ```
 
-## Notas de Diseño
+## Design Notes
 
-1. **Claude Code es el motor; lo embebemos, no lo envolvemos.** Cero parsing del output. El TUI real rinde tal cual en xterm.js.
+1. **Claude Code is the engine; we embed it, we don't wrap it.** Zero parsing of its output. The real TUI renders as-is in xterm.js.
 
-2. **Sin canal estructurado paralelo.** No hay stream-json, no hay tool_use JSON. Si algún día queremos hooks programáticos (ej. "cuando Claude edite, pre-commit"), lo hacemos observando **el filesystem y git**, no el PTY.
+2. **No parallel structured channel.** No stream-json, no tool_use JSON. If someday we want programmatic hooks (e.g. "when Claude edits, pre-commit"), we do it by watching **the filesystem and git**, not the PTY.
 
-3. **La UI agrega contexto visual, no reemplaza funcionalidad.** Sidebar, file tree y diff viewer son **periféricos** al terminal. Si todos fallan, el terminal sigue siendo útil.
+3. **The UI adds visual context, it does not replace functionality.** Sidebar, file tree, and diff viewer are **peripheral** to the terminal. If they all fail, the terminal is still useful.
 
-4. **Shell env hydration es no-negociable.** Sin `probe_shell_env`, herramientas como `Bash`/`git`/`rg` dentro de Claude fallan silenciosamente en macOS GUI apps.
+4. **Shell env hydration is non-negotiable.** Without `probe_shell_env`, tools like `Bash`/`git`/`rg` inside Claude fail silently in macOS GUI apps.
 
-5. **Archivos + git = source of truth.** No hay base de datos de conversaciones. `~/.claude/projects/` ya existe; lo leemos, no duplicamos.
+5. **Files + git = source of truth.** There is no conversation database. `~/.claude/projects/` already exists; we read it, we don't duplicate it.

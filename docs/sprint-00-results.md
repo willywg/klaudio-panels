@@ -1,92 +1,92 @@
-# Sprint 01 — Resultados de la PoC
+# Sprint 01 — PoC Results
 
-> **Fecha:** 2026-04-16
-> **Commit probado:** (llenar al correr)
-> **Binario claude:** `/Users/willywg/.local/bin/claude` v2.1.112
-> **Plataforma:** macOS (Darwin 25.3.0)
-> **Estado:** ⏳ pendiente de validación manual del usuario
+> **Date:** 2026-04-16
+> **Tested commit:** (fill in when running)
+> **`claude` binary:** `/Users/willywg/.local/bin/claude` v2.1.112
+> **Platform:** macOS (Darwin 25.3.0)
+> **Status:** ⏳ pending manual user validation
 
-## Cómo correr la validación
+## How to run the validation
 
 ```bash
 bun tauri dev
 ```
 
-Primer build de Rust ~3–5 min en frío. Después HMR es instantáneo.
+First Rust build takes ~3–5 min cold. After that HMR is instant.
 
-Abre **devtools** en la ventana (Cmd+Option+I) antes de empezar; los eventos stream-json se logean ahí si algo falla.
+Open **devtools** in the window (Cmd+Option+I) before you start; stream-json events are logged there if anything fails.
 
-## User flow — 9 pasos
+## User flow — 9 steps
 
-Marca conforme avanzas. Si algo falla, anota en el bloque de *Bugs*.
+Check each one off as you go. If something fails, note it under *Bugs*.
 
-- [ ] **1.** La ventana abre sin warnings rojos en consola de Tauri/Vite.
-- [ ] **2.** Veo la pantalla inicial con el botón **"Abrir proyecto…"**. Click → dialog nativo → elijo una carpeta con sesiones previas (sugerencia: `/Users/willywg/proyectos/construct-ai/copilot-agent` tiene 5 sesiones).
-- [ ] **3.** La UI cambia a layout de dos columnas. La izquierda muestra el proyecto + lista de sesiones previas con fecha y preview. La derecha muestra header vacío + input.
-- [ ] **4.** Click en **"+ Nueva sesión"** → la derecha queda lista, header dice `— · idle`.
-- [ ] **5.** Escribo un prompt corto (ej. `hola, lista los archivos en este repo`) y envío con ⌘+Enter o click Enviar.
-- [ ] **6.** Observo en orden:
-  - Mi mensaje aparece inmediatamente en índigo.
-  - Status cambia a `running`.
-  - Header muestra session id real (8 chars + …).
-  - Línea `init` con `cwd=...` y `model=sonnet` (o el que llegue).
-  - Una o más tarjetas `Bash`/`Read`/`Glob`/etc. con su input y luego su result.
-  - Mensaje del assistant con la respuesta.
-  - Línea final `done · $0.00xx · Xs`.
-  - Status vuelve a `idle`.
-- [ ] **7.** Cmd+R (reload): mismo proyecto recordado, misma lista de sesiones. La sesión recién creada **aparece arriba** con preview de mi prompt.
-- [ ] **8.** Click en esa sesión → chat se limpia. Escribo `y cuántos archivos eran?` → Claude responde con contexto de la conversación anterior (el `--resume <id>` funciona).
-- [ ] **9.** Mientras un turno está corriendo (status=`running`), click **Cancelar** → el botón desaparece y status vuelve a `idle`. En terminal externa: `ps aux | grep -v grep | grep "claude -p"` no muestra nada.
+- [ ] **1.** The window opens without red warnings in the Tauri/Vite console.
+- [ ] **2.** I see the initial screen with the **"Open project…"** button. Click → native dialog → pick a folder with previous sessions (suggestion: `/Users/willywg/proyectos/construct-ai/copilot-agent` has 5 sessions).
+- [ ] **3.** The UI switches to a 2-column layout. The left side shows the project + list of previous sessions with date and preview. The right side shows an empty header + input.
+- [ ] **4.** Click **"+ New session"** → the right side is ready, header says `— · idle`.
+- [ ] **5.** I type a short prompt (e.g. `hi, list the files in this repo`) and send with ⌘+Enter or by clicking Send.
+- [ ] **6.** I observe, in order:
+  - My message appears immediately in indigo.
+  - Status changes to `running`.
+  - Header shows the real session id (8 chars + …).
+  - `init` line with `cwd=...` and `model=sonnet` (or whichever arrives).
+  - One or more `Bash`/`Read`/`Glob`/etc. cards with their input and then their result.
+  - Assistant message with the answer.
+  - Final line `done · $0.00xx · Xs`.
+  - Status returns to `idle`.
+- [ ] **7.** Cmd+R (reload): same project remembered, same session list. The just-created session **shows up at the top** with my prompt as preview.
+- [ ] **8.** Click on that session → chat clears. I type `and how many files were they?` → Claude replies with the previous conversation's context (i.e. `--resume <id>` works).
+- [ ] **9.** While a turn is running (status=`running`), click **Cancel** → the button disappears and status returns to `idle`. In an external terminal: `ps aux | grep -v grep | grep "claude -p"` shows nothing.
 
-## Métricas a capturar
+## Metrics to capture
 
-- **Primer evento** (send → aparece `init` o `hook_started` en UI): ___ ms
-- **Primer token de assistant** (send → primer `assistant_text`): ___ s
-- **LOC** (llenar corriendo `cloc src src-tauri/src --exclude-dir=target`):
+- **First event** (send → `init` or `hook_started` appears in UI): ___ ms
+- **First assistant token** (send → first `assistant_text`): ___ s
+- **LOC** (fill by running `cloc src src-tauri/src --exclude-dir=target`):
   - Rust: ___
   - TypeScript/TSX: ___
 - **Warnings** `cargo clippy -- -D warnings`: ___
 - **Warnings** `bun run typecheck`: ___
 
-## Bugs encontrados
+## Bugs found
 
-> Formato: impacto, pasos para reproducir, stack/log si aplica.
+> Format: impact, steps to reproduce, stack/log if applicable.
 
-- [ ] (ninguno por ahora)
+- [ ] (none so far)
 
-## Decisiones confirmadas
+## Confirmed decisions
 
-- [ ] Stream-json funciona como canal primario dentro de Tauri v2.
-- [ ] `~/.claude/projects/` es parseable sin inventar storage propio.
-- [ ] `--resume <session_id>` mantiene contexto entre turnos.
-- [ ] `process-wrap` no fue necesario en la PoC — `kill_on_drop` + `Child::kill()` bastaron para un proceso single-child. Reevaluar cuando Claude lance subshells con Bash.
+- [ ] Stream-json works as the primary channel inside Tauri v2.
+- [ ] `~/.claude/projects/` is parseable without inventing our own storage.
+- [ ] `--resume <session_id>` keeps context across turns.
+- [ ] `process-wrap` was not needed in the PoC — `kill_on_drop` + `Child::kill()` were enough for a single-child process. Revisit when Claude launches subshells via Bash.
 
-## Gaps conocidos (scope para Sprint 02)
+## Known gaps (scope for Sprint 02)
 
-1. **Sesiones continuadas abren chat vacío.** `list_session_entries` está implementado pero no se usa al hacer `onSelect`. En Sprint 02, al seleccionar una sesión se deberían rehidratar los eventos en la timeline.
-2. **stderr solo va a devtools console.** Si `claude` falla por auth o model inválido, el usuario no lo ve en la UI. Agregar toast o banner.
-3. **Model picker hardcodeado (`sonnet`).** Sprint 02 debería leer modelos disponibles de algún lado y permitir switch.
-4. **Sin markdown rendering.** `assistant_text` se muestra como texto plano (`whitespace-pre-wrap`). Sprint 02: `marked` + `shiki`.
-5. **Sin syntax highlighting en tool input/result.** JSON pretty solamente.
-6. **Sin indicador visual de streaming.** El mensaje del assistant aparece de golpe cuando llega el evento, no token-por-token (limitación del stream-json que emite bloques completos).
-7. **Sin persistencia del último `activeSessionId`** (solo del proyecto). Esto es intencional — el reload arranca "limpio" para evitar rehidratar algo que aún no sabemos mostrar bien.
+1. **Continued sessions open an empty chat.** `list_session_entries` is implemented but unused on `onSelect`. In Sprint 02, selecting a session should rehydrate events into the timeline.
+2. **stderr only goes to the devtools console.** If `claude` fails due to auth or an invalid model, the user doesn't see it in the UI. Add a toast or banner.
+3. **Model picker hardcoded (`sonnet`).** Sprint 02 should read available models from somewhere and allow switching.
+4. **No markdown rendering.** `assistant_text` is shown as plain text (`whitespace-pre-wrap`). Sprint 02: `marked` + `shiki`.
+5. **No syntax highlighting in tool input/result.** JSON pretty-print only.
+6. **No visual streaming indicator.** The assistant message appears all at once when the event lands, not token-by-token (a limitation of stream-json which emits complete blocks).
+7. **No persistence of the last `activeSessionId`** (only the project). This is intentional — reload starts "clean" to avoid rehydrating something we still don't know how to display well.
 
-## Siguiente sprint (borrador)
+## Next sprint (draft)
 
-1. Rehidratar histórico al abrir sesión existente (`list_session_entries` → timeline).
-2. Markdown + syntax highlight para assistant text y tool results.
-3. Model picker + persistencia de última selección.
-4. Toast / banner para errores de `stderr`.
-5. Empezar Fase 2 de PROJECT.md: file tree + file viewer.
+1. Rehydrate history when opening an existing session (`list_session_entries` → timeline).
+2. Markdown + syntax highlighting for assistant text and tool results.
+3. Model picker + persistence of the last choice.
+4. Toast / banner for `stderr` errors.
+5. Start Phase 2 of PROJECT.md: file tree + file viewer.
 
-## Veredicto (llenar al final)
+## Verdict (fill in at the end)
 
-- [ ] **APROBADA** — 9/9 pasos, procedemos con Sprint 02
-- [ ] **APROBADA con cambios** — describe ajustes necesarios
-- [ ] **BLOQUEADA** — describe el problema y plan
+- [ ] **APPROVED** — 9/9 steps, proceed with Sprint 02
+- [ ] **APPROVED with changes** — describe the required adjustments
+- [ ] **BLOCKED** — describe the problem and plan
 
-Tag `v0.0.1-poc` al aprobar:
+Tag `v0.0.1-poc` on approval:
 
 ```bash
-git tag -a v0.0.1-poc -m "PoC de Claude Code en Tauri aprobada"
+git tag -a v0.0.1-poc -m "Claude Code-in-Tauri PoC approved"
 ```

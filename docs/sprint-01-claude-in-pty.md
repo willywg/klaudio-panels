@@ -1,147 +1,147 @@
-# Sprint 01 — Claude Code en PTY
+# Sprint 01 — Claude Code in PTY
 
-> **Duración objetivo:** 2–4 días efectivos
+> **Target duration:** 2–4 effective days
 > **Branch:** `sprint-01-pty`
-> **Objetivo único:** embeber `claude` corriendo interactivo dentro de la ventana Tauri, con xterm.js renderizando su TUI completo. Sidebar de sesiones funciona y permite `--resume` directo en el PTY.
+> **Single objective:** embed `claude` running interactively inside the Tauri window, with xterm.js rendering its complete TUI. The sessions sidebar works and allows `--resume` directly in the PTY.
 
-## Por qué este approach
+## Why this approach
 
-El Sprint 00 probó que stream-json funciona pero reimplementa la UI de Claude Code perdiendo features que ya existen (slash commands, permission prompts, `-r` picker, autocomplete, hooks). En vez de envolverlo, lo **embebemos**: el usuario ve el TUI real en una ventana nativa, como OpenCode Desktop hace con su CLI.
+Sprint 00 proved that stream-json works but reimplements Claude Code's UI, giving up features that already exist (slash commands, permission prompts, `-r` picker, autocomplete, hooks). Instead of wrapping it, we **embed** it: the user sees the real TUI in a native window, the way OpenCode Desktop does with its own CLI.
 
 ## Scope
 
-### Dentro
-1. `portable-pty` spawneando `claude` interactivo con env del login shell hidratado.
-2. xterm.js renderiza todo el output tal cual (colores, cursor, mouse tracking).
-3. Entrada del usuario va al PTY stdin vía `pty_write`.
-4. Resize de la ventana redimensiona el PTY (`pty_resize`).
-5. Sidebar de sesiones (sobrevive de Sprint 00):
-   - Click en "+ Nueva sesión" → `claude` (sin flags).
-   - Click en sesión existente → `claude --resume <id>`.
-   - Cambiar de sesión mata el PTY anterior.
-6. Cambio de proyecto mata el PTY activo.
+### In scope
+1. `portable-pty` spawns `claude` interactively with the login shell's env hydrated.
+2. xterm.js renders all output as-is (colors, cursor, mouse tracking).
+3. User input goes to PTY stdin via `pty_write`.
+4. Window resize resizes the PTY (`pty_resize`).
+5. Sessions sidebar (survives from Sprint 00):
+   - Click "+ New session" → `claude` (no flags).
+   - Click an existing session → `claude --resume <id>`.
+   - Switching sessions kills the previous PTY.
+6. Switching project kills the active PTY.
 7. Shell keybinds:
-   - Ctrl+C pasa al PTY (SIGINT) — default de xterm.js.
-   - Cmd+C copia selección al clipboard (no pasa al PTY).
-   - Cmd+V pega desde clipboard al PTY stdin.
-   - Cmd+K limpia la pantalla del terminal.
+   - Ctrl+C passes through to the PTY (SIGINT) — xterm.js default.
+   - Cmd+C copies the selection to the clipboard (doesn't go to the PTY).
+   - Cmd+V pastes from the clipboard into the PTY stdin.
+   - Cmd+K clears the terminal screen.
 
-### Fuera (explícito)
-- ❌ Multi-tab / multi-PTY simultáneos — Sprint 02.
+### Out of scope (explicit)
+- ❌ Multi-tab / multiple simultaneous PTYs — Sprint 02.
 - ❌ File tree, diff viewer — Sprints 02-03.
-- ❌ Persistencia del buffer al reload — el PTY se cierra con la ventana.
-- ❌ Rehidratar historial en UI — `claude --resume` lo hace solo.
-- ❌ SQLite — `localStorage` sigue bastando.
-- ❌ Theming custom — una paleta oscura hardcodeada.
+- ❌ Persistence of the buffer across reload — the PTY closes with the window.
+- ❌ Rehydrating history in the UI — `claude --resume` handles that itself.
+- ❌ SQLite — `localStorage` is still enough.
+- ❌ Custom theming — a hardcoded dark palette.
 
-## Los 9 pasos (acceptance)
+## The 9 steps (acceptance)
 
 ```
-1. bun tauri dev → ventana abre sin warnings
-2. Elijo proyecto con sesiones previas (ej. construct-ai/copilot-agent)
-3. Layout 2-col: sidebar con 5 sesiones + panel con terminal xterm.js vacío
-4. Click "+ Nueva sesión" → veo:
+1. bun tauri dev → window opens without warnings
+2. Pick a project with previous sessions (e.g. construct-ai/copilot-agent)
+3. 2-col layout: sidebar with 5 sessions + panel with empty xterm.js terminal
+4. Click "+ New session" → I see:
    ✻ Claude Code v2.1.112
-   ¿qué quieres hacer?
+   what do you want to do?
    > _
-5. Escribo "lista archivos" → Claude responde con TUI nativo
-   (colores, cajas, etc. exactamente como en Terminal.app)
-6. Ctrl+C → Claude interrumpe el turno, muestra prompt nuevo
-7. Redimensiono ventana → el TUI se acomoda sin desalinearse
-8. Click en sesión vieja de la sidebar → PTY actual muere, spawn nuevo con
-   --resume <id>, Claude muestra el histórico real de esa sesión y acepta
-   continuación ("¿cuántos archivos eran?" responde con contexto)
-9. Cmd+C con texto seleccionado → portapapeles; Cmd+V pega; Cmd+K limpia
+5. I type "list files" → Claude responds with the native TUI
+   (colors, boxes, etc. exactly as in Terminal.app)
+6. Ctrl+C → Claude interrupts the turn, shows a new prompt
+7. I resize the window → the TUI reflows without misalignment
+8. Click on an old sidebar session → current PTY dies, spawns a new one with
+   --resume <id>, Claude shows the real history of that session and accepts
+   continuation ("how many files were they?" replies with context)
+9. Cmd+C with text selected → clipboard; Cmd+V pastes; Cmd+K clears
 ```
 
-Si los 9 pasan, PoC aprobada.
+If the 9 pass, PoC approved.
 
-## Riesgos y mitigaciones
+## Risks and mitigations
 
-| # | Riesgo | Mitigación |
+| # | Risk | Mitigation |
 |---|--------|-----------|
-| 1 | macOS GUI app inherita PATH vacío → `claude` no encuentra `node`/`git`/`rg` | `shell_env.rs` con `probe_shell_env` de OpenCode (spawn shell -il con `env -0`, parse null-delimited). Fallback a `-l` si `-il` timeouts. |
-| 2 | Sin `TERM=xterm-256color` Claude no saca colores | Setear en env del child siempre. |
-| 3 | Resize desalinea el TUI | xterm `onResize` → `invoke("pty_resize", { id, cols, rows })` con debounce 50ms. ResizeObserver en el contenedor. |
-| 4 | Cmd+C intercepta copy y manda SIGINT | xterm `attachCustomKeyEventHandler` — si Cmd está activo y hay selección, devolver false (no pasar al PTY). |
-| 5 | PTY zombie al cerrar ventana | `kill_on_drop` no aplica a `portable-pty`; registrar cleanup en `app.on_window_event` con `CloseRequested`. |
-| 6 | Bytes del PTY no son UTF-8 válido | `pty:data:<id>` emite base64; frontend decodifica con `atob` → `Uint8Array` → xterm `write()`. |
-| 7 | `portable-pty` read en thread bloqueante | Hacer read en `tokio::task::spawn_blocking` que empuja al `mpsc`; receiver async emite eventos. |
+| 1 | macOS GUI app inherits empty PATH → `claude` can't find `node`/`git`/`rg` | `shell_env.rs` with OpenCode's `probe_shell_env` (spawn `shell -il` with `env -0`, parse null-delimited). Fallback to `-l` if `-il` times out. |
+| 2 | Without `TERM=xterm-256color` Claude outputs no colors | Set it in the child env always. |
+| 3 | Resize misaligns the TUI | xterm `onResize` → `invoke("pty_resize", { id, cols, rows })` with 50ms debounce. ResizeObserver on the container. |
+| 4 | Cmd+C intercepts copy and sends SIGINT | xterm `attachCustomKeyEventHandler` — if Cmd is active and there's a selection, return false (don't pass it to the PTY). |
+| 5 | PTY zombie when the window closes | `kill_on_drop` does not apply to `portable-pty`; register cleanup in `app.on_window_event` on `CloseRequested`. |
+| 6 | PTY bytes are not valid UTF-8 | `pty:data:<id>` emits base64; frontend decodes with `atob` → `Uint8Array` → xterm `write()`. |
+| 7 | `portable-pty` read in a blocking thread | Read in `tokio::task::spawn_blocking`, push into an `mpsc`; async receiver emits events. |
 
-## Tareas (en orden)
+## Tasks (in order)
 
-### T1 — Limpiar código del Sprint 00
-- [ ] Borrar `src-tauri/src/claude.rs`
-- [ ] Borrar `src/context/claude.tsx`
-- [ ] Borrar `src/components/chat-view.tsx`
-- [ ] Borrar `src/lib/claude-events.ts` (el archivo entero)
-- [ ] En `sessions.rs`: eliminar `list_session_entries` (no se usa)
-- [ ] En `lib.rs`: quitar referencias a `claude` module + comandos viejos
-- [ ] `cargo check` + `bun run typecheck` limpios
+### T1 — Clean up Sprint 00 code
+- [ ] Delete `src-tauri/src/claude.rs`
+- [ ] Delete `src/context/claude.tsx`
+- [ ] Delete `src/components/chat-view.tsx`
+- [ ] Delete `src/lib/claude-events.ts` (the whole file)
+- [ ] In `sessions.rs`: remove `list_session_entries` (unused)
+- [ ] In `lib.rs`: drop references to the `claude` module + old commands
+- [ ] `cargo check` + `bun run typecheck` clean
 
-### T2 — Dependencias
+### T2 — Dependencies
 - [ ] `cargo add portable-pty`
 - [ ] `bun add @xterm/xterm @xterm/addon-fit @xterm/addon-web-links`
 
 ### T3 — `shell_env.rs`
-Port directo de OpenCode `packages/desktop/src-tauri/src/cli.rs` líneas 220-365:
-- `get_user_shell()` → `$SHELL` o `/bin/sh`
-- `probe_shell_env(shell, mode) -> ShellEnvProbe` (spawn `shell <mode> -c "env -0"` con timeout)
-- `load_shell_env(shell) -> Option<HashMap>` (intenta `-il`, fallback `-l`)
-- `merge_shell_env(shell_env, overrides)` (overrides ganan)
+Direct port of OpenCode `packages/desktop/src-tauri/src/cli.rs` lines 220-365:
+- `get_user_shell()` → `$SHELL` or `/bin/sh`
+- `probe_shell_env(shell, mode) -> ShellEnvProbe` (spawn `shell <mode> -c "env -0"` with timeout)
+- `load_shell_env(shell) -> Option<HashMap>` (try `-il`, fallback `-l`)
+- `merge_shell_env(shell_env, overrides)` (overrides win)
 - Skip nushell.
 
 ### T4 — `pty.rs`
-State: `Mutex<HashMap<String, PtySession>>` donde `PtySession` guarda master writer + child + abort handle del read loop.
+State: `Mutex<HashMap<String, PtySession>>` where `PtySession` holds the master writer + child + abort handle of the read loop.
 
-Comandos:
-- `pty_open(project_path, args) -> Result<String, String>` — uuid, setea cwd, merge env, spawn.
+Commands:
+- `pty_open(project_path, args) -> Result<String, String>` — uuid, set cwd, merge env, spawn.
 - `pty_write(id, base64) -> Result<(), String>`
 - `pty_resize(id, cols, rows) -> Result<(), String>`
 - `pty_kill(id) -> Result<(), String>`
 
-Read loop: `spawn_blocking` lee del master en chunks de 4KB, envía por `mpsc`; un task async consume y emite `pty:data:<id>` (payload = base64 del chunk). Cuando child exits, emit `pty:exit:<id>` con code.
+Read loop: `spawn_blocking` reads from the master in 4KB chunks, pushes through an `mpsc`; an async task consumes and emits `pty:data:<id>` (payload = base64 of the chunk). When the child exits, emit `pty:exit:<id>` with the code.
 
 ### T5 — Frontend: `context/terminal.tsx`
-Store minimalista `{ id: string | null, status: "idle" | "running" | "exited" }`. Funciones `open(projectPath, args)`, `write(bytes)`, `resize(cols, rows)`, `kill()`. Listener de `pty:data:<id>` y `pty:exit:<id>`.
+Minimal store `{ id: string | null, status: "idle" | "running" | "exited" }`. Functions `open(projectPath, args)`, `write(bytes)`, `resize(cols, rows)`, `kill()`. Listener for `pty:data:<id>` and `pty:exit:<id>`.
 
 ### T6 — Frontend: `components/terminal-view.tsx`
-- Mount xterm.js en un `<div ref>`.
+- Mount xterm.js on a `<div ref>`.
 - Addons: `FitAddon`, `WebLinksAddon`.
-- Theme hardcodeado oscuro.
-- `term.onData` → `terminal.write(bytes)` (encode a base64).
+- Hardcoded dark theme.
+- `term.onData` → `terminal.write(bytes)` (encode as base64).
 - `term.onResize` → debounced `terminal.resize(cols, rows)`.
-- Window resize / `ResizeObserver` → `fitAddon.fit()` → `onResize` callback dispara `pty_resize`.
-- `attachCustomKeyEventHandler` para Cmd+C/V/K.
-- Al desmontar: `kill()` + `term.dispose()`.
+- Window resize / `ResizeObserver` → `fitAddon.fit()` → `onResize` callback triggers `pty_resize`.
+- `attachCustomKeyEventHandler` for Cmd+C/V/K.
+- On unmount: `kill()` + `term.dispose()`.
 
-### T7 — Wire en `App.tsx`
-Reemplazar el mount de `ChatView` por `TerminalView`.
-Al cambiar `activeSessionId` o click en "+ Nueva":
-- `await term.kill()` (si hay uno)
-- `await term.open(projectPath, args)` con args según la acción.
-`handleChangeProject` también mata el PTY.
+### T7 — Wire up in `App.tsx`
+Replace the `ChatView` mount with `TerminalView`.
+On `activeSessionId` change or "+ New" click:
+- `await term.kill()` (if any)
+- `await term.open(projectPath, args)` with args matching the action.
+`handleChangeProject` also kills the PTY.
 
-### T8 — Validación manual
-Correr los 9 pasos, llenar `docs/sprint-01-results.md`.
+### T8 — Manual validation
+Run the 9 steps, fill in `docs/sprint-01-results.md`.
 
-## Métricas a capturar
+## Metrics to capture
 
-- **Latencia ventana → prompt de Claude**: ms desde click "+ Nueva" hasta `> _` visible.
-- **Latencia input → eco**: ms desde keypress hasta aparecer en terminal.
-- **Memoria**: `ps -o rss` del proceso Tauri con una sesión corriendo.
-- **LOC** Rust + TS del sprint.
+- **Window → Claude prompt latency**: ms from "+ New" click to `> _` visible.
+- **Input → echo latency**: ms from keypress to showing up in the terminal.
+- **Memory**: `ps -o rss` of the Tauri process with one session running.
+- **LOC** Rust + TS added in the sprint.
 
-## Criterios de salida
+## Exit criteria
 
-- [ ] 9 pasos pasan
-- [ ] `cargo check` + `cargo clippy -- -D warnings` limpios
-- [ ] `bun run typecheck` limpio
-- [ ] `docs/sprint-01-results.md` firmado
-- [ ] Merge a `main` y tag `v0.1.0-pty`
+- [ ] 9 steps pass
+- [ ] `cargo check` + `cargo clippy -- -D warnings` clean
+- [ ] `bun run typecheck` clean
+- [ ] `docs/sprint-01-results.md` signed off
+- [ ] Merge into `main` and tag `v0.1.0-pty`
 
-## Sprint 02 natural (no-scope)
+## Natural Sprint 02 (no-scope)
 
-- Multi-tab de sesiones concurrentes
-- File tree básico (Fase 2 de PROJECT.md)
-- Persistencia de último session id por proyecto
+- Multi-tab of concurrent sessions
+- Basic file tree (Phase 2 of PROJECT.md)
+- Persistence of the last session id per project
