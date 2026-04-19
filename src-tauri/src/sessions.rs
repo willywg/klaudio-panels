@@ -12,6 +12,8 @@ pub struct SessionMeta {
     pub id: String,
     pub timestamp: Option<String>,
     pub first_message_preview: Option<String>,
+    pub custom_title: Option<String>,
+    pub summary: Option<String>,
     pub project_path: String,
 }
 
@@ -78,34 +80,63 @@ fn truncate(s: &str) -> String {
     }
 }
 
-/// Extracts the first human-authored user message + its timestamp.
-fn extract_first_user_message(file: &Path) -> (Option<String>, Option<String>) {
+struct SessionScan {
+    first_preview: Option<String>,
+    first_timestamp: Option<String>,
+    custom_title: Option<String>,
+    summary: Option<String>,
+}
+
+/// Single pass over the JSONL: captures first user message, custom-title and
+/// summary entries. `custom-title` and `summary` are last-write-wins.
+fn scan_session_file(file: &Path) -> SessionScan {
+    let mut scan = SessionScan {
+        first_preview: None,
+        first_timestamp: None,
+        custom_title: None,
+        summary: None,
+    };
     let Ok(f) = fs::File::open(file) else {
-        return (None, None);
+        return scan;
     };
     for line in BufReader::new(f).lines().map_while(Result::ok) {
         let Ok(v) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if v.get("type").and_then(|t| t.as_str()) != Some("user") {
-            continue;
+        match v.get("type").and_then(|t| t.as_str()) {
+            Some("user") if scan.first_preview.is_none() => {
+                if let Some(content) = v.pointer("/message/content") {
+                    if let Some(text) = extract_text_from_content(content) {
+                        if !is_noise_message(&text) {
+                            scan.first_preview = Some(truncate(&text));
+                            scan.first_timestamp = v
+                                .get("timestamp")
+                                .and_then(|t| t.as_str())
+                                .map(str::to_string);
+                        }
+                    }
+                }
+            }
+            Some("custom-title") => {
+                if let Some(t) = v.get("customTitle").and_then(|x| x.as_str()) {
+                    let t = t.trim();
+                    if !t.is_empty() {
+                        scan.custom_title = Some(t.to_string());
+                    }
+                }
+            }
+            Some("summary") => {
+                if let Some(s) = v.get("summary").and_then(|x| x.as_str()) {
+                    let s = s.trim();
+                    if !s.is_empty() {
+                        scan.summary = Some(s.to_string());
+                    }
+                }
+            }
+            _ => {}
         }
-        let Some(content) = v.pointer("/message/content") else {
-            continue;
-        };
-        let Some(text) = extract_text_from_content(content) else {
-            continue;
-        };
-        if is_noise_message(&text) {
-            continue;
-        }
-        let ts = v
-            .get("timestamp")
-            .and_then(|t| t.as_str())
-            .map(str::to_string);
-        return (Some(truncate(&text)), ts);
     }
-    (None, None)
+    scan
 }
 
 #[tauri::command]
@@ -153,11 +184,13 @@ pub fn list_sessions_for_project(project_path: String) -> Result<Vec<SessionMeta
                     Some(id) => id.to_string(),
                     None => continue,
                 };
-                let (preview, ts) = extract_first_user_message(&p);
+                let scan = scan_session_file(&p);
                 out.push(SessionMeta {
                     id,
-                    timestamp: ts,
-                    first_message_preview: preview,
+                    timestamp: scan.first_timestamp,
+                    first_message_preview: scan.first_preview,
+                    custom_title: scan.custom_title,
+                    summary: scan.summary,
                     project_path: cwd.clone(),
                 });
             }
@@ -168,4 +201,3 @@ pub fn list_sessions_for_project(project_path: String) -> Result<Vec<SessionMeta
     out.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     Ok(out)
 }
-

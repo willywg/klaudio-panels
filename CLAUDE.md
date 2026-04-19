@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository status
 
-**Sprint 01 in progress — PTY pivot.** Branch `sprint-01-pty`.
+**Sprint 02 in progress — multi-tab + persist.** Branch `sprint-02-multi-tab`.
 
-Sprint 00 (stream-json PoC) is tagged `v0.0.1-stream-json-poc` and archived. See `docs/sprint-00-stream-json-exploration.md` for why it was discarded. Full blueprint in `PROJECT.md`.
+Sprint 01 (PTY PoC) está mergeado a `main` y etiquetado `v0.1.0-pty`. Sprint 00 (stream-json PoC) está archivado con tag `v0.0.1-stream-json-poc` — ver `docs/sprint-00-stream-json-exploration.md`. Blueprint completo en `PROJECT.md`; plan de Sprint 02 en `docs/sprint-02-multi-tab.md` + `PRPs/003--multi-tab-and-session-persist.md`.
 
-Build/test commands once the Sprint 01 code lands:
+Build/test commands:
 
 ```bash
 bun install
@@ -42,7 +42,7 @@ Settled after the Sprint 00 pivot. Don't re-propose rejected alternatives withou
 
 8. **Diff rendering uses `@pierre/diffs`** (npm `^1.1.0-beta.18`) — Sprint 03.
 
-9. **Single PTY per window in Sprint 01.** Switching session kills the current child and spawns a new one. Multi-tab is Sprint 02; don't pre-build state for it.
+9. **Multi-PTY por ventana con tabs (Sprint 02+).** Cada tab es un child independiente con su propio `pty_open`; cerrar un tab mata sólo ese PTY. El cambio de tab conmuta visibilidad (nunca re-crea la instancia de xterm.js — eso perdería scrollback y rompería FitAddon/WebGL). La última sesión activa por proyecto se persiste en `localStorage["lastSessionId:<projectPath>"]` y se auto-resumea al reabrir el proyecto. Tabs "new" (sin `--resume`) viven con `sessionId: null` hasta Sprint 03 (watcher de JSONL). NO persistas la lista completa de tabs abiertos — re-spawn de N PTYs al arrancar = UX impredecible.
 
 ## PTY integration cheatsheet
 
