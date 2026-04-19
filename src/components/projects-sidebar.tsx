@@ -27,14 +27,13 @@ export function ProjectsSidebar(props: Props) {
     if (typeof picked === "string") props.onAdd(picked);
   }
 
-  function handleCloseClick(e: MouseEvent, path: string) {
-    e.stopPropagation();
+  function requestClose(path: string) {
     const label = projectLabel(path);
     const openCount = props.openTabsByProject.get(path) ?? 0;
     const msg =
       openCount > 0
-        ? `Cerrar "${label}"?\nEsto matará ${openCount} tab(s) abiertos y lo quitará del sidebar.`
-        : `Cerrar "${label}"?\nSe quitará del sidebar.`;
+        ? `Cerrar "${label}"?\nEsto matará ${openCount} tab(s) abiertos y lo quitará del sidebar.\nSeguirá disponible en "Proyectos recientes" del inicio.`
+        : `Cerrar "${label}"?\nSe quitará del sidebar. Seguirá disponible en "Proyectos recientes" del inicio.`;
     if (confirm(msg)) props.onCloseProject(path);
   }
 
@@ -53,7 +52,7 @@ export function ProjectsSidebar(props: Props) {
         <Home size={18} strokeWidth={2} />
       </button>
       <div class="w-8 h-px bg-neutral-800 my-1" />
-      <For each={projects.list}>
+      <For each={projects.pinned}>
         {(proj) => {
           const isActive = () => props.activePath === proj.path;
           const openCount = () => props.openTabsByProject.get(proj.path) ?? 0;
@@ -64,55 +63,55 @@ export function ProjectsSidebar(props: Props) {
           const isDragOver = () =>
             dragOverPath() === proj.path && draggingPath() !== proj.path;
           return (
-            <div
-              class="relative group"
-              draggable={true}
-              onDragStart={(e) => {
-                setDraggingPath(proj.path);
-                e.dataTransfer!.effectAllowed = "move";
-                e.dataTransfer!.setData("text/plain", proj.path);
-              }}
-              onDragEnd={() => {
-                setDraggingPath(null);
-                setDragOverPath(null);
-              }}
-              onDragOver={(e) => {
-                if (!draggingPath() || draggingPath() === proj.path) return;
-                e.preventDefault();
-                e.dataTransfer!.dropEffect = "move";
-                setDragOverPath(proj.path);
-              }}
-              onDragLeave={() => {
-                if (dragOverPath() === proj.path) setDragOverPath(null);
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                const from = draggingPath();
-                if (from && from !== proj.path) {
-                  projects.reorder(from, proj.path);
-                }
-                setDraggingPath(null);
-                setDragOverPath(null);
-              }}
-              style={{ opacity: isDragging() ? "0.4" : "1" }}
-            >
+            <div class="relative group">
               <Show when={isDragOver()}>
-                <span class="absolute -left-2 top-0 bottom-0 w-0.5 rounded-full bg-indigo-400" />
+                <span class="absolute -left-2 top-0 bottom-0 w-0.5 rounded-full bg-indigo-400 pointer-events-none" />
               </Show>
               <button
+                draggable={true}
+                onDragStart={(e) => {
+                  setDraggingPath(proj.path);
+                  e.dataTransfer!.effectAllowed = "move";
+                  e.dataTransfer!.setData("text/plain", proj.path);
+                }}
+                onDragEnd={() => {
+                  setDraggingPath(null);
+                  setDragOverPath(null);
+                }}
+                onDragOver={(e) => {
+                  if (!draggingPath() || draggingPath() === proj.path) return;
+                  e.preventDefault();
+                  e.dataTransfer!.dropEffect = "move";
+                  setDragOverPath(proj.path);
+                }}
+                onDragLeave={() => {
+                  if (dragOverPath() === proj.path) setDragOverPath(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const from = draggingPath();
+                  if (from && from !== proj.path) {
+                    projects.reorder(from, proj.path);
+                  }
+                  setDraggingPath(null);
+                  setDragOverPath(null);
+                }}
                 onClick={() => props.onActivate(proj.path)}
                 onContextMenu={(e) => {
                   e.preventDefault();
-                  handleCloseClick(e, proj.path);
+                  requestClose(proj.path);
                 }}
                 class={
-                  "w-10 h-10 rounded-lg flex items-center justify-center text-[15px] font-semibold text-white transition shadow-sm cursor-grab active:cursor-grabbing " +
+                  "w-10 h-10 rounded-lg flex items-center justify-center text-[15px] font-semibold text-white transition shadow-sm " +
                   (isActive()
                     ? "ring-2 ring-indigo-500 ring-offset-2 ring-offset-neutral-950"
                     : "opacity-85 hover:opacity-100 hover:scale-[1.03]")
                 }
-                style={{ "background-color": color() }}
-                title={`${label()}\n${proj.path}${openCount() > 0 ? `\n${openCount()} tab(s) abiertos` : ""}\n\nArrastra para reordenar. Right-click o × para cerrar.`}
+                style={{
+                  "background-color": color(),
+                  opacity: isDragging() ? 0.4 : undefined,
+                }}
+                title={`${label()}\n${proj.path}${openCount() > 0 ? `\n${openCount()} tab(s) abiertos` : ""}\n\nClick: abrir. Arrastrar: reordenar. Right-click o ×: cerrar.`}
               >
                 {initial()}
               </button>
@@ -123,8 +122,11 @@ export function ProjectsSidebar(props: Props) {
               </Show>
               <button
                 class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-neutral-800 text-neutral-300 hover:bg-red-600 hover:text-white border border-neutral-950 flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
-                title="Cerrar proyecto"
-                onClick={(e) => handleCloseClick(e, proj.path)}
+                title="Cerrar proyecto (sigue en el historial)"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  requestClose(proj.path);
+                }}
               >
                 <X size={9} strokeWidth={3} />
               </button>

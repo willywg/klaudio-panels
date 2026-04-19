@@ -1,10 +1,12 @@
 export type RecentProject = {
   path: string;
   lastOpened: number; // epoch ms
+  /** Whether the project shows in the sidebar. Home always shows all. */
+  pinned: boolean;
 };
 
 export const RECENT_PROJECTS_KEY = "recentProjects";
-export const MAX_RECENT_PROJECTS = 10;
+export const MAX_RECENT_PROJECTS = 20;
 
 export function loadRecentProjects(): RecentProject[] {
   try {
@@ -12,13 +14,25 @@ export function loadRecentProjects(): RecentProject[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (p: unknown): p is RecentProject =>
-        typeof p === "object" &&
-        p !== null &&
-        typeof (p as RecentProject).path === "string" &&
-        typeof (p as RecentProject).lastOpened === "number",
-    );
+    return parsed
+      .map((p: unknown) => {
+        if (
+          typeof p !== "object" ||
+          p === null ||
+          typeof (p as RecentProject).path !== "string" ||
+          typeof (p as RecentProject).lastOpened !== "number"
+        ) {
+          return null;
+        }
+        const raw = p as Partial<RecentProject>;
+        // Backward compat: entries persisted before pinning existed default to pinned.
+        return {
+          path: raw.path!,
+          lastOpened: raw.lastOpened!,
+          pinned: raw.pinned === undefined ? true : !!raw.pinned,
+        } satisfies RecentProject;
+      })
+      .filter((p): p is RecentProject => p !== null);
   } catch {
     return [];
   }

@@ -284,15 +284,16 @@ function Shell() {
       // eslint-disable-next-line no-await-in-loop
       await term.closeTab(id);
     }
-    // If this project was active, pivot away BEFORE removing it from the list
-    // so the active-tab effect has a valid target.
+    // Pivot away if it was active, BEFORE unpin, so the active-tab effect
+    // has a valid target.
     if (activeProjectPath() === path) {
       setActiveProjectPath(null);
     }
     activeByProject.delete(path);
     autoResumed.delete(path);
-    setLastSessionId(path, null);
-    projects.remove(path);
+    // Don't clear lastSessionId — keep it so next time the user re-pins from
+    // Home, auto-resume picks up where they left off.
+    projects.unpin(path);
   }
 
   function handlePickFromHome(path: string) {

@@ -1,6 +1,8 @@
 import {
   createContext,
+  createMemo,
   useContext,
+  type Accessor,
   type ParentProps,
 } from "solid-js";
 import { createStore, produce } from "solid-js/store";
@@ -20,8 +22,12 @@ function makeProjectsContext() {
     list: loadRecentProjects(),
   });
 
-  /** Idempotent insert by path. If new, appends at the END (insertion order).
-   *  If existing, only updates `lastOpened` without changing position. */
+  const pinned: Accessor<RecentProject[]> = createMemo(() =>
+    state.list.filter((p) => p.pinned),
+  );
+
+  /** Idempotent insert by path. Always ensures `pinned: true` (re-pins if the
+   *  project was previously unpinned). New entries are appended at the END. */
   function touch(path: string): void {
     const now = Date.now();
     setState(
@@ -30,11 +36,12 @@ function makeProjectsContext() {
         const idx = list.findIndex((p) => p.path === path);
         if (idx >= 0) {
           list[idx].lastOpened = now;
+          list[idx].pinned = true;
         } else {
-          list.push({ path, lastOpened: now });
+          list.push({ path, lastOpened: now, pinned: true });
           if (list.length > MAX_RECENT_PROJECTS) {
-            // Drop the OLDEST-used entry (lowest lastOpened), not the first
-            // in insertion order — keep the user's curated sequence.
+            // Drop the oldest by lastOpened — never the user's pinned entries
+            // unless the ceiling is full AND all are pinned.
             let oldestIdx = 0;
             let oldestTs = list[0].lastOpened;
             for (let i = 1; i < list.length; i++) {
@@ -51,6 +58,19 @@ function makeProjectsContext() {
     saveRecentProjects(state.list);
   }
 
+  /** Remove from the sidebar but keep it in history (Home still shows it). */
+  function unpin(path: string): void {
+    setState(
+      "list",
+      produce((list: RecentProject[]) => {
+        const idx = list.findIndex((p) => p.path === path);
+        if (idx >= 0) list[idx].pinned = false;
+      }),
+    );
+    saveRecentProjects(state.list);
+  }
+
+  /** Full removal from history (sidebar + Home). */
   function remove(path: string): void {
     setState(
       "list",
@@ -62,8 +82,8 @@ function makeProjectsContext() {
     saveRecentProjects(state.list);
   }
 
-  /** Move the project identified by `fromPath` to occupy the slot currently
-   *  held by `toPath`. Position of other items shifts accordingly. */
+  /** Reorder pinned projects: move `fromPath` to occupy the position
+   *  currently held by `toPath` in the underlying list. */
   function reorder(fromPath: string, toPath: string): void {
     if (fromPath === toPath) return;
     setState(
@@ -73,7 +93,9 @@ function makeProjectsContext() {
         const toIdx = list.findIndex((p) => p.path === toPath);
         if (fromIdx < 0 || toIdx < 0) return;
         const [moved] = list.splice(fromIdx, 1);
-        list.splice(toIdx, 0, moved);
+        // After splice the `toIdx` might have shifted by one if fromIdx < toIdx.
+        const adjustedTo = fromIdx < toIdx ? toIdx - 1 : toIdx;
+        list.splice(adjustedTo, 0, moved);
       }),
     );
     saveRecentProjects(state.list);
@@ -83,7 +105,11 @@ function makeProjectsContext() {
     get list(): RecentProject[] {
       return state.list;
     },
+    get pinned(): RecentProject[] {
+      return pinned();
+    },
     touch,
+    unpin,
     remove,
     reorder,
   };
