@@ -9,30 +9,30 @@
 
 ## Goal
 
-Demostrar en 3–5 días que podemos spawnear `claude -p --output-format stream-json --verbose` desde un Tauri v2 + SolidJS app, listar las sesiones existentes de un proyecto (leyendo `~/.claude/projects/`), y renderizar los eventos stream-json en una UI mínima — con capacidad de crear una sesión nueva, continuar una existente (`--resume <id>`), y cancelar el proceso. Sin file tree, sin diff, sin terminal libre, sin markdown pulido.
+Show, in 3–5 days, that we can spawn `claude -p --output-format stream-json --verbose` from a Tauri v2 + SolidJS app, list the existing sessions of a project (reading `~/.claude/projects/`), and render the stream-json events in a minimal UI — with the ability to create a new session, continue an existing one (`--resume <id>`), and cancel the process. No file tree, no diff, no free-form terminal, no polished markdown.
 
 ## Why
 
-- **Desbloquea todo lo demás.** Si el canal primario (stream-json) no funciona confiablemente dentro de Tauri, el plan completo de PROJECT.md cae. Esta PoC lo valida con código real, no con asunciones.
-- **Reduce riesgo arquitectónico temprano.** Antes de invertir en file tree, diff viewer o terminal, confirmamos que los supuestos clave (encoding de paths, flush de stream-json, kill de procesos) aguantan.
-- **Entrega un "producto" funcional ya.** Aun como PoC, permite al usuario abrir un proyecto, retomar conversaciones viejas y tener una nueva — algo útil incluso sin el resto.
+- **Unblocks everything else.** If the primary channel (stream-json) does not work reliably inside Tauri, the whole PROJECT.md plan collapses. This PoC validates that with real code, not assumptions.
+- **Reduces architectural risk early.** Before investing in file tree, diff viewer, or terminal, we confirm that the key assumptions (path encoding, stream-json flushing, process kill) hold.
+- **Ships a working "product" already.** Even as a PoC, it lets the user open a project, resume old conversations, and start a new one — useful even without the rest.
 
 ## What
 
-Una ventana Tauri con flujo de 2 pantallas:
+A Tauri window with a 2-screen flow:
 
-1. **Pantalla inicial** — botón "Abrir proyecto" (dialog nativo de directorio).
-2. **Layout principal (2 columnas)** — sidebar izquierdo con lista de sesiones del proyecto + botón "Nueva sesión"; panel derecho con vista de chat (header con session_id, timeline de eventos, input).
+1. **Initial screen** — "Open project" button (native directory dialog).
+2. **Main layout (2 columns)** — left sidebar with the project's session list + "New session" button; right panel with the chat view (header with session_id, event timeline, input).
 
 ### Success Criteria
-- [ ] App abre con `bun tauri dev` sin warnings de Tauri/Vite.
-- [ ] Selecto un proyecto que ya existe en `~/.claude/projects/` y veo sus sesiones listadas con fecha + preview del primer mensaje del usuario.
-- [ ] Click en "Nueva sesión" + escribo prompt → veo streaming de eventos (system/init, tool_use, assistant, tool_result, result) en orden.
-- [ ] Click en una sesión existente + envío mensaje → `--resume <id>` hace que Claude responda con contexto de la conversación anterior.
-- [ ] Click "Cancelar" mientras corre → proceso muere (verificable con `ps aux | grep claude`).
-- [ ] Recargo la app (Cmd+R) y recuerda el último proyecto elegido.
-- [ ] La sesión recién creada aparece en la sidebar al refresh.
-- [ ] `cargo check` + `bun run typecheck` pasan sin errores.
+- [ ] The app opens with `bun tauri dev` without Tauri/Vite warnings.
+- [ ] I pick a project that already exists in `~/.claude/projects/` and I see its sessions listed with date + first-user-message preview.
+- [ ] Click "New session" + type a prompt → I see streaming events (system/init, tool_use, assistant, tool_result, result) in order.
+- [ ] Click on an existing session + send a message → `--resume <id>` makes Claude respond with the previous conversation's context.
+- [ ] Click "Cancel" while running → the process dies (verifiable with `ps aux | grep claude`).
+- [ ] Reload the app (Cmd+R) and it remembers the last chosen project.
+- [ ] The just-created session shows up in the sidebar on refresh.
+- [ ] `cargo check` + `bun run typecheck` pass without errors.
 
 ---
 
@@ -41,49 +41,49 @@ Una ventana Tauri con flujo de 2 pantallas:
 ### Project-level references (always relevant)
 ```yaml
 - file: PROJECT.md
-  why: Blueprint completo, estrategia híbrida, stack decidido
+  why: Full blueprint, hybrid strategy, chosen stack
 - file: CLAUDE.md
-  why: Reglas no-negociables (chat via pipes no PTY, sessions en ~/.claude/projects, etc.)
+  why: Non-negotiable rules (chat via pipes not PTY, sessions under ~/.claude/projects, etc.)
 - file: docs/sprint-01-poc.md
-  why: Scope del sprint, user flow de 9 pasos que sirve como acceptance test, tabla de riesgos
+  why: Sprint scope, 9-step user flow that acts as acceptance test, risks table
 ```
 
 ### Feature-specific references
 ```yaml
-# CLAUDIA — referencia principal de integración con Claude Code
+# CLAUDIA — main reference for Claude Code integration
 - file: ~/proyectos/open-source/claudia/src-tauri/src/claude_binary.rs
-  why: Detección de `claude` (which + fallbacks + validación de versión)
+  why: `claude` detection (which + fallbacks + version validation)
   lines: 35-200
 
 - file: ~/proyectos/open-source/claudia/src-tauri/src/commands/claude.rs
-  why: spawn_claude_process — patrón exacto para stream-json emission per-session
+  why: spawn_claude_process — exact pattern for per-session stream-json emission
   lines: 1174-1290
   critical: |
-    - Captura session_id del primer evento `system`/`init`, NO antes
-    - Emite a `claude-output:{session_id}` + channel genérico para backward compat
-    - Mata proceso existente antes de spawnear uno nuevo (single-session model)
+    - Capture session_id from the first `system`/`init` event, NOT earlier
+    - Emit on `claude-output:{session_id}` + a generic channel for backward compat
+    - Kill the existing process before spawning a new one (single-session model)
 
 - file: ~/proyectos/open-source/claudia/src-tauri/src/commands/claude.rs
-  why: extract_first_user_message + list_projects — parseo de JSONL
+  why: extract_first_user_message + list_projects — JSONL parsing
   lines: 180-330
   critical: |
-    - Skip mensajes que empiezan con <command-name>, <local-command-stdout>
-    - Skip si contiene "Caveat: The messages below were generated..."
-    - get_project_path_from_sessions lee cwd del JSONL (no decodifica el dir name)
+    - Skip messages starting with <command-name>, <local-command-stdout>
+    - Skip if the content contains "Caveat: The messages below were generated..."
+    - get_project_path_from_sessions reads cwd from the JSONL (does not decode the dir name)
 
-# OPENCODE — patrón útil de kill de procesos
+# OPENCODE — useful pattern for process kill
 - file: ~/proyectos/open-source/opencode/packages/desktop/src-tauri/src/cli.rs
-  why: process-wrap ProcessGroup::leader() para matar el grupo entero
+  why: process-wrap ProcessGroup::leader() to kill the whole group
   lines: 471-479
-  critical: "Sin esto, kill del child deja zombies cuando claude spawn sub-procesos (Bash tool)"
+  critical: "Without this, killing the child leaves zombies when claude spawns subprocesses (Bash tool)"
 
-# Docs oficiales
+# Official docs
 - url: https://docs.anthropic.com/en/docs/claude-code/sdk
-  why: Claude Code SDK docs — confirma flags -p, --output-format stream-json, --resume, -c
-  critical: stream-json emite un JSON object por línea, terminated con \n
+  why: Claude Code SDK docs — confirms -p, --output-format stream-json, --resume, -c flags
+  critical: stream-json emits one JSON object per line, terminated with \n
 
 - url: https://v2.tauri.app/reference/javascript/api/namespaceevent/
-  why: listen/emit para eventos stream
+  why: listen/emit for stream-like events
 
 - url: https://github.com/tauri-apps/plugins-workspace/tree/v2/plugins/dialog
   why: plugin-dialog open({ directory: true })
@@ -98,11 +98,11 @@ claude-desktop/
 ├── PROJECT.md
 ├── PRPs/
 │   ├── templates/prp_base.md
-│   └── 001--poc-claude-code-sessions.md   # ← este archivo
+│   └── 001--poc-claude-code-sessions.md   # ← this file
 └── docs/sprint-01-poc.md
 ```
 
-**No hay scaffolding todavía.** La primera tarea lo crea.
+**There is no scaffolding yet.** The first task creates it.
 
 ### Desired structure after this PRP
 ```
@@ -114,32 +114,32 @@ claude-desktop/
 │   ├── capabilities/default.json
 │   └── src/
 │       ├── main.rs
-│       ├── lib.rs              # Tauri setup, registra comandos, plugins
-│       ├── binary.rs           # Detección de `claude` en PATH
-│       ├── sessions.rs         # Parseo de ~/.claude/projects/**/*.jsonl
-│       └── claude.rs           # Spawn stream-json + emit per-session
+│       ├── lib.rs              # Tauri setup, registers commands, plugins
+│       ├── binary.rs           # `claude` detection on PATH
+│       ├── sessions.rs         # Parse ~/.claude/projects/**/*.jsonl
+│       └── claude.rs           # Stream-json spawn + per-session emit
 ├── src/
-│   ├── App.tsx                 # Layout 2-column + switcher proyecto/chat
+│   ├── App.tsx                 # 2-column layout + project/chat switcher
 │   ├── main.tsx                # Entry
 │   ├── index.css               # Tailwind v4 base
 │   ├── context/
-│   │   └── claude.tsx          # Store + listener de eventos
+│   │   └── claude.tsx          # Store + event listener
 │   ├── components/
 │   │   ├── project-picker.tsx  # Empty state + dialog trigger
-│   │   ├── sessions-list.tsx   # Sidebar con sesiones + botón "Nueva"
-│   │   ├── chat-view.tsx       # Timeline de eventos + input
+│   │   ├── sessions-list.tsx   # Sidebar with sessions + "New" button
+│   │   ├── chat-view.tsx       # Event timeline + input
 │   │   ├── message-user.tsx
 │   │   ├── message-assistant.tsx
 │   │   ├── tool-call.tsx
 │   │   ├── tool-result.tsx
 │   │   └── result-summary.tsx
 │   └── lib/
-│       ├── claude-events.ts    # Tipos del stream-json
-│       └── bindings.ts         # Wrappers de invoke() tipados
+│       ├── claude-events.ts    # Stream-json types
+│       └── bindings.ts         # Typed invoke() wrappers
 ├── package.json
 ├── vite.config.ts
 ├── tsconfig.json
-└── tailwind.config.ts (si v4 lo requiere; puede ser solo @import)
+└── tailwind.config.ts (if v4 requires it; may be just @import)
 ```
 
 ### Known gotchas & project rules
@@ -152,57 +152,57 @@ FROM CLAUDE.md (NON-NEGOTIABLE):
 - Don't copy OpenCode's cli.rs or terminal.tsx patterns for the chat.
 
 CLAUDE CLI BEHAVIOR:
-- `claude -p "<prompt>"` es one-shot. Cada turno spawnea un proceso nuevo.
-- Para multi-turn: pasar --resume <session_id> del turno anterior.
-- La primera vez (sesión nueva): omitir --resume; `session_id` llega en
-  el primer evento `system`/`init` de stdout.
-- --dangerously-skip-permissions existe pero NO lo usamos en la PoC —
-  queremos ver prompts de permisos reales.
-- El binario `claude` debe estar autenticado (usuario corrió `claude`
-  al menos una vez). Si no, `-p` sale con error — lo mostramos crudo.
+- `claude -p "<prompt>"` is one-shot. Every turn spawns a new process.
+- For multi-turn: pass --resume <session_id> from the previous turn.
+- First time (new session): omit --resume; `session_id` arrives in
+  the first `system`/`init` event on stdout.
+- --dangerously-skip-permissions exists but we do NOT use it in the PoC —
+  we want to see the real permission prompts.
+- The `claude` binary must be authenticated (the user has run `claude`
+  at least once). If not, `-p` exits with an error — we show it raw.
 
 PATH ENCODING:
-- ~/.claude/projects/ usa dir names tipo "-Users-willywg-proyectos-X".
-- NO es reversible si el path original tiene "-". Ejemplo:
-  "-Users-mufeed-dev-jsonl-viewer" podría ser
-  "/Users/mufeed/dev/jsonl-viewer" o "/Users/mufeed/dev/jsonl/viewer".
-- SOLUCIÓN: leer el campo `cwd` del primer JSONL entry de cada
-  directorio. Ese `cwd` es el path absoluto real.
+- ~/.claude/projects/ uses dir names like "-Users-willywg-proyectos-X".
+- It is NOT reversible if the original path contains "-". Example:
+  "-Users-mufeed-dev-jsonl-viewer" could be
+  "/Users/mufeed/dev/jsonl-viewer" or "/Users/mufeed/dev/jsonl/viewer".
+- SOLUTION: read the `cwd` field of the first JSONL entry of each
+  directory. That `cwd` is the real absolute path.
 
 STREAM-JSON PARSING:
-- Una línea = un JSON object. Usar BufReader::lines() (tokio).
-- Eventos relevantes:
+- One line = one JSON object. Use BufReader::lines() (tokio).
+- Relevant events:
   {type: "system", subtype: "init", session_id, ...}
   {type: "user", message: { content: [...] }}
   {type: "assistant", message: { content: [{type: "text", text}, {type: "tool_use", id, name, input}, ...] }}
   {type: "user", message: { content: [{type: "tool_result", tool_use_id, content, is_error}] }}
   {type: "result", subtype: "success" | "error", cost_usd, duration_ms, num_turns, ...}
-- tool_use y tool_result están anidados DENTRO de mensajes, no son tipos top-level.
+- tool_use and tool_result are nested INSIDE messages, they are not top-level types.
 
 PROCESS KILL:
-- tokio::Process::kill() mata solo el child, no el grupo.
-- claude spawneea sub-procesos (Bash, etc.) — quedan zombies.
-- Fix: process-wrap crate con ProcessGroup::leader() en Unix.
+- tokio::Process::kill() only kills the child, not the group.
+- claude spawns subprocesses (Bash, etc.) — they are left as zombies.
+- Fix: process-wrap crate with ProcessGroup::leader() on Unix.
 
 TAURI V2 GOTCHAS:
-- Eventos deben declararse en capabilities/default.json con permission
-  "core:event:default" o específico.
-- invoke handlers deben registrarse en lib.rs con tauri::generate_handler!
-- macOS: si faltan entitlements, dialog no abre — incluir
-  "com.apple.security.files.user-selected.read-write" si se hace DMG.
-  Para dev con `bun tauri dev` generalmente no hace falta.
+- Events must be declared in capabilities/default.json with permission
+  "core:event:default" or more specific.
+- invoke handlers must be registered in lib.rs via tauri::generate_handler!
+- macOS: if entitlements are missing, the dialog does not open — include
+  "com.apple.security.files.user-selected.read-write" if shipping a DMG.
+  For dev with `bun tauri dev` it is usually not required.
 
 SOLIDJS GOTCHAS:
-- No useState / useEffect — usar createSignal, createEffect, createMemo.
-- createStore para updates anidados (ej. chat messages).
-- Listeners de Tauri devuelven Promise<UnlistenFn>; cleanup en onCleanup.
-- Si session_id cambia (pending → real), re-subscribe con createEffect
-  dependiente del signal.
+- No useState / useEffect — use createSignal, createEffect, createMemo.
+- createStore for nested updates (e.g. chat messages).
+- Tauri listeners return Promise<UnlistenFn>; cleanup in onCleanup.
+- If session_id changes (pending → real), re-subscribe with a createEffect
+  depending on the signal.
 
 TAILWIND V4:
-- No hay tailwind.config.js. Todo via @import "tailwindcss" en CSS
-  + @theme {} para customización.
-- Plugin: @tailwindcss/vite en vite.config.ts.
+- There is no tailwind.config.js. Everything via @import "tailwindcss" in CSS
+  + @theme {} for customization.
+- Plugin: @tailwindcss/vite in vite.config.ts.
 ```
 
 ---
@@ -225,10 +225,10 @@ export type ClaudeEvent =
   | { type: "result"; subtype: "success" | "error"; session_id: string; cost_usd?: number; duration_ms?: number; num_turns?: number; is_error?: boolean }
 
 export type SessionMeta = {
-  id: string                    // session_id de Claude Code
-  timestamp: string             // ISO del primer mensaje
-  first_message_preview: string // truncado a ~100 chars
-  project_path: string          // cwd real
+  id: string                    // Claude Code session_id
+  timestamp: string             // ISO of the first message
+  first_message_preview: string // truncated to ~100 chars
+  project_path: string          // real cwd
 }
 ```
 
@@ -243,14 +243,14 @@ pub struct SessionMeta {
 }
 ```
 
-### Tasks (en orden de ejecución)
+### Tasks (in execution order)
 
 ```yaml
 Task 1 — Scaffold:
   - RUN (in /tmp): bun create tauri-app claude-desktop-scaffold --template solid-ts --manager bun --yes --identifier com.willywg.claude-desktop
-  - MERGE into current repo: mueve src/, src-tauri/, index.html, package.json, vite.config.ts, tsconfig*.json, .gitignore
+  - MERGE into current repo: move src/, src-tauri/, index.html, package.json, vite.config.ts, tsconfig*.json, .gitignore
   - KEEP existing: PROJECT.md, CLAUDE.md, docs/, PRPs/, .git/
-  - EDIT .gitignore: agregar target/, dist/, node_modules/ si no están
+  - EDIT .gitignore: add target/, dist/, node_modules/ if not present
   - INSTALL: bun add -d @tailwindcss/vite tailwindcss
   - INSTALL: bun add @tauri-apps/plugin-dialog
   - INSTALL Rust: cd src-tauri && cargo add tauri-plugin-dialog which process-wrap --features tokio1 dirs anyhow serde_json futures tokio-stream
@@ -258,7 +258,7 @@ Task 1 — Scaffold:
   - CONFIGURE src/index.css: @import "tailwindcss";
   - REGISTER plugin-dialog: in src-tauri/src/lib.rs and tauri.conf.json
   - CAPABILITIES: add dialog:default to capabilities/default.json
-  - VERIFY: bun tauri dev opens window
+  - VERIFY: bun tauri dev opens a window
 
 Task 2 — binary.rs:
   - CREATE: src-tauri/src/binary.rs
@@ -277,7 +277,7 @@ Task 3 — sessions.rs:
   - IMPLEMENT:
     - fn claude_projects_dir() -> PathBuf  // ~/.claude/projects via dirs crate
     - fn read_cwd_from_jsonl(path: &Path) -> Option<String>
-      → parse first N lines until finding a message with `cwd` field
+      → parse the first N lines until finding a message with a `cwd` field
     - fn extract_first_user_message(path: &Path) -> (Option<String>, Option<String>)
       → skip <command-name>, <local-command-stdout>, "Caveat:" prefixes
       → return (content, timestamp)
@@ -347,7 +347,7 @@ Task 7 — Sidebar + layout:
     - Right: <ChatView activeSessionId={...} />
   - CREATE: src/components/sessions-list.tsx
     - createResource(projectPath, (p) => invoke("list_sessions_for_project", { projectPath: p }))
-    - Button "Nueva sesión" on top
+    - "New session" button on top
     - List of SessionMeta with timestamp + preview (line-clamp-2)
     - Click → onSelect(session.id) → parent sets activeSessionId
 
@@ -355,17 +355,17 @@ Task 8 — Validation:
   - RUN the 9 steps from docs/sprint-01-poc.md §"User flow"
   - CREATE: docs/sprint-01-results.md with:
     - Steps passed / failed
-    - Latency first-event (time from send → first stream-json line)
+    - First-event latency (time from send → first stream-json line)
     - LOC count (rust + ts)
     - Bugs discovered
     - Decisions for Sprint 02
   - COMMIT + tag v0.0.1-poc
 ```
 
-### Pseudocode — piezas críticas
+### Pseudocode — critical pieces
 
 ```rust
-// src-tauri/src/claude.rs — el corazón
+// src-tauri/src/claude.rs — the heart of it
 use std::sync::Arc;
 use tokio::{io::{AsyncBufReadExt, BufReader}, process::Command, sync::Mutex};
 use std::process::Stdio;
@@ -461,7 +461,7 @@ pub async fn claude_cancel(state: State<'_, ClaudeState>) -> Result<(), String> 
 ```
 
 ```typescript
-// src/context/claude.tsx — listener con session-id promotion
+// src/context/claude.tsx — listener with session-id promotion
 import { createContext, createEffect, onCleanup, ParentProps, useContext } from "solid-js"
 import { createStore } from "solid-js/store"
 import { listen, UnlistenFn } from "@tauri-apps/api/event"
@@ -595,68 +595,68 @@ cd src-tauri && cargo check && cargo clippy -- -D warnings
 ```
 
 ### Level 2: Unit tests
-> Sin suite formal en PoC. Test manual cubre los paths críticos.
+> No formal suite in the PoC. Manual test covers the critical paths.
 
-Opcional si el tiempo alcanza:
-- Test de `extract_first_user_message` con fixtures (`.jsonl` de muestra).
-- Test de `find_claude_binary` mockeando PATH.
+Optional if time allows:
+- Test `extract_first_user_message` with fixtures (sample `.jsonl`).
+- Test `find_claude_binary` by mocking PATH.
 
-### Level 3: Integración manual — los 9 pasos de `docs/sprint-01-poc.md`
+### Level 3: Manual integration — the 9 steps in `docs/sprint-01-poc.md`
 
 ```bash
 bun tauri dev
 ```
 
-1. Ventana abre → pantalla "Abrir proyecto".
-2. Click botón → dialog nativo → seleccionar `/Users/willywg/proyectos/construct-ai/copilot-agent` (o cualquier proyecto con sesiones reales).
-3. UI cambia a layout 2-col con sesiones listadas.
-4. Click "Nueva sesión" → panel chat vacío + input.
-5. Escribir "hola, ¿qué hay en este repo?" + enter.
-6. Observar: mi mensaje → system/init con session_id → tool_use (Bash/Read/Glob) → assistant streaming → result.
-7. Refresh (Cmd+R): mismo proyecto recordado; nueva sesión aparece en sidebar.
-8. Click en esa sesión + enviar "y cuántos archivos?" → Claude responde con contexto.
-9. Mientras corre un turno → click "Cancelar" → proceso muere (`ps aux | grep claude` no muestra nada).
+1. Window opens → "Open project" screen.
+2. Click the button → native dialog → pick `/Users/willywg/proyectos/construct-ai/copilot-agent` (or any project with real sessions).
+3. UI switches to a 2-col layout with the sessions listed.
+4. Click "New session" → empty chat panel + input.
+5. Type "hi, what's in this repo?" + enter.
+6. Observe: my message → system/init with session_id → tool_use (Bash/Read/Glob) → assistant streaming → result.
+7. Refresh (Cmd+R): same project remembered; new session shows up in the sidebar.
+8. Click on that session + send "and how many files?" → Claude replies with context.
+9. While a turn is running → click "Cancel" → the process dies (`ps aux | grep claude` shows nothing).
 
 Expected:
-- Primer evento (`system/init`) llega en < 3s.
-- Sin errores rojos en consola de devtools.
-- `~/.claude/projects/<encoded>/<new-session-id>.jsonl` creado en disco.
-- `cargo check` + `bun run typecheck` limpios.
+- First event (`system/init`) arrives in < 3s.
+- No red errors in the devtools console.
+- `~/.claude/projects/<encoded>/<new-session-id>.jsonl` created on disk.
+- `cargo check` + `bun run typecheck` clean.
 
 ---
 
 ## Final Checklist
 
-- [ ] Task 1 — Scaffold + Tailwind configurado, `bun tauri dev` corre
-- [ ] Task 2 — `get_claude_binary` devuelve path válido
-- [ ] Task 3 — `list_sessions_for_project` devuelve sesiones reales ordenadas
-- [ ] Task 4 — Dialog abre, localStorage persiste
-- [ ] Task 5 — `claude_send` emite eventos stream-json; cancel funciona
-- [ ] Task 6 — Chat view renderiza los 4 tipos de mensaje
-- [ ] Task 7 — Layout completo con sidebar wiring
-- [ ] Task 8 — 9 pasos pasan; `docs/sprint-01-results.md` escrito
-- [ ] `cargo check` + `cargo clippy -- -D warnings` limpios
-- [ ] `bun run typecheck` limpio
-- [ ] Commit final tagged `v0.0.1-poc`
+- [ ] Task 1 — Scaffold + Tailwind configured, `bun tauri dev` runs
+- [ ] Task 2 — `get_claude_binary` returns a valid path
+- [ ] Task 3 — `list_sessions_for_project` returns real, sorted sessions
+- [ ] Task 4 — Dialog opens, localStorage persists
+- [ ] Task 5 — `claude_send` emits stream-json events; cancel works
+- [ ] Task 6 — Chat view renders the 4 message types
+- [ ] Task 7 — Full layout with sidebar wiring
+- [ ] Task 8 — 9 steps pass; `docs/sprint-01-results.md` written
+- [ ] `cargo check` + `cargo clippy -- -D warnings` clean
+- [ ] `bun run typecheck` clean
+- [ ] Final commit tagged `v0.0.1-poc`
 
 ---
 
 ## Anti-Patterns to Avoid
 
-- ❌ Usar PTY para el chat — la PoC es específicamente para validar piped stream-json
-- ❌ ANSI-parsear la salida — ignorar stderr de claude para este sprint
-- ❌ Inventar un store de sesiones en SQLite o JSON — usar `~/.claude/projects/` directo
-- ❌ Usar `--dangerously-skip-permissions` — queremos ver prompts reales
-- ❌ Copiar `cli.rs` de OpenCode (es HTTP sidecar, patrón incorrecto)
-- ❌ Decodificar el nombre del directorio con `.replace('-', '/')` — NO es reversible
-- ❌ Intentar multi-sesión concurrente — una activa a la vez
-- ❌ Agregar features fuera del scope (model picker, markdown shiki, file tree, diff)
+- ❌ Use a PTY for the chat — the PoC is specifically about validating piped stream-json
+- ❌ ANSI-parse the output — ignore claude's stderr for this sprint
+- ❌ Invent a session store in SQLite or JSON — use `~/.claude/projects/` directly
+- ❌ Use `--dangerously-skip-permissions` — we want to see real prompts
+- ❌ Copy OpenCode's `cli.rs` (it's an HTTP sidecar, wrong pattern)
+- ❌ Decode the directory name with `.replace('-', '/')` — it is NOT reversible
+- ❌ Attempt concurrent multi-session — one active at a time
+- ❌ Add out-of-scope features (model picker, shiki markdown, file tree, diff)
 
 ---
 
 ## Notes
 
-- **Confidence: 8/10** para one-pass. Claudia valida el patrón al 100%; el riesgo residual es el scaffold + Tailwind v4 (pueden aparecer warnings/config menores).
-- **Tiempo estimado:** 3–5 días efectivos según sprint doc.
-- **Después de la PoC**, Sprint 02 natural: file tree + file viewer + markdown rendering + model picker. SQLite de settings entra en Sprint 03.
-- **Decisión sobre markdown:** en la PoC rendereamos `<pre>` crudo. `marked` + `shiki` entra en Sprint 02.
+- **Confidence: 8/10** for one-pass. Claudia validates the pattern 100%; residual risk is the scaffold + Tailwind v4 (minor warnings/config may surface).
+- **Estimated time:** 3–5 effective days per the sprint doc.
+- **After the PoC**, natural Sprint 02: file tree + file viewer + markdown rendering + model picker. Settings SQLite comes in Sprint 03.
+- **Decision on markdown:** in the PoC we render a raw `<pre>`. `marked` + `shiki` come in Sprint 02.

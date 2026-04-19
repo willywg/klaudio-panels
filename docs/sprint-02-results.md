@@ -1,87 +1,87 @@
-# Sprint 02 — Resultados (Multi-tab, persist, multi-proyecto)
+# Sprint 02 — Results (Multi-tab, persist, multi-project)
 
-> **Fecha:** 2026-04-19
+> **Date:** 2026-04-19
 > **Branch:** `sprint-02-multi-tab`
-> **Tag al merge:** `v0.2.0`
-> **Veredicto:** ✅ **APROBADA** — iteración extensa pero con funcionalidad consolidada.
+> **Tag on merge:** `v0.2.0`
+> **Verdict:** ✅ **APPROVED** — extensive iteration but with consolidated functionality.
 
-## Scope final (más amplio que el PRP original)
+## Final scope (broader than the original PRP)
 
-El PRP 003 apuntaba a *multi-tab + persist*. Durante la validación el usuario pidió sumar un **shell rediseñado al estilo OpenCode**: sidebar de proyectos tipo Slack + home screen con proyectos recientes. Eso se hizo en commits separados dentro del mismo sprint, sin extender timeline.
+PRP 003 targeted *multi-tab + persist*. During validation, the user asked to also include an **OpenCode-style redesigned shell**: Slack-like projects sidebar + home screen with recent projects. That landed in separate commits inside the same sprint, without extending the timeline.
 
-## Qué quedó funcionando
+## What ended up working
 
-### Multi-tab de sesiones (scope PRP 003)
-- Backend PTY ya soportaba N sesiones concurrentes (`HashMap<id, PtySession>`) — solo cambió el frontend.
-- `TerminalContext` refactor: `{ tabs: Tab[], activeTabId }` con API por-id (`openTab / closeTab / setActiveTab / write / resize / onData / onExit / findTabBySessionId`).
-- `TabStrip` (lucide icons, status dot por color, × hover, botón +).
-- Overlay de N `TerminalView` con `visibility + z-index` toggle — xterm instances NUNCA se destruyen al cambiar de tab (scrollback preservado).
-- Click en sesión ya abierta del sidebar → activa el tab existente, no duplica PTY.
+### Multi-tab sessions (PRP 003 scope)
+- The PTY backend already supported N concurrent sessions (`HashMap<id, PtySession>`) — only the frontend changed.
+- `TerminalContext` refactor: `{ tabs: Tab[], activeTabId }` with a per-id API (`openTab / closeTab / setActiveTab / write / resize / onData / onExit / findTabBySessionId`).
+- `TabStrip` (lucide icons, color-coded status dot, × on hover, + button).
+- Overlay of N `TerminalView` with `visibility + z-index` toggle — xterm instances are NEVER destroyed on tab switch (scrollback preserved).
+- Clicking an already-open session in the sidebar → activates the existing tab, doesn't duplicate the PTY.
 
-### Persistencia (scope PRP 003)
-- `localStorage["lastSessionId:<projectPath>"]` — la última sesión activa por proyecto.
-- Auto-resume al reabrir proyecto: lee `list_sessions_for_project` para recuperar el título real (`custom-title` de `/rename` o `summary`) ANTES del spawn.
-- Fallback silencioso si la sesión fue borrada (limpia la key, placeholder limpio).
+### Persistence (PRP 003 scope)
+- `localStorage["lastSessionId:<projectPath>"]` — the last active session per project.
+- Auto-resume on project reopen: calls `list_sessions_for_project` to recover the real title (`custom-title` from `/rename` or `summary`) BEFORE spawning.
+- Silent fallback if the session was deleted (clears the key, clean placeholder).
 
-### Shell multi-proyecto (scope adicional del usuario)
-- `ProjectsSidebar` (columna 56px): avatars con inicial + color determinístico por path. Badge verde con # de tabs abiertos. Icono Home arriba para ir al home screen. `+` abajo para agregar proyecto.
-- `HomeScreen`: cuando no hay proyecto activo, muestra "Proyectos recientes" ordenados por `lastOpened` + botón "Abrir proyecto".
-- **Pin/unpin** como conceptos separados:
-  - Sidebar muestra `pinned`. Home muestra todos (`list`) ordenados por recencia.
-  - `×` o right-click sobre un avatar del sidebar → mata sus PTYs + unpin. El proyecto sigue en Home.
-  - Click en él desde Home → vuelve a pinnear + auto-resume.
-- **Drag-and-drop custom** (PointerEvent manual): HTML5 drag no funcionaba en WebKit de Tauri (dropEffect no respetado, drop no siempre disparaba). Manual con threshold de 180ms de hold o 4px de movimiento. Slack-style: drag down → drop AFTER target, drag up → drop BEFORE.
-- **Tabs por-proyecto sin matar PTYs** al cambiar: cada tab retiene su `projectPath`. TabStrip filtra. `activeByProject` Map recuerda el tab activo de cada proyecto.
+### Multi-project shell (user-added scope)
+- `ProjectsSidebar` (56px column): avatars with initial + deterministic color by path. Green badge with # of open tabs. Home icon at the top to go to the home screen. `+` at the bottom to add a project.
+- `HomeScreen`: when there's no active project, shows "Recent projects" sorted by `lastOpened` + an "Open project" button.
+- **Pin/unpin** as separate concepts:
+  - Sidebar shows `pinned`. Home shows all (`list`) sorted by recency.
+  - `×` or right-click on a sidebar avatar → kills its PTYs + unpin. The project remains in Home.
+  - Clicking it from Home → re-pins + auto-resume.
+- **Custom drag-and-drop** (manual PointerEvent): HTML5 drag didn't work in Tauri's WebKit (dropEffect not respected, drop didn't always fire). Manual, with a threshold of 180ms hold or 4px of movement. Slack-style: drag down → drop AFTER target, drag up → drop BEFORE.
+- **Per-project tabs without killing PTYs** on switch: each tab retains its `projectPath`. TabStrip filters. An `activeByProject` Map remembers each project's active tab.
 
-### Títulos reales de sesión
-- `sessions.rs` scan del JSONL captura `type:"custom-title"` (para `/rename`) y `type:"summary"` (auto-generado por Claude).
-- `displayLabel(s)` prioridad: `custom_title > summary > first_message_preview > short id`.
-- Auto-refresh del sidebar al abrir/cerrar tab → captura renames hechos durante la sesión + cerrada. Botón manual de refresh 🔄 en el header.
-- Limitación conocida: el label del TAB activo no se actualiza al `/rename` en vivo (requiere watcher de JSONL — Sprint 03).
+### Real session titles
+- `sessions.rs` JSONL scan captures `type:"custom-title"` (for `/rename`) and `type:"summary"` (auto-generated by Claude).
+- `displayLabel(s)` priority: `custom_title > summary > first_message_preview > short id`.
+- Sidebar auto-refreshes on tab open/close → picks up renames done during the session + closed. Manual 🔄 refresh button in the header.
+- Known limitation: the active tab's label does not update on live `/rename` (requires a JSONL tailer — Sprint 03).
 
-## Bugs encontrados y resueltos durante QA
+## Bugs found and resolved during QA
 
-| # | Síntoma | Causa raíz | Fix |
+| # | Symptom | Root cause | Fix |
 |---|---------|------------|-----|
-| 1 | Proyecto nuevo no aparecía en el sidebar al click + | `createSignal` a nivel módulo: HMR creaba instancias nuevas sin re-suscribir consumidores. | Migrado a `ProjectsProvider` context + `createStore`. |
-| 2 | Terminal en blanco al volver de otro proyecto | xterm WebGL detiene repaint cuando canvas está `visibility: hidden`. | `term.refresh(0, rows-1)` en el effect de `active`. |
-| 3 | Terminal **en blanco tras spawn** (race condition) | Rust generaba el UUID dentro de `pty_open` y emitía `pty:data:<id>` inmediatamente, JS suscribía listeners DESPUÉS del `await invoke()` → bytes iniciales perdidos. | JS genera `crypto.randomUUID()` y llama `attachListeners` ANTES del invoke. `pty_open` recibe `id` como parámetro. |
-| 4 | Drag hacia abajo no reordenaba visualmente | Siempre insertaba antes del target → drag-down dejaba el item 1 posición antes del target (imperceptible). | Slack-style: `splice(toIdx)` directo tras remove — aprovecha el shift natural. |
-| 5 | Cursor siempre "grab" aunque no estés arrastrando | `cursor-grab` estático en la clase. | Removido del base. Cursor cambia a `grabbing` solo durante drag activo. |
-| 6 | Click rápido en sesión spammeaba N tabs duplicados | Dedup `findTabBySessionId` corría antes que el tab existiera en el store (async gap). | Pending-tab pattern: tab insertado en store ANTES del invoke con `status:"opening"`. Dedup ahora encuentra el pending. |
-| 7 | Tabs vs proyecto: ambos avatars activos | Dos lugares calculaban el switch (`switchToProject` + un effect) → race. | Colapsado a único entry point `setActiveProjectPath` + un único `createEffect(on(activeProjectPath))` para picking. |
-| 8 | Cerrar proyecto desde sidebar también lo borraba del Home | `remove()` hacía full-delete. | Separé en `unpin()` (pinned=false) vs `remove()` (full delete). Sidebar usa `unpin`. |
-| 9 | Iconos ⌂ + × unicode se veían pequeños/pixelados | Chars unicode en lugar de SVG. | `lucide-solid`: Home, Plus, X, FolderOpen, RefreshCw. Sidebar a 56px, avatars 40px. |
-| 10 | Auto-resume mostraba "session xxxxxxxx" en lugar del título | Solo conocía el id, no el meta. | `maybeAutoResume` llama `list_sessions_for_project` primero, luego `displayLabel(meta)`. |
+| 1 | A new project didn't appear in the sidebar on `+` click | Module-level `createSignal`: HMR created new instances without resubscribing consumers. | Migrated to `ProjectsProvider` context + `createStore`. |
+| 2 | Blank terminal when coming back from another project | xterm WebGL stops repainting when the canvas is `visibility: hidden`. | `term.refresh(0, rows-1)` in the `active` effect. |
+| 3 | **Blank terminal after spawn** (race condition) | Rust generated the UUID inside `pty_open` and emitted `pty:data:<id>` immediately; JS subscribed listeners AFTER `await invoke()` → initial bytes lost. | JS generates `crypto.randomUUID()` and calls `attachListeners` BEFORE the invoke. `pty_open` receives `id` as a parameter. |
+| 4 | Dragging down did not reorder visually | It always inserted before the target → drag-down left the item 1 position before the target (imperceptible). | Slack-style: `splice(toIdx)` directly after the remove — leverages the natural shift. |
+| 5 | Cursor always "grab" even when not dragging | Static `cursor-grab` on the class. | Removed from the base. Cursor changes to `grabbing` only during an active drag. |
+| 6 | A fast click on a session spawned N duplicated tabs | The `findTabBySessionId` dedup ran before the tab existed in the store (async gap). | Pending-tab pattern: the tab is inserted in the store BEFORE the invoke with `status:"opening"`. The dedup now finds the pending tab. |
+| 7 | Tabs vs project: both avatars active | Two places computed the switch (`switchToProject` + an effect) → race. | Collapsed into a single entry point `setActiveProjectPath` + a single `createEffect(on(activeProjectPath))` for the picking. |
+| 8 | Closing a project from the sidebar also removed it from Home | `remove()` did a full-delete. | Split into `unpin()` (pinned=false) vs `remove()` (full delete). The sidebar uses `unpin`. |
+| 9 | ⌂ + × unicode icons looked small/pixelated | Unicode chars instead of SVG. | `lucide-solid`: Home, Plus, X, FolderOpen, RefreshCw. Sidebar at 56px, avatars at 40px. |
+| 10 | Auto-resume showed "session xxxxxxxx" instead of the title | Only knew the id, not the meta. | `maybeAutoResume` calls `list_sessions_for_project` first, then `displayLabel(meta)`. |
 
-## Métricas
+## Metrics
 
-- **Diff vs `main`:** +2,008 / −230 en 21 archivos.
-- **LOC TS/TSX nuevos:** `projects-sidebar.tsx` (216), `home-screen.tsx` (92), `projects.tsx` (132), `tab-strip.tsx` (78), `session-label.ts` (24), `recent-projects.ts` (79), `last-session.ts` (26).
-- **Rust:** solo cambios en `pty.rs` (id desde frontend) + `sessions.rs` (extrae `custom-title` y `summary`). `uuid` crate removido.
-- **Commits del sprint:** 10.
-- **Deps nuevas:** `lucide-solid@1.8.0` (iconos). Cero nuevas deps Rust.
+- **Diff vs `main`:** +2,008 / −230 in 21 files.
+- **New TS/TSX LOC:** `projects-sidebar.tsx` (216), `home-screen.tsx` (92), `projects.tsx` (132), `tab-strip.tsx` (78), `session-label.ts` (24), `recent-projects.ts` (79), `last-session.ts` (26).
+- **Rust:** only changes in `pty.rs` (id from the frontend) + `sessions.rs` (extracts `custom-title` and `summary`). `uuid` crate removed.
+- **Sprint commits:** 10.
+- **New deps:** `lucide-solid@1.8.0` (icons). Zero new Rust deps.
 
-## Decisiones que confirmó la validación
+## Decisions that validation confirmed
 
-- **JS posee el UUID del PTY.** Evita race entre Rust-emit y JS-listen. Aplica a TODO futuro `pty:*:<id>` channel.
-- **PointerEvent manual > HTML5 drag** en Tauri WebKit. Control fino de click vs drag threshold, sin pelear con el webview.
-- **Pin ≠ remove.** La semántica separada es la correcta: "cerrar del sidebar" no debería borrar historial.
-- **ProjectsProvider + createStore** es la forma correcta de estado compartido reactivo en Solid. `createSignal` a nivel módulo da dolor de cabeza con HMR.
+- **JS owns the PTY UUID.** Avoids a race between Rust emit and JS listen. Applies to ANY future `pty:*:<id>` channel.
+- **Manual PointerEvent > HTML5 drag** in Tauri WebKit. Fine-grained control of click-vs-drag threshold, no fighting with the webview.
+- **Pin ≠ remove.** The separate semantics is the correct one: "close from the sidebar" shouldn't erase history.
+- **ProjectsProvider + createStore** is the correct shape of shared reactive state in Solid. Module-level `createSignal` is a pain with HMR.
 
-## Limitaciones conocidas (conscientes, defer)
+## Known limitations (deliberate, deferred)
 
-- **Rename en vivo** no se refleja en el tab activo (solo al cerrar-reabrir). Requiere tailer del JSONL → Sprint 03.
-- **Drag granular estilo Slack** (línea horizontal between items según cursor Y). Actualmente usa "before/after" basado en fromIdx vs toIdx. 95% de los casos.
-- **Una sola ventana.** Multi-ventana está fuera de scope.
-- **Sin keyboard shortcuts** (Cmd+T nuevo tab, Cmd+W cerrar, Cmd+1-9 activar). Sprint 04+.
-- **Sin SQLite.** Todo en localStorage. Suficiente hasta Sprint 04/05.
+- **Live rename** is not reflected in the active tab (only on close-reopen). Requires a JSONL tailer → Sprint 03.
+- **Slack-style granular drag** (horizontal line between items based on cursor Y). Currently uses "before/after" based on fromIdx vs toIdx. 95% of the cases.
+- **Single window only.** Multi-window is out of scope.
+- **No keyboard shortcuts** (Cmd+T new tab, Cmd+W close, Cmd+1-9 activate). Sprint 04+.
+- **No SQLite.** Everything in localStorage. Enough until Sprint 04/05.
 
-## Qué sigue (Sprint 03 propuesto)
+## What's next (proposed Sprint 03)
 
-Del backlog original de PROJECT.md, pendientes en orden de valor:
+From PROJECT.md's original backlog, pending in order of value:
 
-1. **File tree + `notify` watcher** — lateral lazy, cambios del filesystem en vivo. Habilita ver qué archivos toca Claude en tiempo real.
-2. **JSONL watcher** — resuelve rename-en-vivo + permite correlacionar tabs "new" con su sessionId real cuando Claude escribe el primer JSONL.
-3. **Diff badges vía `git status`** — los archivos modificados se resaltan en el file tree.
-4. **Diff viewer con `@pierre/diffs`** — click en un archivo modificado muestra el diff.
+1. **File tree + `notify` watcher** — lazy side panel, filesystem changes live. Enables seeing which files Claude touches in real time.
+2. **JSONL watcher** — resolves live rename + allows correlating "new" tabs with their real sessionId when Claude writes the first JSONL.
+3. **Diff badges via `git status`** — modified files are highlighted in the file tree.
+4. **Diff viewer with `@pierre/diffs`** — clicking a modified file shows the diff.
