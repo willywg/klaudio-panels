@@ -207,23 +207,37 @@ stream-json PoC. Validated binary detection + JSONL parser + scaffold. Discarded
 - [ ] Wire: sidebar → `pty_open` with appropriate args
 - [ ] Validate the 9 steps in `docs/sprint-01-claude-in-pty.md`
 
-### Sprint 02 — Multi-tab + basic File tree (1 week)
-- [ ] Multi-PTY with tabs
-- [ ] `fs.rs` + notify watcher
-- [ ] Lazy file tree with expand/collapse
-- [ ] Simple file viewer (read file, syntax highlight)
+### Sprint 02 — Multi-tab + last-session persist (done, 1 week)
+- [x] Multi-PTY with tabs
+- [x] Visibility-toggle switching (no re-mount)
+- [x] `localStorage` last-session per project + auto-resume
+- Tag: `v0.2.0`; retro in `docs/sprint-02-results.md`
 
-### Sprint 03 — Git + Diff viewer (1-2 weeks)
+### Sprint 03a — English translation pass (done, 1 day)
+- [x] Full codebase, docs, PRPs, comments translated
+- [x] LICENSE / README / CONTRIBUTING added
+- Tag: `v0.2.1`
+
+### Sprint 03 — File tree + JSONL watcher + sidebar tabs (in progress)
+- [x] Sidebar tabs (Sessions | Files) + collapse rail + Cmd+B
+- [x] `fs.rs` with `list_dir` (gitignore-aware) + LRU-3 project watcher
+- [x] Lazy file tree with expand/collapse + context menu (Copy path / Reveal in Finder)
+- [x] Global JSONL watcher — live `/rename` + new-tab sessionId correlation (FIFO)
+- [ ] QA pass on all 17 manual steps from PRP 004
+- [ ] Tag: `v0.3.0` when merged
+
+### Sprint 04 — Git + Diff viewer (1-2 weeks)
 - [ ] `git.rs` (diff/status/log)
 - [ ] Diff viewer with `@pierre/diffs`
 - [ ] A/M/D badges in file tree
+- [ ] Open-in-editor on double-click
 
-### Sprint 04 — Extra free-form terminal + SQLite settings (1 week)
+### Sprint 05 — Extra free-form terminal + SQLite settings (1 week)
 - [ ] Additional terminal tabs (shell/zsh/arbitrary)
 - [ ] `config.rs` with rusqlite
 - [ ] Persist favorite projects, layout, theme
 
-### Sprint 05 — Polish & Distribution (1-2 weeks)
+### Sprint 06 — Polish & Distribution (1-2 weeks)
 - [ ] Theming (dark/light)
 - [ ] Configurable keybindings
 - [ ] Auto-update with `tauri-plugin-updater`
