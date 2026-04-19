@@ -82,8 +82,13 @@ function makeProjectsContext() {
     saveRecentProjects(state.list);
   }
 
-  /** Reorder pinned projects: move `fromPath` to occupy the position
-   *  currently held by `toPath` in the underlying list. */
+  /** Reorder: drop `fromPath` relative to `toPath`, Slack-style.
+   *   - Drag DOWN (fromIdx < toIdx): drops AFTER the target.
+   *   - Drag UP   (fromIdx > toIdx): drops BEFORE the target.
+   *  After splicing out `fromPath`, the target index shifts by -1 when
+   *  dragging down; using the raw `toIdx` for the insert position yields the
+   *  desired "after" placement. When dragging up the target index is
+   *  unchanged and `toIdx` places the item before it. */
   function reorder(fromPath: string, toPath: string): void {
     if (fromPath === toPath) return;
     setState(
@@ -93,9 +98,7 @@ function makeProjectsContext() {
         const toIdx = list.findIndex((p) => p.path === toPath);
         if (fromIdx < 0 || toIdx < 0) return;
         const [moved] = list.splice(fromIdx, 1);
-        // After splice the `toIdx` might have shifted by one if fromIdx < toIdx.
-        const adjustedTo = fromIdx < toIdx ? toIdx - 1 : toIdx;
-        list.splice(adjustedTo, 0, moved);
+        list.splice(toIdx, 0, moved);
       }),
     );
     saveRecentProjects(state.list);

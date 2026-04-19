@@ -6,7 +6,6 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
-use uuid::Uuid;
 
 pub struct PtySession {
     pub master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
@@ -26,9 +25,10 @@ const READ_CHUNK: usize = 4096;
 pub async fn pty_open(
     app: AppHandle,
     state: State<'_, PtyState>,
+    id: String,
     project_path: String,
     args: Vec<String>,
-) -> Result<String, String> {
+) -> Result<(), String> {
     let bin = crate::binary::find_claude_binary()?;
     let shell = crate::shell_env::get_user_shell();
     let shell_env = crate::shell_env::load_shell_env(&shell);
@@ -76,7 +76,6 @@ pub async fn pty_open(
         .try_clone_reader()
         .map_err(|e| format!("try_clone_reader failed: {e}"))?;
 
-    let id = Uuid::new_v4().to_string();
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
 
     // Blocking read loop — runs on a dedicated OS thread.
@@ -127,9 +126,9 @@ pub async fn pty_open(
         .sessions
         .lock()
         .map_err(|e| e.to_string())?
-        .insert(id.clone(), session);
+        .insert(id, session);
 
-    Ok(id)
+    Ok(())
 }
 
 #[tauri::command]
