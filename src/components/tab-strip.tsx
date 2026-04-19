@@ -53,7 +53,7 @@ export function TabStrip(props: Props) {
                   "shrink-0 w-5 h-5 rounded flex items-center justify-center text-neutral-500 hover:bg-neutral-700 hover:text-neutral-100 transition " +
                   (isActive() ? "opacity-100" : "opacity-0 group-hover:opacity-100")
                 }
-                title="Cerrar tab"
+                title="Close tab"
                 onClick={(e) => {
                   e.stopPropagation();
                   props.onClose(tab.id);
@@ -69,7 +69,7 @@ export function TabStrip(props: Props) {
         class="px-3 text-neutral-400 hover:text-neutral-100 hover:bg-neutral-900/60 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed flex items-center"
         onClick={props.onNew}
         disabled={!props.canOpenNew}
-        title="Nueva sesión"
+        title="New session"
       >
         <Plus size={14} strokeWidth={2} />
       </button>

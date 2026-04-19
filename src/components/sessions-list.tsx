@@ -37,17 +37,17 @@ export function SessionsList(props: {
         class="m-3 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded text-sm font-medium"
         onClick={props.onNew}
       >
-        + Nueva sesión
+        + New session
       </button>
 
       <div class="px-3 mb-1 flex items-center justify-between">
         <span class="text-xs uppercase tracking-wider text-neutral-500">
-          Sesiones
+          Sessions
         </span>
         <button
           class="p-1 text-neutral-500 hover:text-neutral-200 rounded transition"
           onClick={props.onRefresh}
-          title="Refrescar lista"
+          title="Refresh list"
         >
           <RefreshCw
             size={12}
@@ -59,7 +59,7 @@ export function SessionsList(props: {
 
       <div class="flex-1 overflow-y-auto">
         <Show when={sessions.loading && !sessions.latest}>
-          <div class="px-3 py-2 text-xs text-neutral-500">Cargando…</div>
+          <div class="px-3 py-2 text-xs text-neutral-500">Loading…</div>
         </Show>
         <Show when={sessions.error}>
           <div class="px-3 py-2 text-xs text-red-400">
@@ -68,7 +68,7 @@ export function SessionsList(props: {
         </Show>
         <Show when={sessions() && sessions()!.length === 0}>
           <div class="px-3 py-2 text-xs text-neutral-500">
-            No hay sesiones previas para este proyecto.
+            No previous sessions for this project.
           </div>
         </Show>
 
@@ -90,7 +90,7 @@ export function SessionsList(props: {
                       ? "border-green-600/60 hover:bg-neutral-900/50"
                       : "border-transparent hover:bg-neutral-900/50")
                 }
-                title={isOpen() ? "Abierta en un tab" : undefined}
+                title={isOpen() ? "Open in a tab" : undefined}
               >
                 <span
                   class={

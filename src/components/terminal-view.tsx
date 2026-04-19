@@ -183,7 +183,7 @@ export function TerminalView(props: Props) {
       </Show>
       <Show when={tab()?.status === "exited"}>
         <div class="border-t border-neutral-800 bg-neutral-900/50 px-3 py-1.5 text-[11px] text-neutral-500 font-mono">
-          PTY cerrado (código {tab()?.exitCode ?? "?"}). Cierra este tab o abre otra sesión.
+          PTY closed (code {tab()?.exitCode ?? "?"}). Close this tab or open another session.
         </div>
       </Show>
     </div>

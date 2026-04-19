@@ -65,15 +65,15 @@ export function projectInitial(path: string): string {
   return projectLabel(path).slice(0, 1).toUpperCase();
 }
 
-/** "hace 3 s", "hace 5 min", "hace 2 h", "hace 3 d". */
+/** "3 s ago", "5 min ago", "2 h ago", "3 d ago". */
 export function relativeTime(ms: number): string {
   const diff = Math.max(0, Date.now() - ms);
   const s = Math.floor(diff / 1000);
-  if (s < 60) return `hace ${s} s`;
+  if (s < 60) return `${s} s ago`;
   const m = Math.floor(s / 60);
-  if (m < 60) return `hace ${m} min`;
+  if (m < 60) return `${m} min ago`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `hace ${h} h`;
+  if (h < 24) return `${h} h ago`;
   const d = Math.floor(h / 24);
-  return `hace ${d} d`;
+  return `${d} d ago`;
 }
