@@ -48,7 +48,7 @@ Settled after the Sprint 00 pivot. Don't re-propose rejected alternatives withou
 
 11. **File-tree watcher is per-project, LRU cap 3.** Installed in `fs.rs` on demand when the user opens the Files tab for a project. Eviction drops the debouncer, which stops the worker thread. Don't raise the cap without measuring — each recursive `notify` watcher costs ~5-15MB + kqueue fds on macOS.
 
-12. **Sidebar = single 280px aside with Sessions|Files tabs. Collapses to zero** (OpenCode-style) — the panel hides entirely; only the 56px avatar column remains. The toggle is a `PanelLeft` button floated over the macOS titlebar just past the traffic lights (`src/components/titlebar-toggle.tsx`). Collapsed state is global (`localStorage["sidebarCollapsed"]`); active tab is per-project (`localStorage["sidebarTab:<projectPath>"]`). Cmd+B toggles from anywhere. File-click is select-only in v1 (no open-in-editor, no preview — diff viewer is Sprint 04). Gitignored entries and dotfiles are hidden; `.git/` is explicitly skipped in event filtering even though `ignore` handles most of it.
+12. **Custom titlebar + collapsible sidebar (OpenCode-style).** The macOS titlebar uses `titleBarStyle: "Overlay"` + `hiddenTitle: true` in `tauri.conf.json`. A 40px `<Titlebar>` component draws our own chrome, reserving 72px on the left for the native traffic lights. The sidebar toggle (`PanelLeft` icon) sits right after. The sidebar itself is a single 280px aside with Sessions|Files tabs that collapses to **zero** — the panel disappears entirely; only the 56px avatar column and titlebar remain. Collapsed state is global (`localStorage["sidebarCollapsed"]`); active tab is per-project (`localStorage["sidebarTab:<projectPath>"]`). Cmd+B toggles from anywhere. File-click is select-only in v1 (no open-in-editor, no preview — diff viewer is Sprint 04). Gitignored entries and dotfiles are hidden; `.git/` is explicitly skipped in event filtering even though `ignore` handles most of it.
 
 ## PTY integration cheatsheet
 
@@ -95,7 +95,8 @@ Frontend (`src/`):
 - `components/terminal-view.tsx` — xterm.js mount, fit-addon, resize observer, clipboard keybinds, `refresh()` on visibility change.
 - `components/tab-strip.tsx` — browser-like tab strip above the terminal.
 - `components/projects-sidebar.tsx` — OpenCode-style vertical avatar column, pointer-based drag-reorder.
-- `components/sidebar-panel.tsx` + `components/sidebar-tabs.tsx` + `components/titlebar-toggle.tsx` — 280px aside with Sessions/Files tabs. Collapses to zero (OpenCode-style); the toggle lives in the macOS titlebar next to the traffic lights. Cmd+B toggles from anywhere.
+- `components/titlebar.tsx` — custom 40px macOS chrome (Overlay title bar style). Reserves 72px for traffic lights; hosts the sidebar toggle.
+- `components/sidebar-panel.tsx` + `components/sidebar-tabs.tsx` — 280px aside with Sessions/Files tabs. Collapses to zero (OpenCode-style). Cmd+B toggles from anywhere.
 - `components/file-tree/{file-tree.tsx, tree-node.tsx, use-file-tree.ts}` — lazy-loaded project tree. Depth-first flatten for rendering, fs events patch the store (never re-fetch root). Per-project store cache preserves expanded state across tab switches.
 - `components/context-menu.tsx` — minimal headless context menu. Used by the file tree for Copy path / Reveal in Finder.
 - `components/home-screen.tsx` — recent-projects grid.
