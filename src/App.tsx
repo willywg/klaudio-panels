@@ -5,6 +5,7 @@ import {
   For,
   Show,
   on,
+  onCleanup,
   onMount,
 } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
@@ -13,13 +14,20 @@ import { ProjectsSidebar } from "@/components/projects-sidebar";
 import { SessionsList, type SessionMeta } from "@/components/sessions-list";
 import { TerminalView } from "@/components/terminal-view";
 import { TabStrip } from "@/components/tab-strip";
+import { SidebarPanel } from "@/components/sidebar-panel";
+import { Titlebar } from "@/components/titlebar";
+import { FileTree } from "@/components/file-tree/file-tree";
 import {
   getLastSessionId,
   setLastSessionId,
 } from "@/components/last-session";
-import { projectLabel } from "@/lib/recent-projects";
 import { ProjectsProvider, useProjects } from "@/context/projects";
 import { TerminalProvider, useTerminal } from "@/context/terminal";
+import { SidebarProvider, useSidebar } from "@/context/sidebar";
+import {
+  SessionWatcherProvider,
+  useSessionWatcher,
+} from "@/context/session-watcher";
 import { displayLabel } from "@/lib/session-label";
 
 const AUTO_RESUME_FAIL_WINDOW_MS = 2000;
@@ -31,6 +39,8 @@ function Shell() {
   const [sessionsRefresh, setSessionsRefresh] = createSignal(0);
   const term = useTerminal();
   const projects = useProjects();
+  const sidebar = useSidebar();
+  const sessionWatcher = useSessionWatcher();
 
   // Remembered active tab per project. Set BEFORE changing activeProjectPath
   // (inside setActiveProjectPath) so it's never wrong when the switch effect
@@ -98,10 +108,35 @@ function Shell() {
     ),
   );
 
+  // Refresh sessions list when the JSONL watcher sees a rename/summary/new —
+  // covers the live-/rename path without manually clicking refresh.
+  createEffect(
+    on(
+      sessionWatcher.metaBump,
+      () => setSessionsRefresh((k) => k + 1),
+      { defer: true },
+    ),
+  );
+
   // Seed recent projects with the project loaded from localStorage on boot.
   onMount(() => {
     const p = activeProjectPath();
     if (p) projects.touch(p);
+  });
+
+  // Cmd+B toggles the sidebar from anywhere. xterm.js may consume the event
+  // first when the terminal is focused; we listen on window so the bubble
+  // phase fires — xterm doesn't stopPropagation on keystrokes it forwards to
+  // the PTY, so this works in both focused and unfocused states.
+  onMount(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === "b") {
+        e.preventDefault();
+        sidebar.toggleCollapsed();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    onCleanup(() => window.removeEventListener("keydown", onKey));
   });
 
   const projectTabs = createMemo(() => {
@@ -326,7 +361,9 @@ function Shell() {
   }
 
   return (
-    <main class="h-screen w-screen flex bg-neutral-950 text-neutral-200 overflow-hidden">
+    <div class="h-screen w-screen flex flex-col bg-neutral-950 text-neutral-200 overflow-hidden">
+      <Titlebar hasActiveProject={activeProjectPath() !== null} />
+      <main class="flex-1 flex min-h-0 overflow-hidden">
       <ProjectsSidebar
         activePath={activeProjectPath()}
         onActivate={setActiveProjectPath}
@@ -340,38 +377,25 @@ function Shell() {
         when={activeProjectPath()}
         fallback={<HomeScreen onPick={handlePickFromHome} />}
       >
-        <div class="flex-1 grid grid-cols-[280px_1fr] min-h-0 overflow-hidden">
-          <aside class="border-r border-neutral-800 flex flex-col min-h-0 overflow-hidden">
-            <div class="px-3 py-2 border-b border-neutral-800">
-              <div class="text-[10px] uppercase tracking-wider text-neutral-500">
-                Project
-              </div>
-              <div
-                class="text-xs text-neutral-200 truncate font-medium"
-                title={activeProjectPath()!}
-              >
-                {projectLabel(activeProjectPath()!)}
-              </div>
-              <div
-                class="text-[10px] text-neutral-500 truncate font-mono"
-                title={activeProjectPath()!}
-              >
-                {activeProjectPath()!}
-              </div>
-            </div>
-            <SessionsList
-              projectPath={activeProjectPath()!}
-              activeSessionId={activeSessionId()}
-              openSessionIds={openSessionIds()}
-              openingSessionIds={openingSessionIds()}
-              onNew={() => void openNewTab()}
-              onSelect={handleSelectSession}
-              onRefresh={() => setSessionsRefresh((k) => k + 1)}
-              refreshKey={sessionsRefresh()}
-            />
-          </aside>
+        <div class="flex-1 flex min-h-0 overflow-hidden">
+          <SidebarPanel
+            projectPath={activeProjectPath()!}
+            sessionsContent={
+              <SessionsList
+                projectPath={activeProjectPath()!}
+                activeSessionId={activeSessionId()}
+                openSessionIds={openSessionIds()}
+                openingSessionIds={openingSessionIds()}
+                onNew={() => void openNewTab()}
+                onSelect={handleSelectSession}
+                onRefresh={() => setSessionsRefresh((k) => k + 1)}
+                refreshKey={sessionsRefresh()}
+              />
+            }
+            filesContent={<FileTree projectPath={activeProjectPath()!} />}
+          />
 
-          <section class="min-w-0 min-h-0 flex flex-col overflow-hidden">
+          <section class="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
             <TabStrip
               tabs={projectTabs()}
               activeTabId={term.store.activeTabId}
@@ -415,7 +439,8 @@ function Shell() {
           </section>
         </div>
       </Show>
-    </main>
+      </main>
+    </div>
   );
 }
 
@@ -440,9 +465,13 @@ function LoadingPanel(props: { label?: string }) {
 export default function App() {
   return (
     <ProjectsProvider>
-      <TerminalProvider>
-        <Shell />
-      </TerminalProvider>
+      <SidebarProvider>
+        <TerminalProvider>
+          <SessionWatcherProvider>
+            <Shell />
+          </SessionWatcherProvider>
+        </TerminalProvider>
+      </SidebarProvider>
     </ProjectsProvider>
   );
 }

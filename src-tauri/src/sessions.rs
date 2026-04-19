@@ -29,7 +29,7 @@ fn canonical(path: &str) -> String {
 }
 
 /// Scans the first N lines of a JSONL looking for a top-level `cwd` field.
-fn read_cwd(file: &Path) -> Option<String> {
+pub(crate) fn read_cwd(file: &Path) -> Option<String> {
     let f = fs::File::open(file).ok()?;
     let reader = BufReader::new(f);
     for (i, line) in reader.lines().map_while(Result::ok).enumerate() {
@@ -80,16 +80,16 @@ fn truncate(s: &str) -> String {
     }
 }
 
-struct SessionScan {
-    first_preview: Option<String>,
-    first_timestamp: Option<String>,
-    custom_title: Option<String>,
-    summary: Option<String>,
+pub(crate) struct SessionScan {
+    pub(crate) first_preview: Option<String>,
+    pub(crate) first_timestamp: Option<String>,
+    pub(crate) custom_title: Option<String>,
+    pub(crate) summary: Option<String>,
 }
 
 /// Single pass over the JSONL: captures first user message, custom-title and
 /// summary entries. `custom-title` and `summary` are last-write-wins.
-fn scan_session_file(file: &Path) -> SessionScan {
+pub(crate) fn scan_session_file(file: &Path) -> SessionScan {
     let mut scan = SessionScan {
         first_preview: None,
         first_timestamp: None,

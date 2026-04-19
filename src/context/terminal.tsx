@@ -18,6 +18,9 @@ export type TerminalTab = {
   status: TabStatus;
   exitCode: number | null;
   error: string | null;
+  /** epoch ms when the PTY was requested; used by the session watcher to
+   *  correlate "new" tabs with their JSONL once Claude writes one. */
+  spawnedAt: number;
 };
 
 type TerminalStore = {
@@ -102,6 +105,7 @@ export function makeTerminalContext() {
       status: "opening",
       exitCode: null,
       error: null,
+      spawnedAt: Date.now(),
     };
     setStore(
       produce((s) => {
@@ -227,6 +231,31 @@ export function makeTerminalContext() {
     return store.tabs.find((t) => t.sessionId === sessionId);
   }
 
+  /** Attach a discovered sessionId to a "new" tab. Caller is responsible for
+   *  FIFO selection of which pending tab to promote. */
+  function promoteTab(id: string, sessionId: string, preview: string | null) {
+    setStore(
+      "tabs",
+      (t) => t.id === id,
+      produce((tab: TerminalTab) => {
+        tab.sessionId = sessionId;
+        if (preview && tab.label === "New session") {
+          tab.label = preview;
+        }
+      }),
+    );
+  }
+
+  function setTabLabel(id: string, label: string) {
+    setStore(
+      "tabs",
+      (t) => t.id === id,
+      produce((tab: TerminalTab) => {
+        tab.label = label;
+      }),
+    );
+  }
+
   onCleanup(() => {
     void closeAll();
   });
@@ -243,6 +272,8 @@ export function makeTerminalContext() {
     onExit,
     getTab,
     findTabBySessionId,
+    promoteTab,
+    setTabLabel,
   };
 }
 
