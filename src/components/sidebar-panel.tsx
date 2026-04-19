@@ -2,8 +2,6 @@ import { Show, type JSX } from "solid-js";
 import { projectLabel } from "@/lib/recent-projects";
 import { useSidebar } from "@/context/sidebar";
 import { SidebarTabs } from "./sidebar-tabs";
-import { SidebarRail } from "./sidebar-rail";
-import type { SidebarTab } from "@/lib/sidebar-prefs";
 
 type Props = {
   projectPath: string;
@@ -11,26 +9,14 @@ type Props = {
   filesContent: JSX.Element;
 };
 
-/** 280px aside when expanded; 36px rail when collapsed. Cmd+B toggles from
- *  App-level shortcut. Active tab is per-project. */
+/** 280px aside when expanded; renders nothing when collapsed. Toggle lives in
+ *  the titlebar via <TitlebarToggle>. Cmd+B toggles from anywhere. Active tab
+ *  is per-project. */
 export function SidebarPanel(props: Props) {
   const sidebar = useSidebar();
 
-  function expandInto(tab: SidebarTab) {
-    sidebar.setTab(props.projectPath, tab);
-    sidebar.setCollapsed(false);
-  }
-
   return (
-    <Show
-      when={!sidebar.collapsed()}
-      fallback={
-        <SidebarRail
-          onExpand={() => sidebar.setCollapsed(false)}
-          onExpandInto={expandInto}
-        />
-      }
-    >
+    <Show when={!sidebar.collapsed()}>
       <aside class="w-[280px] shrink-0 border-r border-neutral-800 flex flex-col min-h-0 overflow-hidden bg-neutral-950">
         <div class="px-3 py-2 border-b border-neutral-800">
           <div class="text-[10px] uppercase tracking-wider text-neutral-500">

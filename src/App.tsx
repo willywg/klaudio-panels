@@ -15,6 +15,7 @@ import { SessionsList, type SessionMeta } from "@/components/sessions-list";
 import { TerminalView } from "@/components/terminal-view";
 import { TabStrip } from "@/components/tab-strip";
 import { SidebarPanel } from "@/components/sidebar-panel";
+import { TitlebarToggle } from "@/components/titlebar-toggle";
 import { FileTree } from "@/components/file-tree/file-tree";
 import {
   getLastSessionId,
@@ -361,6 +362,9 @@ function Shell() {
 
   return (
     <main class="h-screen w-screen flex bg-neutral-950 text-neutral-200 overflow-hidden">
+      <Show when={activeProjectPath()}>
+        <TitlebarToggle />
+      </Show>
       <ProjectsSidebar
         activePath={activeProjectPath()}
         onActivate={setActiveProjectPath}
