@@ -1,4 +1,5 @@
 pub mod binary;
+pub mod debug_log;
 pub mod file_read;
 pub mod fs;
 pub mod git;
@@ -28,9 +29,12 @@ pub fn run() {
             binary::get_claude_binary,
             sessions::list_sessions_for_project,
             pty::pty_open,
+            pty::pty_open_editor,
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
+            shell_env::check_binary_exists,
+            debug_log::debug_log,
             fs::list_dir,
             fs::watch_project,
             fs::unwatch_project,

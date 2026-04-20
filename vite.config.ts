@@ -25,8 +25,24 @@ export default defineConfig(async () => ({
           port: 1421,
         }
       : undefined,
+    // Scope Vite's file watcher to the frontend source. The embedded editor
+    // lets users save arbitrary files inside the user's project (README.md,
+    // docs, config) — without this scoping, every `:w` from nvim triggers
+    // a full webview reload because Vite sees the change in CWD. HMR-for-src
+    // still works: Vite's plugin system injects its own watchers for
+    // imported modules regardless of `watch.ignored`.
     watch: {
-      ignored: ["**/src-tauri/**"],
+      ignored: [
+        "**/src-tauri/**",
+        "**/.git/**",
+        "**/node_modules/**",
+        "**/target/**",
+        "**/dist/**",
+        "**/*.md",
+        "**/PROJECT.md",
+        "**/PRPs/**",
+        "**/docs/**",
+      ],
     },
   },
 }));

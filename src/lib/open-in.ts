@@ -23,6 +23,11 @@ export type OpenInApp = {
   /** Lucide icon component + tailwind text color for the avatar. */
   icon: LucideIcon;
   color: string;
+  /** When set, this entry is a terminal editor embedded in a secondary PTY.
+   *  The value is the TerminalEditor id. Callers must route clicks to
+   *  `useEditorPty().openEditor(...)` instead of `open -a`. Detection uses
+   *  `check_binary_exists` (PATH probe) instead of `check_app_exists`. */
+  terminalEditor?: string;
 };
 
 /** macOS apps we try to detect. Terminal-only CLI editors (nvim, helix) are
@@ -54,6 +59,16 @@ export const MAC_APPS: readonly OpenInApp[] = [
   { id: "terminal",        label: "Terminal",        openWith: "Terminal",            kind: "terminal", icon: Terminal, color: "text-neutral-400" },
 ] as const;
 
+/** Terminal editors that cc-ui embeds in a secondary PTY (Sprint 06). They
+ *  ship no `.app` bundle, so `open -a nvim` fails silently — we detect them
+ *  via `check_binary_exists` on the hydrated shell PATH. */
+export const TERMINAL_EDITOR_APPS: readonly OpenInApp[] = [
+  { id: "nvim",  label: "Neovim", openWith: "nvim",  kind: "terminal", icon: Terminal, color: "text-emerald-300", terminalEditor: "nvim" },
+  { id: "vim",   label: "Vim",    openWith: "vim",   kind: "terminal", icon: Terminal, color: "text-green-400",    terminalEditor: "vim" },
+  { id: "helix", label: "Helix",  openWith: "hx",    kind: "terminal", icon: Terminal, color: "text-indigo-300",   terminalEditor: "helix" },
+  { id: "micro", label: "Micro",  openWith: "micro", kind: "terminal", icon: Terminal, color: "text-amber-300",    terminalEditor: "micro" },
+] as const;
+
 export const FINDER_APP: OpenInApp = {
   id: "finder",
   label: "Finder",
@@ -64,6 +79,7 @@ export const FINDER_APP: OpenInApp = {
 };
 
 const STORAGE_KEY = "openIn.app";
+const EDITOR_STORAGE_KEY = "openIn.terminalEditor";
 
 export function getLastOpenInApp(): string {
   try {
@@ -76,6 +92,23 @@ export function getLastOpenInApp(): string {
 export function setLastOpenInApp(id: string): void {
   try {
     localStorage.setItem(STORAGE_KEY, id);
+  } catch {
+    // ignore
+  }
+}
+
+export function getDefaultTerminalEditorId(): string | null {
+  try {
+    return localStorage.getItem(EDITOR_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setDefaultTerminalEditorId(id: string | null): void {
+  try {
+    if (id === null) localStorage.removeItem(EDITOR_STORAGE_KEY);
+    else localStorage.setItem(EDITOR_STORAGE_KEY, id);
   } catch {
     // ignore
   }

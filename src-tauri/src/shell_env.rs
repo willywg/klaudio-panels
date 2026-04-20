@@ -114,6 +114,47 @@ pub fn merge_shell_env(
     merged.into_iter().collect()
 }
 
+/// Resolve `binary` against the hydrated login-shell PATH (falling back to
+/// the system PATH if the shell probe failed). Returns the first absolute
+/// path that exists and is a regular file. macOS GUI apps ship with a
+/// stripped launchd PATH so plain `which` misses Homebrew / nvm / asdf —
+/// that's the entire reason this helper exists.
+pub fn which_in_shell(
+    shell_env: Option<&HashMap<String, String>>,
+    binary: &str,
+) -> Option<String> {
+    if binary.contains('/') {
+        let p = Path::new(binary);
+        if p.is_file() {
+            return Some(binary.to_string());
+        }
+        return None;
+    }
+
+    let path = shell_env
+        .and_then(|m| m.get("PATH"))
+        .cloned()
+        .or_else(|| std::env::var("PATH").ok())?;
+
+    for dir in path.split(':').filter(|s| !s.is_empty()) {
+        let candidate = Path::new(dir).join(binary);
+        if candidate.is_file() {
+            return candidate.to_str().map(|s| s.to_string());
+        }
+    }
+    None
+}
+
+/// Tauri command: probe whether a CLI binary (by bare name) exists on the
+/// hydrated shell PATH. Used by the "Open in" dropdown to detect terminal
+/// editors (nvim / helix / vim / micro) that ship no `.app` bundle.
+#[tauri::command]
+pub fn check_binary_exists(binary: String) -> bool {
+    let shell = get_user_shell();
+    let shell_env = load_shell_env(&shell);
+    which_in_shell(shell_env.as_ref(), &binary).is_some()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

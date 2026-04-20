@@ -13,6 +13,9 @@ type Props = {
   onSelect: (path: string) => void;
   onOpen: (path: string) => void;
   onContextMenu: (e: MouseEvent, path: string, isDir: boolean) => void;
+  /** Intercepts clicks with Cmd/Ctrl held. Returns true if the click was
+   *  consumed (skips the default select/toggle flow). */
+  onModClick?: (e: MouseEvent, path: string, isDir: boolean) => boolean;
 };
 
 export function TreeNode(props: Props) {
@@ -20,6 +23,7 @@ export function TreeNode(props: Props) {
 
   function onClick(e: MouseEvent) {
     e.preventDefault();
+    if (props.onModClick?.(e, props.node.path, props.node.isDir)) return;
     props.onSelect(props.node.path);
     if (props.node.isDir) {
       props.onToggle(props.node.path);

@@ -18,10 +18,19 @@ export type DiffStyle = "unified" | "split";
 
 export type PanelTab =
   | { kind: "diff" }
-  | { kind: "file"; path: string; line?: number; openedAt: number };
+  | { kind: "file"; path: string; line?: number; openedAt: number }
+  | {
+      kind: "editor";
+      editorId: string;
+      path: string;
+      ptyId: string;
+      openedAt: number;
+    };
 
 export function tabKey(t: PanelTab): string {
-  return t.kind === "diff" ? "diff" : `file:${t.path}`;
+  if (t.kind === "diff") return "diff";
+  if (t.kind === "file") return `file:${t.path}`;
+  return `editor:${t.editorId}:${t.path}`;
 }
 
 type ProjectPanelState = {
@@ -101,9 +110,24 @@ function makeDiffPanelContext() {
     }
   }
 
+  /** Callers may register a disposer (e.g. editor-pty kill) to run whenever
+   *  a tab is about to be spliced. The splice itself stays synchronous; the
+   *  side effect fires fire-and-forget. */
+  type CloseHook = (tab: PanelTab) => void;
+  const closeHooks = new Set<CloseHook>();
+
+  function onBeforeClose(hook: CloseHook): () => void {
+    closeHooks.add(hook);
+    return () => closeHooks.delete(hook);
+  }
+
   function closeTab(projectPath: string, key: string) {
     ensureProject(projectPath);
     if (key === "diff") return;
+    const tab = panels[projectPath].tabs.find((t) => tabKey(t) === key);
+    if (tab) {
+      for (const h of closeHooks) h(tab);
+    }
     setPanels(
       projectPath,
       produce((state: ProjectPanelState) => {
@@ -125,7 +149,52 @@ function makeDiffPanelContext() {
   }
 
   function clearProject(projectPath: string) {
+    const existing = panels[projectPath];
+    if (existing) {
+      for (const t of existing.tabs) {
+        for (const h of closeHooks) h(t);
+      }
+    }
     setPanels(projectPath, freshState());
+  }
+
+  /** Look up an existing editor tab for `(editorId, path)`. Used to dedup
+   *  before spawning a second PTY against the same file. */
+  function findEditorTabKey(
+    projectPath: string,
+    editorId: string,
+    path: string,
+  ): string | null {
+    ensureProject(projectPath);
+    const key = `editor:${editorId}:${path}`;
+    return panels[projectPath].tabs.some((t) => tabKey(t) === key) ? key : null;
+  }
+
+  function addEditorTab(
+    projectPath: string,
+    editorId: string,
+    path: string,
+    ptyId: string,
+  ) {
+    ensureProject(projectPath);
+    const key = `editor:${editorId}:${path}`;
+    setPanels(
+      projectPath,
+      produce((state: ProjectPanelState) => {
+        state.tabs.push({
+          kind: "editor",
+          editorId,
+          path,
+          ptyId,
+          openedAt: Date.now(),
+        });
+        state.activeKey = key;
+      }),
+    );
+    if (!open()) {
+      setOpen(true);
+      setDiffPanelOpen(true);
+    }
   }
 
   function widthFor(projectPath: string): number {
@@ -231,6 +300,9 @@ function makeDiffPanelContext() {
     closeTab,
     closeActiveTab,
     clearProject,
+    findEditorTabKey,
+    addEditorTab,
+    onBeforeClose,
   };
 }
 
