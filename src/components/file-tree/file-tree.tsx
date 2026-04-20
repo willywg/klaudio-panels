@@ -15,6 +15,7 @@ import { ContextMenu, type ContextMenuItem } from "@/components/context-menu";
 import { useGit } from "@/context/git";
 import { useDiffPanel } from "@/context/diff-panel";
 import { useOpenIn } from "@/context/open-in";
+import { useEditorPty } from "@/context/editor-pty";
 import { TreeNode } from "./tree-node";
 import { makeFileTreeStore, type FsEvent } from "./use-file-tree";
 
@@ -48,6 +49,7 @@ export function FileTree(props: Props) {
   const git = useGit();
   const diffPanel = useDiffPanel();
   const openIn = useOpenIn();
+  const editorPty = useEditorPty();
 
   // Memoized store follows the prop — switching projects swaps the store.
   const store = createMemo(() => getStore(props.projectPath));
@@ -72,6 +74,48 @@ export function FileTree(props: Props) {
     } else {
       diffPanel.openFile(props.projectPath, rel);
     }
+  }
+
+  /** Open a file in the user's default terminal editor (or the first
+   *  detected one if no default is set). Dedupes against existing editor
+   *  tabs, and remembers the selection so the next Cmd+click / submenu
+   *  default-check stays consistent. */
+  function openInDefaultEditor(abs: string, editorId: string, appId: string) {
+    const rel = toRel(abs);
+    openIn.setDefaultEditor(appId);
+    const existing = diffPanel.findEditorTabKey(
+      props.projectPath,
+      editorId,
+      rel,
+    );
+    if (existing) {
+      diffPanel.setActiveTab(props.projectPath, existing);
+      diffPanel.openPanel();
+      return;
+    }
+    try {
+      const ptyId = editorPty.openEditor(
+        props.projectPath,
+        abs,
+        rel,
+        editorId,
+      );
+      diffPanel.addEditorTab(props.projectPath, editorId, rel, ptyId);
+    } catch (err) {
+      console.warn("openEditor failed", err);
+    }
+  }
+
+  /** Cmd/Ctrl+click on a file opens it in the default terminal editor when
+   *  one is available; otherwise falls through to the preview tab. */
+  function handleClickWithMods(e: MouseEvent, abs: string, isDir: boolean) {
+    const mod = e.metaKey || e.ctrlKey;
+    if (!mod || isDir) return false;
+    const defaultApp = openIn.resolveDefaultEditor();
+    if (!defaultApp?.terminalEditor) return false;
+    e.preventDefault();
+    openInDefaultEditor(abs, defaultApp.terminalEditor, defaultApp.id);
+    return true;
   }
 
   // Per-project listener + watcher. Rebinds when projectPath changes so that
@@ -155,12 +199,25 @@ export function FileTree(props: Props) {
       });
     }
 
-    const openInItems: ContextMenuItem[] = openIn.availableApps().map((app) => ({
+    // Terminal editors only make sense for files (nvim-on-directory is
+    // valid-ish, but out of scope for v1). Show them only when !isDir.
+    const apps = m.isDir
+      ? openIn.availableApps().filter((a) => !a.terminalEditor)
+      : openIn.availableApps();
+    const defaultEditor = openIn.defaultEditorId();
+    const openInItems: ContextMenuItem[] = apps.map((app) => ({
       label: app.label,
       icon: app.icon,
       iconUrl: openIn.iconUrlFor(app.id) ?? undefined,
       iconClass: app.color,
-      onClick: () => void openIn.openPath(m.path, app.id),
+      checked: !!app.terminalEditor && app.id === defaultEditor,
+      onClick: () => {
+        if (app.terminalEditor) {
+          openInDefaultEditor(m.path, app.terminalEditor, app.id);
+        } else {
+          void openIn.openPath(m.path, app.id);
+        }
+      },
     }));
     items.push({
       kind: "submenu",
@@ -202,6 +259,7 @@ export function FileTree(props: Props) {
               onSelect={(path) => setSelected(path)}
               onOpen={handleOpen}
               onContextMenu={openContextMenu}
+              onModClick={handleClickWithMods}
             />
           )}
         </For>

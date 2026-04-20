@@ -21,41 +21,39 @@ const INITIAL_COLS: u16 = 80;
 const INITIAL_ROWS: u16 = 24;
 const READ_CHUNK: usize = 4096;
 
-#[tauri::command]
-pub async fn pty_open(
+/// Core PTY spawn routine used by both Claude and embedded editor sessions.
+/// `binary` is the absolute path of the executable to run; `env` is the
+/// fully-merged env (shell-hydrated + overrides) the child should inherit.
+/// `initial_cols` / `initial_rows` let the caller spawn with xterm's already-
+/// fitted dimensions so TUIs (nvim, helix) don't render a first paint at the
+/// 80x24 default and then have to reflow.
+#[allow(clippy::too_many_arguments)]
+fn spawn_pty(
     app: AppHandle,
-    state: State<'_, PtyState>,
+    state: &PtyState,
     id: String,
-    project_path: String,
+    binary: String,
     args: Vec<String>,
+    cwd: String,
+    env: Vec<(String, String)>,
+    initial_cols: Option<u16>,
+    initial_rows: Option<u16>,
 ) -> Result<(), String> {
-    let bin = crate::binary::find_claude_binary()?;
-    let shell = crate::shell_env::get_user_shell();
-    let shell_env = crate::shell_env::load_shell_env(&shell);
-    let env = crate::shell_env::merge_shell_env(
-        shell_env,
-        vec![
-            ("TERM".into(), "xterm-256color".into()),
-            ("COLORTERM".into(), "truecolor".into()),
-            ("CLAUDE_DESKTOP".into(), "1".into()),
-        ],
-    );
-
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
-            rows: INITIAL_ROWS,
-            cols: INITIAL_COLS,
+            rows: initial_rows.unwrap_or(INITIAL_ROWS),
+            cols: initial_cols.unwrap_or(INITIAL_COLS),
             pixel_width: 0,
             pixel_height: 0,
         })
         .map_err(|e| format!("openpty failed: {e}"))?;
 
-    let mut cmd = CommandBuilder::new(bin);
+    let mut cmd = CommandBuilder::new(binary);
     for a in &args {
         cmd.arg(a);
     }
-    cmd.cwd(&project_path);
+    cmd.cwd(&cwd);
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -78,7 +76,6 @@ pub async fn pty_open(
 
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
 
-    // Blocking read loop — runs on a dedicated OS thread.
     let tx_blocking = tx.clone();
     tokio::task::spawn_blocking(move || {
         let mut reader = reader;
@@ -96,7 +93,6 @@ pub async fn pty_open(
         }
     });
 
-    // Async emitter — converts bytes to base64 and emits to the frontend.
     let app_data = app.clone();
     let id_data = id.clone();
     tokio::spawn(async move {
@@ -106,7 +102,6 @@ pub async fn pty_open(
         }
     });
 
-    // Child waiter — announces exit code when the process finishes.
     let app_exit = app.clone();
     let id_exit = id.clone();
     tokio::task::spawn_blocking(move || {
@@ -129,6 +124,63 @@ pub async fn pty_open(
         .insert(id, session);
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn pty_open(
+    app: AppHandle,
+    state: State<'_, PtyState>,
+    id: String,
+    project_path: String,
+    args: Vec<String>,
+) -> Result<(), String> {
+    let bin = crate::binary::find_claude_binary()?;
+    let shell = crate::shell_env::get_user_shell();
+    let shell_env = crate::shell_env::load_shell_env(&shell);
+    let env = crate::shell_env::merge_shell_env(
+        shell_env,
+        vec![
+            ("TERM".into(), "xterm-256color".into()),
+            ("COLORTERM".into(), "truecolor".into()),
+            ("CLAUDE_DESKTOP".into(), "1".into()),
+        ],
+    );
+    let bin_str = bin
+        .to_str()
+        .ok_or_else(|| "claude binary path is not valid UTF-8".to_string())?
+        .to_string();
+    spawn_pty(app, &state, id, bin_str, args, project_path, env, None, None)
+}
+
+/// Spawn an embedded terminal editor (nvim / helix / vim / micro) inside a
+/// PTY. The `binary` is resolved against the hydrated login-shell PATH so
+/// Homebrew / nvm / asdf installs are found even though the GUI process
+/// inherits the stripped macOS launchd PATH.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn pty_open_editor(
+    app: AppHandle,
+    state: State<'_, PtyState>,
+    id: String,
+    project_path: String,
+    binary: String,
+    args: Vec<String>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+) -> Result<(), String> {
+    let shell = crate::shell_env::get_user_shell();
+    let shell_env = crate::shell_env::load_shell_env(&shell);
+    let resolved = crate::shell_env::which_in_shell(shell_env.as_ref(), &binary)
+        .ok_or_else(|| format!("binary not found on PATH: {binary}"))?;
+    let env = crate::shell_env::merge_shell_env(
+        shell_env,
+        vec![
+            ("TERM".into(), "xterm-256color".into()),
+            ("COLORTERM".into(), "truecolor".into()),
+            ("CLAUDE_DESKTOP".into(), "1".into()),
+        ],
+    );
+    spawn_pty(app, &state, id, resolved, args, project_path, env, cols, rows)
 }
 
 #[tauri::command]

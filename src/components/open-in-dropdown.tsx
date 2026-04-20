@@ -68,7 +68,7 @@ export function OpenInDropdown(props: Props) {
           <div class="px-3 py-1 text-[10px] uppercase tracking-wide text-neutral-500 font-medium">
             Open in
           </div>
-          <For each={openIn.availableApps()}>
+          <For each={openIn.availableApps().filter((a) => !a.terminalEditor)}>
             {(app) => {
               const isActive = () => openIn.resolveCurrent().id === app.id;
               return (

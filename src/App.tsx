@@ -31,6 +31,8 @@ import {
 import { GitProvider, useGit } from "@/context/git";
 import { DiffPanelProvider, useDiffPanel } from "@/context/diff-panel";
 import { OpenInProvider } from "@/context/open-in";
+import { EditorPtyProvider, useEditorPty } from "@/context/editor-pty";
+import { installGlobalErrorForwarding } from "@/lib/debug-log";
 import { DiffPanel } from "@/components/diff-panel/diff-panel";
 import { SplitDivider } from "@/components/diff-panel/split-pane";
 import { displayLabel } from "@/lib/session-label";
@@ -48,6 +50,7 @@ function Shell() {
   const sessionWatcher = useSessionWatcher();
   const git = useGit();
   const diffPanel = useDiffPanel();
+  const editorPty = useEditorPty();
   let splitContainerRef!: HTMLDivElement;
 
   // Remembered active tab per project. Set BEFORE changing activeProjectPath
@@ -130,6 +133,18 @@ function Shell() {
   onMount(() => {
     const p = activeProjectPath();
     if (p) projects.touch(p);
+  });
+
+  // When a PanelTab is about to be spliced (close button, Cmd+W, "Close other
+  // tabs", project close via clearProject), kill the editor PTY. Without this
+  // the child process stays alive headless and leaks kqueue fds.
+  onMount(() => {
+    const dispose = diffPanel.onBeforeClose((tab) => {
+      if (tab.kind === "editor") {
+        void editorPty.killEditor(tab.ptyId);
+      }
+    });
+    onCleanup(dispose);
   });
 
   // Cmd+B toggles the sidebar, Cmd+Shift+D toggles the diff panel. Listening
@@ -384,7 +399,12 @@ function Shell() {
     }
     activeByProject.delete(path);
     autoResumed.delete(path);
+    // clearProject fires onBeforeClose for every editor tab, which our
+    // onMount hook uses to kill each PTY. Defensive double-kill via
+    // killAllForProject in case clearProject sees zero tabs (edge case where
+    // the project was never opened in a diff panel).
     diffPanel.clearProject(path);
+    editorPty.killAllForProject(path);
     // Don't clear lastSessionId — keep it so next time the user re-pins from
     // Home, auto-resume picks up where they left off.
     projects.unpin(path);
@@ -529,6 +549,8 @@ function LoadingPanel(props: { label?: string }) {
   );
 }
 
+installGlobalErrorForwarding();
+
 export default function App() {
   return (
     <ProjectsProvider>
@@ -536,11 +558,13 @@ export default function App() {
         <GitProvider>
           <DiffPanelProvider>
             <OpenInProvider>
-              <TerminalProvider>
-                <SessionWatcherProvider>
-                  <Shell />
-                </SessionWatcherProvider>
-              </TerminalProvider>
+              <EditorPtyProvider>
+                <TerminalProvider>
+                  <SessionWatcherProvider>
+                    <Shell />
+                  </SessionWatcherProvider>
+                </TerminalProvider>
+              </EditorPtyProvider>
             </OpenInProvider>
           </DiffPanelProvider>
         </GitProvider>

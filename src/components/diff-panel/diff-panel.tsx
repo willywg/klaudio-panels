@@ -5,16 +5,20 @@ import {
   FileText,
   FolderOpen,
   GitBranch,
+  Terminal as TerminalIcon,
   X,
   XCircle,
+  Zap,
 } from "lucide-solid";
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { useDiffPanel, tabKey, type PanelTab } from "@/context/diff-panel";
 import { useGit } from "@/context/git";
 import { useOpenIn } from "@/context/open-in";
+import { useEditorPty } from "@/context/editor-pty";
 import { ContextMenu, type ContextMenuItem } from "@/components/context-menu";
 import { DiffFileRow } from "./diff-file-row";
 import { FilePreview } from "./file-preview";
+import { EditorPtyView } from "./editor-pty-view";
 
 type Props = {
   projectPath: string;
@@ -49,7 +53,34 @@ export function DiffPanel(props: Props) {
   return (
     <div class="h-full flex flex-col bg-neutral-950 border-l border-neutral-800">
       <TabStrip projectPath={props.projectPath} />
-      <div class="flex-1 min-h-0 overflow-hidden">
+      <div class="relative flex-1 min-h-0 overflow-hidden">
+        {/* Editor PTYs are mounted once per tab and their visibility is
+            toggled — tearing them down on tab switch would reset nvim's
+            buffers and lose unsaved edits. They sit absolute-positioned on
+            top of the Switch and only show when their tab is active. */}
+        <For each={tabs().filter((t) => t.kind === "editor")}>
+          {(t) => {
+            if (t.kind !== "editor") return null;
+            const key = tabKey(t);
+            const isActive = () => key === activeKey();
+            return (
+              <div
+                class="absolute inset-0 flex flex-col"
+                style={{
+                  visibility: isActive() ? "visible" : "hidden",
+                  "pointer-events": isActive() ? "auto" : "none",
+                  "z-index": isActive() ? 2 : 0,
+                }}
+              >
+                <EditorPtyView
+                  ptyId={t.ptyId}
+                  active={isActive()}
+                  onExit={() => panel.closeTab(props.projectPath, key)}
+                />
+              </div>
+            );
+          }}
+        </For>
         <Switch>
           <Match when={activeTab()?.kind === "diff"}>
             <div class="h-full flex flex-col">
@@ -147,18 +178,41 @@ export function DiffPanel(props: Props) {
 function TabStrip(props: { projectPath: string }) {
   const panel = useDiffPanel();
   const openIn = useOpenIn();
+  const editorPty = useEditorPty();
   const tabs = () => panel.tabsFor(props.projectPath);
   const activeKey = () => panel.activeKeyFor(props.projectPath);
 
   const [menu, setMenu] = createSignal<
     | { open: false }
-    | { open: true; x: number; y: number; key: string; rel: string }
+    | {
+        open: true;
+        x: number;
+        y: number;
+        key: string;
+        rel: string;
+        tabKind: "file" | "editor";
+        ptyId?: string;
+      }
   >({ open: false });
 
-  function openMenu(e: MouseEvent, key: string, rel: string) {
+  function openMenu(
+    e: MouseEvent,
+    key: string,
+    rel: string,
+    tabKind: "file" | "editor",
+    ptyId?: string,
+  ) {
     e.preventDefault();
     e.stopPropagation();
-    setMenu({ open: true, x: e.clientX, y: e.clientY, key, rel });
+    setMenu({
+      open: true,
+      x: e.clientX,
+      y: e.clientY,
+      key,
+      rel,
+      tabKind,
+      ptyId,
+    });
   }
   function closeMenu() {
     setMenu({ open: false });
@@ -175,6 +229,40 @@ function TabStrip(props: { projectPath: string }) {
       ? props.projectPath.slice(0, -1)
       : props.projectPath;
     return `${base}/${rel}`;
+  }
+
+  function dispatchAppOpen(app: import("@/lib/open-in").OpenInApp, rel: string) {
+    if (app.terminalEditor) {
+      openIn.setDefaultEditor(app.id);
+      const existing = panel.findEditorTabKey(
+        props.projectPath,
+        app.terminalEditor,
+        rel,
+      );
+      if (existing) {
+        panel.setActiveTab(props.projectPath, existing);
+        panel.openPanel();
+        return;
+      }
+      try {
+        const editorId = app.terminalEditor;
+        const ptyId = editorPty.openEditor(
+          props.projectPath,
+          absFor(rel),
+          rel,
+          editorId,
+        );
+        panel.addEditorTab(props.projectPath, editorId, rel, ptyId);
+      } catch (err) {
+        console.warn("openEditor failed", err);
+      }
+    } else {
+      void openIn.openPath(absFor(rel), app.id);
+    }
+  }
+
+  function sendCtrl(ptyId: string, byte: number) {
+    void editorPty.write(ptyId, new Uint8Array([byte]));
   }
 
   const menuItems = (): ContextMenuItem[] => {
@@ -198,14 +286,33 @@ function TabStrip(props: { projectPath: string }) {
         }
       },
     });
+
+    // Editor-only: escape hatches for a frozen nvim / a child that's
+    // ignoring :q. Ctrl-C sends SIGINT via the PTY; Ctrl-\\ sends SIGQUIT.
+    if (m.tabKind === "editor" && m.ptyId) {
+      items.push({ kind: "divider" });
+      items.push({
+        label: "Send Ctrl-C",
+        icon: Zap,
+        onClick: () => sendCtrl(m.ptyId!, 0x03),
+      });
+      items.push({
+        label: "Send Ctrl-\\",
+        icon: Zap,
+        onClick: () => sendCtrl(m.ptyId!, 0x1c),
+      });
+    }
+
     items.push({ kind: "divider" });
 
+    const defaultEditor = openIn.defaultEditorId();
     const apps: ContextMenuItem[] = openIn.availableApps().map((app) => ({
       label: app.label,
       icon: app.icon,
       iconUrl: openIn.iconUrlFor(app.id) ?? undefined,
       iconClass: app.color,
-      onClick: () => void openIn.openPath(absFor(m.rel), app.id),
+      checked: !!app.terminalEditor && app.id === defaultEditor,
+      onClick: () => dispatchAppOpen(app, m.rel),
     }));
     items.push({
       kind: "submenu",
@@ -235,8 +342,11 @@ function TabStrip(props: { projectPath: string }) {
                 onActivate={() => panel.setActiveTab(props.projectPath, key)}
                 onClose={() => panel.closeTab(props.projectPath, key)}
                 onContextMenu={(e) => {
-                  if (t.kind !== "file") return;
-                  openMenu(e, key, t.path);
+                  if (t.kind === "file") {
+                    openMenu(e, key, t.path, "file");
+                  } else if (t.kind === "editor") {
+                    openMenu(e, key, t.path, "editor", t.ptyId);
+                  }
                 }}
               />
             );
@@ -276,7 +386,8 @@ function TabItem(props: {
 }) {
   const label = () => {
     if (props.tab.kind === "diff") return "Git changes";
-    return basename(props.tab.path);
+    if (props.tab.kind === "file") return basename(props.tab.path);
+    return `${props.tab.editorId} ${basename(props.tab.path)}`;
   };
 
   return (
@@ -290,14 +401,19 @@ function TabItem(props: {
       onClick={props.onActivate}
       onContextMenu={props.onContextMenu}
     >
-      <Show
-        when={props.tab.kind === "diff"}
-        fallback={<FileText size={12} strokeWidth={1.75} class="shrink-0 text-neutral-500" />}
-      >
-        <GitBranch size={12} strokeWidth={1.75} class="shrink-0 text-neutral-500" />
-      </Show>
+      <Switch>
+        <Match when={props.tab.kind === "diff"}>
+          <GitBranch size={12} strokeWidth={1.75} class="shrink-0 text-neutral-500" />
+        </Match>
+        <Match when={props.tab.kind === "file"}>
+          <FileText size={12} strokeWidth={1.75} class="shrink-0 text-neutral-500" />
+        </Match>
+        <Match when={props.tab.kind === "editor"}>
+          <TerminalIcon size={12} strokeWidth={1.75} class="shrink-0 text-emerald-400" />
+        </Match>
+      </Switch>
       <span class="truncate max-w-[180px]">{label()}</span>
-      <Show when={props.tab.kind === "file"}>
+      <Show when={props.tab.kind !== "diff"}>
         <button
           class="w-4 h-4 rounded-sm flex items-center justify-center text-neutral-500 hover:bg-neutral-700 hover:text-neutral-100 transition opacity-0 group-hover:opacity-100"
           onClick={(e) => {
