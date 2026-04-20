@@ -20,3 +20,57 @@ body {
   color: #e5e5e5;
   -webkit-font-smoothing: antialiased;
 }
+
+/* Read-only file preview (Shiki output) — counter-based line numbers,
+   monospace body, flash highlight for cmd+click jumps. */
+.preview-code pre.shiki {
+  margin: 0;
+  padding: 8px 0;
+  background: transparent !important;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 2;
+}
+.preview-code pre.shiki code {
+  counter-reset: line;
+  display: block;
+}
+.preview-code pre.shiki .line {
+  counter-increment: line;
+  padding: 0 16px 0 0;
+  white-space: pre;
+}
+.preview-code pre.shiki .line::before {
+  content: counter(line);
+  display: inline-block;
+  width: 48px;
+  padding-right: 12px;
+  margin-right: 8px;
+  text-align: right;
+  color: #525252;
+  border-right: 1px solid #262626;
+  user-select: none;
+}
+.preview-code pre.shiki .line.preview-line-flash {
+  background: rgba(99, 102, 241, 0.18);
+  transition: background 400ms ease-out;
+}
+.preview-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.preview-scroll::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 5px;
+}
+.preview-scroll::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}

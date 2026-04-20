@@ -6,7 +6,7 @@ use git2::{Delta, DiffOptions, Repository, Status, StatusOptions};
 use serde::Serialize;
 
 const MAX_DIFF_BYTES: usize = 512 * 1024;
-const BINARY_PROBE_BYTES: usize = 8 * 1024;
+pub(crate) const BINARY_PROBE_BYTES: usize = 8 * 1024;
 
 #[derive(Debug, Serialize, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
@@ -46,7 +46,7 @@ pub struct DiffPayload {
     pub too_large: bool,
 }
 
-fn is_binary_bytes(bytes: &[u8]) -> bool {
+pub(crate) fn is_binary_bytes(bytes: &[u8]) -> bool {
     let probe_len = bytes.len().min(BINARY_PROBE_BYTES);
     bytes[..probe_len].contains(&0)
 }

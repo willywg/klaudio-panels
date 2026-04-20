@@ -1,6 +1,8 @@
 pub mod binary;
+pub mod file_read;
 pub mod fs;
 pub mod git;
+pub mod open_in;
 pub mod pty;
 pub mod session_watcher;
 pub mod sessions;
@@ -35,6 +37,10 @@ pub fn run() {
             git::git_status,
             git::git_summary,
             git::git_diff_file,
+            open_in::check_app_exists,
+            open_in::open_path_with,
+            open_in::get_app_icon,
+            file_read::read_file_bytes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
