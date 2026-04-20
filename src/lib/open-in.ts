@@ -1,27 +1,46 @@
+import {
+  Code2,
+  FileCode,
+  FileText,
+  Folder,
+  Hammer,
+  Sparkles,
+  Terminal,
+  Wind,
+  type LucideProps,
+} from "lucide-solid";
+import type { Component } from "solid-js";
+
+type LucideIcon = Component<LucideProps>;
+
 export type OpenInApp = {
   id: string;
   label: string;
   /** Name passed to `open -a` on macOS (bundle display name). */
   openWith: string;
-  /** Whether this app is a terminal (for Sprint 06 preview-pane planning). */
+  /** Hint only; used by the Sprint 06 PTY-embed planning. */
   kind: "gui" | "terminal" | "finder";
-  /** Tailwind bg + hex fallback for a simple circle avatar when we don't
-   *  have a real icon asset. */
+  /** Lucide icon component + tailwind text color for the avatar. */
+  icon: LucideIcon;
   color: string;
 };
 
-/** macOS apps we try to detect. Order defines dropdown order. Finder is
- *  pinned separately (always present). */
+/** macOS apps we try to detect. Terminal-only CLI editors (nvim, helix) are
+ *  deliberately excluded — `open -a nvim` fails silently because they ship
+ *  no .app bundle. They land in Sprint 06 via a secondary PTY preview pane. */
 export const MAC_APPS: readonly OpenInApp[] = [
-  { id: "vscode", label: "VS Code", openWith: "Visual Studio Code", kind: "gui", color: "bg-blue-500" },
-  { id: "cursor", label: "Cursor", openWith: "Cursor", kind: "gui", color: "bg-neutral-300" },
-  { id: "zed", label: "Zed", openWith: "Zed", kind: "gui", color: "bg-orange-500" },
-  { id: "xcode", label: "Xcode", openWith: "Xcode", kind: "gui", color: "bg-sky-500" },
-  { id: "sublime", label: "Sublime Text", openWith: "Sublime Text", kind: "gui", color: "bg-amber-400" },
-  { id: "iterm2", label: "iTerm", openWith: "iTerm", kind: "terminal", color: "bg-emerald-500" },
-  { id: "warp", label: "Warp", openWith: "Warp", kind: "terminal", color: "bg-violet-500" },
-  { id: "ghostty", label: "Ghostty", openWith: "Ghostty", kind: "terminal", color: "bg-fuchsia-500" },
-  { id: "terminal", label: "Terminal", openWith: "Terminal", kind: "terminal", color: "bg-neutral-500" },
+  { id: "vscode",      label: "VS Code",       openWith: "Visual Studio Code", kind: "gui",      icon: Code2,    color: "text-sky-400" },
+  { id: "cursor",      label: "Cursor",        openWith: "Cursor",              kind: "gui",      icon: Code2,    color: "text-neutral-200" },
+  { id: "windsurf",    label: "Windsurf",      openWith: "Windsurf",            kind: "gui",      icon: Wind,     color: "text-teal-400" },
+  { id: "antigravity", label: "Antigravity",   openWith: "Antigravity",         kind: "gui",      icon: Sparkles, color: "text-emerald-400" },
+  { id: "zed",         label: "Zed",           openWith: "Zed",                 kind: "gui",      icon: Code2,    color: "text-orange-400" },
+  { id: "xcode",       label: "Xcode",         openWith: "Xcode",               kind: "gui",      icon: Hammer,   color: "text-sky-500" },
+  { id: "sublime",     label: "Sublime Text",  openWith: "Sublime Text",        kind: "gui",      icon: FileCode, color: "text-amber-400" },
+  { id: "textmate",    label: "TextMate",      openWith: "TextMate",            kind: "gui",      icon: FileText, color: "text-neutral-300" },
+  { id: "iterm2",      label: "iTerm",         openWith: "iTerm",               kind: "terminal", icon: Terminal, color: "text-emerald-400" },
+  { id: "warp",        label: "Warp",          openWith: "Warp",                kind: "terminal", icon: Terminal, color: "text-violet-400" },
+  { id: "ghostty",     label: "Ghostty",       openWith: "Ghostty",             kind: "terminal", icon: Terminal, color: "text-fuchsia-400" },
+  { id: "terminal",    label: "Terminal",      openWith: "Terminal",            kind: "terminal", icon: Terminal, color: "text-neutral-400" },
 ] as const;
 
 export const FINDER_APP: OpenInApp = {
@@ -29,7 +48,8 @@ export const FINDER_APP: OpenInApp = {
   label: "Finder",
   openWith: "Finder",
   kind: "finder",
-  color: "bg-cyan-500",
+  icon: Folder,
+  color: "text-cyan-400",
 };
 
 const STORAGE_KEY = "openIn.app";

@@ -68,25 +68,36 @@ export function FilePreview(props: Props) {
     ),
   );
 
-  // Scroll to requested line after render. We find the line span by data attr
-  // (Shiki emits `.line` per line); fall back to index-based offset.
+  // Scroll to requested line once Shiki HTML is in the DOM. Tracked signals:
+  // `html()` so we re-run when the code swaps, `loading()` so we don't target
+  // stale DOM, `props.line` so re-opening the same tab with a new line works.
   createEffect(() => {
     const want = props.line;
-    if (!want || !codeHost || !scrollHost || loading()) return;
-    requestAnimationFrame(() => {
-      const host = codeHost!;
-      const target = host.querySelectorAll("code .line")[want - 1] as
-        | HTMLElement
-        | undefined;
-      if (target) {
-        const hostRect = scrollHost!.getBoundingClientRect();
-        const tRect = target.getBoundingClientRect();
-        scrollHost!.scrollTop += tRect.top - hostRect.top - 60;
-        target.classList.add("preview-line-flash");
-        setTimeout(() => target.classList.remove("preview-line-flash"), 1200);
+    const code = html();
+    if (!want || !code || !scrollHost || !codeHost || loading()) return;
+    let attempts = 0;
+    const tryScroll = () => {
+      const host = codeHost;
+      if (!host) return;
+      // Shiki v3 default: `<pre class="shiki"><code><span class="line">…`.
+      // Some languages can emit extra wrapper nodes, so match `.line` anywhere
+      // under the preview root.
+      const lines = host.querySelectorAll<HTMLElement>(".line");
+      const target = lines[want - 1];
+      if (!target) {
+        // DOM not ready yet — retry a couple frames.
+        if (attempts++ < 4) requestAnimationFrame(tryScroll);
+        return;
       }
+      target.scrollIntoView({ block: "center" });
+      target.classList.add("preview-line-flash");
+      window.setTimeout(
+        () => target.classList.remove("preview-line-flash"),
+        1200,
+      );
       panel.clearFocus();
-    });
+    };
+    requestAnimationFrame(tryScroll);
   });
 
   onCleanup(() => {

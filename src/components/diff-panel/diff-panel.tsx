@@ -1,7 +1,18 @@
-import { ChevronsDownUp, ChevronsUpDown, FileText, GitBranch, X } from "lucide-solid";
-import { createMemo, For, Match, Show, Switch } from "solid-js";
+import {
+  ChevronsDownUp,
+  ChevronsUpDown,
+  Copy,
+  FileText,
+  FolderOpen,
+  GitBranch,
+  X,
+  XCircle,
+} from "lucide-solid";
+import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { useDiffPanel, tabKey, type PanelTab } from "@/context/diff-panel";
 import { useGit } from "@/context/git";
+import { useOpenIn } from "@/context/open-in";
+import { ContextMenu, type ContextMenuItem } from "@/components/context-menu";
 import { DiffFileRow } from "./diff-file-row";
 import { FilePreview } from "./file-preview";
 
@@ -135,34 +146,123 @@ export function DiffPanel(props: Props) {
 
 function TabStrip(props: { projectPath: string }) {
   const panel = useDiffPanel();
+  const openIn = useOpenIn();
   const tabs = () => panel.tabsFor(props.projectPath);
   const activeKey = () => panel.activeKeyFor(props.projectPath);
 
+  const [menu, setMenu] = createSignal<
+    | { open: false }
+    | { open: true; x: number; y: number; key: string; rel: string }
+  >({ open: false });
+
+  function openMenu(e: MouseEvent, key: string, rel: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ open: true, x: e.clientX, y: e.clientY, key, rel });
+  }
+  function closeMenu() {
+    setMenu({ open: false });
+  }
+
+  function copyPath(rel: string) {
+    void navigator.clipboard
+      .writeText(absFor(rel))
+      .catch((err) => console.warn("clipboard write failed", err));
+  }
+
+  function absFor(rel: string): string {
+    const base = props.projectPath.endsWith("/")
+      ? props.projectPath.slice(0, -1)
+      : props.projectPath;
+    return `${base}/${rel}`;
+  }
+
+  const menuItems = (): ContextMenuItem[] => {
+    const m = menu();
+    if (!m.open) return [];
+    const items: ContextMenuItem[] = [];
+
+    items.push({
+      label: "Close tab",
+      icon: X,
+      onClick: () => panel.closeTab(props.projectPath, m.key),
+    });
+    items.push({
+      label: "Close other tabs",
+      icon: XCircle,
+      onClick: () => {
+        for (const t of panel.tabsFor(props.projectPath)) {
+          const k = tabKey(t);
+          if (k === m.key || k === "diff") continue;
+          panel.closeTab(props.projectPath, k);
+        }
+      },
+    });
+    items.push({ kind: "divider" });
+
+    const apps: ContextMenuItem[] = openIn.availableApps().map((app) => ({
+      label: app.label,
+      icon: app.icon,
+      iconClass: app.color,
+      onClick: () => void openIn.openPath(absFor(m.rel), app.id),
+    }));
+    items.push({
+      kind: "submenu",
+      label: "Open in",
+      icon: FolderOpen,
+      items: apps,
+    });
+    items.push({
+      label: "Copy path",
+      icon: Copy,
+      onClick: () => copyPath(m.rel),
+    });
+    return items;
+  };
+
   return (
-    <div class="h-9 shrink-0 flex items-stretch border-b border-neutral-800 bg-neutral-950 overflow-x-auto no-scrollbar">
-      <For each={tabs()}>
-        {(t) => {
-          const key = tabKey(t);
-          const isActive = () => activeKey() === key;
-          return (
-            <TabItem
-              tab={t}
-              active={isActive()}
-              onActivate={() => panel.setActiveTab(props.projectPath, key)}
-              onClose={() => panel.closeTab(props.projectPath, key)}
-            />
-          );
-        }}
-      </For>
-      <div class="flex-1" />
-      <button
-        class="w-9 shrink-0 text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 transition flex items-center justify-center"
-        title="Close diff panel (⌘⇧D)"
-        onClick={() => panel.close()}
-      >
-        <X size={14} strokeWidth={2} />
-      </button>
-    </div>
+    <>
+      <div class="h-9 shrink-0 flex items-stretch border-b border-neutral-800 bg-neutral-950 overflow-x-auto no-scrollbar">
+        <For each={tabs()}>
+          {(t) => {
+            const key = tabKey(t);
+            const isActive = () => activeKey() === key;
+            return (
+              <TabItem
+                tab={t}
+                active={isActive()}
+                onActivate={() => panel.setActiveTab(props.projectPath, key)}
+                onClose={() => panel.closeTab(props.projectPath, key)}
+                onContextMenu={(e) => {
+                  if (t.kind !== "file") return;
+                  openMenu(e, key, t.path);
+                }}
+              />
+            );
+          }}
+        </For>
+        <div class="flex-1" />
+        <button
+          class="w-9 shrink-0 text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 transition flex items-center justify-center"
+          title="Close diff panel (⌘⇧D)"
+          onClick={() => panel.close()}
+        >
+          <X size={14} strokeWidth={2} />
+        </button>
+      </div>
+      {(() => {
+        const m = menu();
+        return (
+          <ContextMenu
+            open={m.open}
+            x={m.open ? m.x : 0}
+            y={m.open ? m.y : 0}
+            items={menuItems()}
+            onClose={closeMenu}
+          />
+        );
+      })()}
+    </>
   );
 }
 
@@ -171,6 +271,7 @@ function TabItem(props: {
   active: boolean;
   onActivate: () => void;
   onClose: () => void;
+  onContextMenu?: (e: MouseEvent) => void;
 }) {
   const label = () => {
     if (props.tab.kind === "diff") return "Git changes";
@@ -186,6 +287,7 @@ function TabItem(props: {
           : "text-neutral-400 hover:bg-neutral-900/60 hover:text-neutral-200")
       }
       onClick={props.onActivate}
+      onContextMenu={props.onContextMenu}
     >
       <Show
         when={props.tab.kind === "diff"}

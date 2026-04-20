@@ -48,11 +48,16 @@ export function OpenInDropdown(props: Props) {
           class="h-full px-2 flex items-center gap-1.5 text-[11px] text-neutral-300 hover:text-neutral-100 hover:bg-neutral-800 transition"
           title={`Open in ${openIn.resolveCurrent().label}`}
         >
-          <span
-            class={
-              "inline-block w-3 h-3 rounded-sm " + openIn.resolveCurrent().color
-            }
-          />
+          {(() => {
+            const Icon = openIn.resolveCurrent().icon;
+            return (
+              <Icon
+                size={12}
+                strokeWidth={2}
+                class={"shrink-0 " + openIn.resolveCurrent().color}
+              />
+            );
+          })()}
           <span class="font-medium truncate max-w-[88px]">
             {openIn.resolveCurrent().label}
           </span>
@@ -74,13 +79,16 @@ export function OpenInDropdown(props: Props) {
           <For each={openIn.availableApps()}>
             {(app) => {
               const isActive = () => openIn.resolveCurrent().id === app.id;
+              const Icon = app.icon;
               return (
                 <button
                   class="w-full px-3 py-1.5 flex items-center gap-2.5 text-left text-neutral-200 hover:bg-neutral-800 transition"
                   onClick={() => openWith(app)}
                 >
-                  <span
-                    class={"inline-block w-3.5 h-3.5 rounded-sm shrink-0 " + app.color}
+                  <Icon
+                    size={14}
+                    strokeWidth={2}
+                    class={"shrink-0 " + app.color}
                   />
                   <span class="flex-1 truncate">{app.label}</span>
                   <Show when={isActive()}>

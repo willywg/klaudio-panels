@@ -10,9 +10,11 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { Copy, Eye, FolderOpen } from "lucide-solid";
 import { ContextMenu, type ContextMenuItem } from "@/components/context-menu";
 import { useGit } from "@/context/git";
 import { useDiffPanel } from "@/context/diff-panel";
+import { useOpenIn } from "@/context/open-in";
 import { TreeNode } from "./tree-node";
 import { makeFileTreeStore, type FsEvent } from "./use-file-tree";
 
@@ -45,6 +47,7 @@ export function FileTree(props: Props) {
 
   const git = useGit();
   const diffPanel = useDiffPanel();
+  const openIn = useOpenIn();
 
   // Memoized store follows the prop — switching projects swaps the store.
   const store = createMemo(() => getStore(props.projectPath));
@@ -142,10 +145,41 @@ export function FileTree(props: Props) {
   const menuItems = (): ContextMenuItem[] => {
     const m = menu();
     if (!m.open) return [];
-    return [
-      { label: "Copy path", onClick: () => void copyPath(m.path) },
-      { label: "Reveal in Finder", onClick: () => void reveal(m.path) },
-    ];
+    const items: ContextMenuItem[] = [];
+
+    if (!m.isDir) {
+      items.push({
+        label: "Open in preview",
+        icon: Eye,
+        onClick: () => diffPanel.openFile(props.projectPath, toRel(m.path)),
+      });
+    }
+
+    const openInItems: ContextMenuItem[] = openIn.availableApps().map((app) => ({
+      label: app.label,
+      icon: app.icon,
+      iconClass: app.color,
+      onClick: () => void openIn.openPath(m.path, app.id),
+    }));
+    items.push({
+      kind: "submenu",
+      label: "Open in",
+      icon: FolderOpen,
+      items: openInItems,
+    });
+
+    items.push({ kind: "divider" });
+    items.push({
+      label: "Copy path",
+      icon: Copy,
+      onClick: () => void copyPath(m.path),
+    });
+    items.push({
+      label: "Reveal in Finder",
+      icon: FolderOpen,
+      onClick: () => void reveal(m.path),
+    });
+    return items;
   };
 
   return (
