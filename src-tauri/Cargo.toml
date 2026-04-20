@@ -30,3 +30,4 @@ notify = "8"
 notify-debouncer-full = "0.6"
 ignore = "0.4"
 lru = "0.14"
+git2 = { version = "0.20", default-features = false }

@@ -28,6 +28,10 @@ import {
   SessionWatcherProvider,
   useSessionWatcher,
 } from "@/context/session-watcher";
+import { GitProvider, useGit } from "@/context/git";
+import { DiffPanelProvider, useDiffPanel } from "@/context/diff-panel";
+import { DiffPanel } from "@/components/diff-panel/diff-panel";
+import { SplitDivider } from "@/components/diff-panel/split-pane";
 import { displayLabel } from "@/lib/session-label";
 
 const AUTO_RESUME_FAIL_WINDOW_MS = 2000;
@@ -41,6 +45,9 @@ function Shell() {
   const projects = useProjects();
   const sidebar = useSidebar();
   const sessionWatcher = useSessionWatcher();
+  const git = useGit();
+  const diffPanel = useDiffPanel();
+  let splitContainerRef!: HTMLDivElement;
 
   // Remembered active tab per project. Set BEFORE changing activeProjectPath
   // (inside setActiveProjectPath) so it's never wrong when the switch effect
@@ -124,20 +131,39 @@ function Shell() {
     if (p) projects.touch(p);
   });
 
-  // Cmd+B toggles the sidebar from anywhere. xterm.js may consume the event
-  // first when the terminal is focused; we listen on window so the bubble
-  // phase fires — xterm doesn't stopPropagation on keystrokes it forwards to
-  // the PTY, so this works in both focused and unfocused states.
+  // Cmd+B toggles the sidebar, Cmd+Shift+D toggles the diff panel. Listening
+  // on window (bubble phase) so xterm.js forwarding the keystroke to the PTY
+  // doesn't stop us from acting too.
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key === "b") {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && !e.shiftKey && !e.altKey && e.key === "b") {
         e.preventDefault();
         sidebar.toggleCollapsed();
+        return;
+      }
+      if (mod && e.shiftKey && !e.altKey && (e.key === "d" || e.key === "D")) {
+        e.preventDefault();
+        if (activeProjectPath()) diffPanel.toggle();
       }
     };
     window.addEventListener("keydown", onKey);
     onCleanup(() => window.removeEventListener("keydown", onKey));
   });
+
+  // Prime git status + summary for the active project. GitProvider itself
+  // subscribes to fs:event:<projectPath> on first ensureFor.
+  createEffect(
+    on(activeProjectPath, (p) => {
+      if (p) void git.ensureFor(p);
+    }),
+  );
+
+  // Close the diff panel on project switch so it never shows stale content
+  // from the previous project. Width (per-project) is still persisted.
+  createEffect(
+    on(activeProjectPath, () => diffPanel.close(), { defer: true }),
+  );
 
   const projectTabs = createMemo(() => {
     const p = activeProjectPath();
@@ -362,7 +388,10 @@ function Shell() {
 
   return (
     <div class="h-screen w-screen flex flex-col bg-neutral-950 text-neutral-200 overflow-hidden">
-      <Titlebar hasActiveProject={activeProjectPath() !== null} />
+      <Titlebar
+        hasActiveProject={activeProjectPath() !== null}
+        activeProjectPath={activeProjectPath()}
+      />
       <main class="flex-1 flex min-h-0 overflow-hidden">
       <ProjectsSidebar
         activePath={activeProjectPath()}
@@ -395,48 +424,73 @@ function Shell() {
             filesContent={<FileTree projectPath={activeProjectPath()!} />}
           />
 
-          <section class="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
-            <TabStrip
-              tabs={projectTabs()}
-              activeTabId={term.store.activeTabId}
-              onActivate={handleActivateTab}
-              onClose={(id) => void handleCloseTab(id)}
-              onNew={() => void openNewTab()}
-              canOpenNew={!anyTabOpeningForActive()}
-            />
-            <div class="relative flex-1 min-h-0 overflow-hidden">
-              <For each={term.store.tabs}>
-                {(tab) => {
-                  const isActive = () => tab.id === term.store.activeTabId;
-                  const isForActiveProject = () =>
-                    tab.projectPath === activeProjectPath();
-                  const visible = () => isActive() && isForActiveProject();
-                  return (
-                    <div
-                      class="absolute inset-0 flex flex-col"
-                      style={{
-                        visibility: visible() ? "visible" : "hidden",
-                        "pointer-events": visible() ? "auto" : "none",
-                        "z-index": visible() ? 1 : 0,
-                      }}
-                    >
-                      <Show
-                        when={tab.status !== "opening"}
-                        fallback={<LoadingPanel label={tab.label} />}
+          <div
+            ref={splitContainerRef}
+            class="flex-1 flex min-w-0 min-h-0 overflow-hidden"
+          >
+            <section class="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
+              <TabStrip
+                tabs={projectTabs()}
+                activeTabId={term.store.activeTabId}
+                onActivate={handleActivateTab}
+                onClose={(id) => void handleCloseTab(id)}
+                onNew={() => void openNewTab()}
+                canOpenNew={!anyTabOpeningForActive()}
+              />
+              <div class="relative flex-1 min-h-0 overflow-hidden">
+                <For each={term.store.tabs}>
+                  {(tab) => {
+                    const isActive = () => tab.id === term.store.activeTabId;
+                    const isForActiveProject = () =>
+                      tab.projectPath === activeProjectPath();
+                    const visible = () => isActive() && isForActiveProject();
+                    return (
+                      <div
+                        class="absolute inset-0 flex flex-col"
+                        style={{
+                          visibility: visible() ? "visible" : "hidden",
+                          "pointer-events": visible() ? "auto" : "none",
+                          "z-index": visible() ? 1 : 0,
+                        }}
                       >
-                        <TerminalView id={tab.id} active={visible()} />
-                      </Show>
-                    </div>
-                  );
-                }}
-              </For>
-              <Show when={projectTabs().length === 0}>
-                <div class="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm">
-                  Pick a session or start a new one.
-                </div>
-              </Show>
-            </div>
-          </section>
+                        <Show
+                          when={tab.status !== "opening"}
+                          fallback={<LoadingPanel label={tab.label} />}
+                        >
+                          <TerminalView id={tab.id} active={visible()} />
+                        </Show>
+                      </div>
+                    );
+                  }}
+                </For>
+                <Show when={projectTabs().length === 0}>
+                  <div class="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm">
+                    Pick a session or start a new one.
+                  </div>
+                </Show>
+              </div>
+            </section>
+            <Show when={diffPanel.isOpen() && activeProjectPath()}>
+              {(p) => (
+                <>
+                  <SplitDivider
+                    width={diffPanel.widthFor(p())}
+                    onResize={(w) => diffPanel.setWidth(p(), w)}
+                    onResizeEnd={(w) => diffPanel.setWidth(p(), w)}
+                    getParentRect={() =>
+                      splitContainerRef.getBoundingClientRect()
+                    }
+                  />
+                  <div
+                    class="shrink-0 min-h-0 flex flex-col overflow-hidden"
+                    style={{ width: `${diffPanel.widthFor(p())}px` }}
+                  >
+                    <DiffPanel projectPath={p()} />
+                  </div>
+                </>
+              )}
+            </Show>
+          </div>
         </div>
       </Show>
       </main>
@@ -466,11 +520,15 @@ export default function App() {
   return (
     <ProjectsProvider>
       <SidebarProvider>
-        <TerminalProvider>
-          <SessionWatcherProvider>
-            <Shell />
-          </SessionWatcherProvider>
-        </TerminalProvider>
+        <GitProvider>
+          <DiffPanelProvider>
+            <TerminalProvider>
+              <SessionWatcherProvider>
+                <Shell />
+              </SessionWatcherProvider>
+            </TerminalProvider>
+          </DiffPanelProvider>
+        </GitProvider>
       </SidebarProvider>
     </ProjectsProvider>
   );

@@ -1,5 +1,6 @@
 pub mod binary;
 pub mod fs;
+pub mod git;
 pub mod pty;
 pub mod session_watcher;
 pub mod sessions;
@@ -31,6 +32,9 @@ pub fn run() {
             fs::list_dir,
             fs::watch_project,
             fs::unwatch_project,
+            git::git_status,
+            git::git_summary,
+            git::git_diff_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
