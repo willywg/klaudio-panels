@@ -1,13 +1,17 @@
+import { Show } from "solid-js";
 import { ChevronRight, Folder, FolderOpen } from "lucide-solid";
 import { iconForFile } from "@/lib/file-icon";
+import { BADGE_COLOR, BADGE_LETTER, type FileStatus } from "@/lib/git-status";
 import type { TreeNode as TreeNodeType } from "./use-file-tree";
 
 type Props = {
   node: TreeNodeType;
   depth: number;
   selected: boolean;
+  status?: FileStatus;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
+  onOpen: (path: string) => void;
   onContextMenu: (e: MouseEvent, path: string, isDir: boolean) => void;
 };
 
@@ -22,9 +26,17 @@ export function TreeNode(props: Props) {
     }
   }
 
+  function onDblClick(e: MouseEvent) {
+    e.preventDefault();
+    if (!props.node.isDir) {
+      props.onOpen(props.node.path);
+    }
+  }
+
   return (
     <button
       onClick={onClick}
+      onDblClick={onDblClick}
       onContextMenu={(e) => {
         e.preventDefault();
         props.onContextMenu(e, props.node.path, props.node.isDir);
@@ -64,6 +76,19 @@ export function TreeNode(props: Props) {
         </>
       )}
       <span class="truncate">{props.node.name}</span>
+      <Show when={props.status}>
+        {(s) => (
+          <span
+            class={
+              "ml-auto pl-2 text-[10px] font-mono font-bold shrink-0 " +
+              BADGE_COLOR[s().kind]
+            }
+            title={`${s().kind} (+${s().adds} −${s().dels})`}
+          >
+            {BADGE_LETTER[s().kind]}
+          </span>
+        )}
+      </Show>
     </button>
   );
 }

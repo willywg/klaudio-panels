@@ -1,9 +1,11 @@
 import { Show } from "solid-js";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-solid";
 import { useSidebar } from "@/context/sidebar";
+import { GitSummaryPill } from "@/components/git-summary-pill";
 
 type Props = {
   hasActiveProject: boolean;
+  activeProjectPath: string | null;
 };
 
 /** Custom titlebar: 40px height, draggable via `data-tauri-drag-region`.
@@ -41,6 +43,14 @@ export function Titlebar(props: Props) {
 
       {/* Remaining space stays draggable. */}
       <div class="flex-1 h-full" data-tauri-drag-region />
+
+      <Show when={props.activeProjectPath}>
+        {(p) => (
+          <div class="shrink-0 pr-2">
+            <GitSummaryPill projectPath={p()} />
+          </div>
+        )}
+      </Show>
     </header>
   );
 }

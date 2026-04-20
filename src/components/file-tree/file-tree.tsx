@@ -11,6 +11,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { ContextMenu, type ContextMenuItem } from "@/components/context-menu";
+import { useGit } from "@/context/git";
+import { useDiffPanel } from "@/context/diff-panel";
 import { TreeNode } from "./tree-node";
 import { makeFileTreeStore, type FsEvent } from "./use-file-tree";
 
@@ -41,8 +43,27 @@ export function FileTree(props: Props) {
   >({ open: false });
   const [error, setError] = createSignal<string | null>(null);
 
+  const git = useGit();
+  const diffPanel = useDiffPanel();
+
   // Memoized store follows the prop — switching projects swaps the store.
   const store = createMemo(() => getStore(props.projectPath));
+
+  // Git status keyed by absolute path. Reruns whenever the git store patches
+  // (re-fetched on fs events).
+  const statusMap = createMemo(() => git.statusByAbsPath(props.projectPath));
+
+  function toRel(abs: string): string {
+    const base = props.projectPath.endsWith("/")
+      ? props.projectPath.slice(0, -1)
+      : props.projectPath;
+    if (abs.startsWith(base + "/")) return abs.slice(base.length + 1);
+    return abs;
+  }
+
+  function handleOpen(abs: string) {
+    diffPanel.focusFile(toRel(abs));
+  }
 
   // Per-project listener + watcher. Rebinds when projectPath changes so that
   // the user sees project B's tree (and events) immediately after switching
@@ -135,8 +156,10 @@ export function FileTree(props: Props) {
               node={row.node}
               depth={row.depth}
               selected={selected() === row.node.path}
+              status={statusMap().get(row.node.path)}
               onToggle={(path) => void store().toggleDir(path)}
               onSelect={(path) => setSelected(path)}
+              onOpen={handleOpen}
               onContextMenu={openContextMenu}
             />
           )}
