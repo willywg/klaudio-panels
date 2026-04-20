@@ -30,6 +30,7 @@ import {
 } from "@/context/session-watcher";
 import { GitProvider, useGit } from "@/context/git";
 import { DiffPanelProvider, useDiffPanel } from "@/context/diff-panel";
+import { OpenInProvider } from "@/context/open-in";
 import { DiffPanel } from "@/components/diff-panel/diff-panel";
 import { SplitDivider } from "@/components/diff-panel/split-pane";
 import { displayLabel } from "@/lib/session-label";
@@ -145,6 +146,17 @@ function Shell() {
       if (mod && e.shiftKey && !e.altKey && (e.key === "d" || e.key === "D")) {
         e.preventDefault();
         if (activeProjectPath()) diffPanel.toggle();
+      }
+      // Cmd+W closes the active file-preview tab in the diff panel. Only
+      // when the panel is open and a file tab is active — otherwise Cmd+W
+      // is left alone for future tab-close wiring.
+      if (mod && !e.shiftKey && !e.altKey && e.key === "w") {
+        const p = activeProjectPath();
+        if (!p || !diffPanel.isOpen()) return;
+        const key = diffPanel.activeKeyFor(p);
+        if (key === "diff") return;
+        e.preventDefault();
+        diffPanel.closeActiveTab(p);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -372,6 +384,7 @@ function Shell() {
     }
     activeByProject.delete(path);
     autoResumed.delete(path);
+    diffPanel.clearProject(path);
     // Don't clear lastSessionId — keep it so next time the user re-pins from
     // Home, auto-resume picks up where they left off.
     projects.unpin(path);
@@ -522,11 +535,13 @@ export default function App() {
       <SidebarProvider>
         <GitProvider>
           <DiffPanelProvider>
-            <TerminalProvider>
-              <SessionWatcherProvider>
-                <Shell />
-              </SessionWatcherProvider>
-            </TerminalProvider>
+            <OpenInProvider>
+              <TerminalProvider>
+                <SessionWatcherProvider>
+                  <Shell />
+                </SessionWatcherProvider>
+              </TerminalProvider>
+            </OpenInProvider>
           </DiffPanelProvider>
         </GitProvider>
       </SidebarProvider>

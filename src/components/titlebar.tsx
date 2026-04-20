@@ -2,6 +2,7 @@ import { Show } from "solid-js";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-solid";
 import { useSidebar } from "@/context/sidebar";
 import { GitSummaryPill } from "@/components/git-summary-pill";
+import { OpenInDropdown } from "@/components/open-in-dropdown";
 
 type Props = {
   hasActiveProject: boolean;
@@ -46,8 +47,9 @@ export function Titlebar(props: Props) {
 
       <Show when={props.activeProjectPath}>
         {(p) => (
-          <div class="shrink-0 pr-2">
+          <div class="shrink-0 pr-2 flex items-center gap-2">
             <GitSummaryPill projectPath={p()} />
+            <OpenInDropdown path={p()} />
           </div>
         )}
       </Show>

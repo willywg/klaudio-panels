@@ -62,7 +62,13 @@ export function FileTree(props: Props) {
   }
 
   function handleOpen(abs: string) {
-    diffPanel.focusFile(toRel(abs));
+    const rel = toRel(abs);
+    const map = statusMap();
+    if (map.has(abs)) {
+      diffPanel.focusFile(props.projectPath, rel);
+    } else {
+      diffPanel.openFile(props.projectPath, rel);
+    }
   }
 
   // Per-project listener + watcher. Rebinds when projectPath changes so that

@@ -6,6 +6,8 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { useTerminal } from "@/context/terminal";
+import { useDiffPanel } from "@/context/diff-panel";
+import { makeFileLinkProvider } from "@/lib/xterm-file-links";
 
 const THEME = {
   background: "#0b0b0c",
@@ -41,12 +43,14 @@ type Props = {
 
 export function TerminalView(props: Props) {
   const ctx = useTerminal();
+  const diffPanel = useDiffPanel();
   let container: HTMLDivElement | undefined;
   let term: Terminal | undefined;
   let fit: FitAddon | undefined;
   let resizeObs: ResizeObserver | undefined;
   let detachData: (() => void) | undefined;
   let detachExit: (() => void) | undefined;
+  let linkDisposable: { dispose: () => void } | undefined;
   let fitDebounce: number | undefined;
 
   const encoder = new TextEncoder();
@@ -136,6 +140,16 @@ export function TerminalView(props: Props) {
       term?.writeln(`\x1b[2m\r\n[claude exited with code ${code}]\x1b[0m`);
     });
 
+    // Cmd/Ctrl+click on `src/foo.ts` or `src/foo.ts:42` opens a preview tab.
+    // Uses xterm's native link provider API so we never parse the PTY buffer
+    // ourselves beyond extracting the text under the cursor.
+    const linkProvider = makeFileLinkProvider(term, ({ rel, line }) => {
+      const tab = ctx.getTab(props.id);
+      if (!tab) return;
+      diffPanel.openFile(tab.projectPath, normalizeRel(rel), line);
+    });
+    linkDisposable = term.registerLinkProvider(linkProvider);
+
     resizeObs = new ResizeObserver(() => {
       if (fitDebounce) window.clearTimeout(fitDebounce);
       fitDebounce = window.setTimeout(() => safeFit(), 50);
@@ -165,6 +179,7 @@ export function TerminalView(props: Props) {
     if (fitDebounce) window.clearTimeout(fitDebounce);
     detachData?.();
     detachExit?.();
+    linkDisposable?.dispose();
     term?.dispose();
     // NOTE: intentionally NOT calling ctx.closeTab here — unmounting the view
     // (e.g. changing project) is separate from killing the PTY. The shell owns
@@ -172,6 +187,11 @@ export function TerminalView(props: Props) {
   });
 
   const tab = () => ctx.getTab(props.id);
+
+  function normalizeRel(rel: string): string {
+    if (rel.startsWith("./")) return rel.slice(2);
+    return rel;
+  }
 
   return (
     <div class="h-full w-full flex flex-col min-h-0 overflow-hidden">
