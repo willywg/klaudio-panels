@@ -158,6 +158,7 @@ export function FileTree(props: Props) {
     const openInItems: ContextMenuItem[] = openIn.availableApps().map((app) => ({
       label: app.label,
       icon: app.icon,
+      iconUrl: openIn.iconUrlFor(app.id) ?? undefined,
       iconClass: app.color,
       onClick: () => void openIn.openPath(m.path, app.id),
     }));

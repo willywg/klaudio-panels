@@ -39,6 +39,7 @@ pub fn run() {
             git::git_diff_file,
             open_in::check_app_exists,
             open_in::open_path_with,
+            open_in::get_app_icon,
             file_read::read_file_bytes,
         ])
         .run(tauri::generate_context!())

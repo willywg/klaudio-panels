@@ -21,9 +21,33 @@ function makeOpenInContext() {
   const [exists, setExists] = createStore<Record<string, boolean | undefined>>({
     [FINDER_APP.id]: true,
   });
+  /** Real .app icon rendered to a PNG data URL. Populated lazily per app
+   *  after `check_app_exists` reports the app is present. `undefined` =
+   *  not yet fetched; `null` = fetch failed (fall back to Lucide). */
+  const [iconUrls, setIconUrls] = createStore<
+    Record<string, string | null | undefined>
+  >({});
   const [lastAppId, setLastAppIdSignal] = createSignal<string>(getLastOpenInApp());
 
+  async function hydrateIcon(app: OpenInApp) {
+    // Finder ships as a system app — fetch its icon too so the dropdown avatar
+    // is the real Finder blue/teal face.
+    try {
+      const url = await invoke<string>("get_app_icon", {
+        appName: app.openWith,
+      });
+      setIconUrls(app.id, url);
+    } catch {
+      setIconUrls(app.id, null);
+    }
+  }
+
   onMount(() => {
+    // Finder's .app lives under /System/Library/CoreServices so the usual
+    // /Applications probe misses it. We still fetch the icon through
+    // NSWorkspace which resolves it from the bundle identifier.
+    void hydrateIcon(FINDER_APP);
+
     void (async () => {
       const results = await Promise.all(
         MAC_APPS.map(async (app) => {
@@ -31,13 +55,16 @@ function makeOpenInContext() {
             const ok = await invoke<boolean>("check_app_exists", {
               appName: app.openWith,
             });
-            return [app.id, ok] as const;
+            return [app, ok] as const;
           } catch {
-            return [app.id, false] as const;
+            return [app, false] as const;
           }
         }),
       );
-      for (const [id, ok] of results) setExists(id, ok);
+      for (const [app, ok] of results) {
+        setExists(app.id, ok);
+        if (ok) void hydrateIcon(app);
+      }
     })();
   });
 
@@ -64,6 +91,12 @@ function makeOpenInContext() {
     return list.find((a) => a.id === id) ?? FINDER_APP;
   }
 
+  /** Real .app icon URL (PNG data URL) if available; otherwise `null`. */
+  function iconUrlFor(appId: string): string | null {
+    const v = iconUrls[appId];
+    return typeof v === "string" ? v : null;
+  }
+
   async function openPath(absPath: string, appId?: string): Promise<void> {
     const id = appId ?? lastAppId();
     if (id !== lastAppId()) setLastApp(id);
@@ -87,6 +120,7 @@ function makeOpenInContext() {
     setLastApp,
     resolveCurrent,
     openPath,
+    iconUrlFor,
   };
 }
 

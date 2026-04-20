@@ -2,23 +2,25 @@ import { For, Match, Show, Switch, createSignal, onCleanup, onMount } from "soli
 import { ChevronRight, type LucideProps } from "lucide-solid";
 import type { Component } from "solid-js";
 
+type IconFields = {
+  icon?: Component<LucideProps>;
+  iconUrl?: string;
+  iconClass?: string;
+};
+
 export type ContextMenuItem =
-  | {
+  | ({
       kind?: "action";
       label: string;
-      icon?: Component<LucideProps>;
-      iconClass?: string;
       onClick: () => void;
       disabled?: boolean;
-    }
+    } & IconFields)
   | { kind: "divider" }
-  | {
+  | ({
       kind: "submenu";
       label: string;
-      icon?: Component<LucideProps>;
-      iconClass?: string;
       items: ContextMenuItem[];
-    };
+    } & IconFields);
 
 type Props = {
   open: boolean;
@@ -90,11 +92,47 @@ function MenuBody(props: { items: ContextMenuItem[]; onClose: () => void }) {
   );
 }
 
+function ItemIcon(props: { icon?: IconFields }) {
+  const fields = () => props.icon ?? {};
+  const url = () => fields().iconUrl;
+  const Icon = () => fields().icon;
+  return (
+    <Show
+      when={url()}
+      fallback={
+        <Show
+          when={Icon()}
+          fallback={<span class="w-3.5 h-3.5 shrink-0" aria-hidden="true" />}
+        >
+          {(I) => {
+            const C = I();
+            return (
+              <C
+                size={14}
+                strokeWidth={2}
+                class={"shrink-0 " + (fields().iconClass ?? "text-neutral-400")}
+              />
+            );
+          }}
+        </Show>
+      }
+    >
+      {(src) => (
+        <img
+          src={src()}
+          alt=""
+          class="shrink-0 rounded-sm"
+          style={{ width: "14px", height: "14px" }}
+        />
+      )}
+    </Show>
+  );
+}
+
 function ActionRow(props: {
   item: Extract<ContextMenuItem, { kind?: "action" }>;
   onClose: () => void;
 }) {
-  const Icon = () => props.item.icon;
   return (
     <button
       class={
@@ -110,21 +148,7 @@ function ActionRow(props: {
         props.onClose();
       }}
     >
-      <Show
-        when={Icon()}
-        fallback={<span class="w-3.5 h-3.5 shrink-0" aria-hidden="true" />}
-      >
-        {(I) => {
-          const C = I();
-          return (
-            <C
-              size={14}
-              strokeWidth={2}
-              class={"shrink-0 " + (props.item.iconClass ?? "text-neutral-400")}
-            />
-          );
-        }}
-      </Show>
+      <ItemIcon icon={props.item} />
       <span class="flex-1 truncate">{props.item.label}</span>
     </button>
   );
@@ -135,32 +159,15 @@ function SubmenuRow(props: {
   onClose: () => void;
 }) {
   const [open, setOpen] = createSignal(false);
-  let rowRef: HTMLDivElement | undefined;
-  const Icon = () => props.item.icon;
 
   return (
     <div
-      ref={rowRef}
       class="relative"
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
     >
       <div class="w-full px-3 py-1.5 flex items-center gap-2.5 text-left text-neutral-200 hover:bg-neutral-800 transition cursor-default">
-        <Show
-          when={Icon()}
-          fallback={<span class="w-3.5 h-3.5 shrink-0" aria-hidden="true" />}
-        >
-          {(I) => {
-            const C = I();
-            return (
-              <C
-                size={14}
-                strokeWidth={2}
-                class={"shrink-0 " + (props.item.iconClass ?? "text-neutral-400")}
-              />
-            );
-          }}
-        </Show>
+        <ItemIcon icon={props.item} />
         <span class="flex-1 truncate">{props.item.label}</span>
         <ChevronRight size={12} strokeWidth={2} class="text-neutral-500 shrink-0" />
       </div>

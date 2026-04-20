@@ -27,20 +27,31 @@ export type OpenInApp = {
 
 /** macOS apps we try to detect. Terminal-only CLI editors (nvim, helix) are
  *  deliberately excluded — `open -a nvim` fails silently because they ship
- *  no .app bundle. They land in Sprint 06 via a secondary PTY preview pane. */
+ *  no .app bundle. They land in Sprint 06 via a secondary PTY preview pane.
+ *
+ *  The `icon` + `color` here are the Lucide fallback rendered while the real
+ *  .app icon is being extracted (or if extraction fails). */
 export const MAC_APPS: readonly OpenInApp[] = [
-  { id: "vscode",      label: "VS Code",       openWith: "Visual Studio Code", kind: "gui",      icon: Code2,    color: "text-sky-400" },
-  { id: "cursor",      label: "Cursor",        openWith: "Cursor",              kind: "gui",      icon: Code2,    color: "text-neutral-200" },
-  { id: "windsurf",    label: "Windsurf",      openWith: "Windsurf",            kind: "gui",      icon: Wind,     color: "text-teal-400" },
-  { id: "antigravity", label: "Antigravity",   openWith: "Antigravity",         kind: "gui",      icon: Sparkles, color: "text-emerald-400" },
-  { id: "zed",         label: "Zed",           openWith: "Zed",                 kind: "gui",      icon: Code2,    color: "text-orange-400" },
-  { id: "xcode",       label: "Xcode",         openWith: "Xcode",               kind: "gui",      icon: Hammer,   color: "text-sky-500" },
-  { id: "sublime",     label: "Sublime Text",  openWith: "Sublime Text",        kind: "gui",      icon: FileCode, color: "text-amber-400" },
-  { id: "textmate",    label: "TextMate",      openWith: "TextMate",            kind: "gui",      icon: FileText, color: "text-neutral-300" },
-  { id: "iterm2",      label: "iTerm",         openWith: "iTerm",               kind: "terminal", icon: Terminal, color: "text-emerald-400" },
-  { id: "warp",        label: "Warp",          openWith: "Warp",                kind: "terminal", icon: Terminal, color: "text-violet-400" },
-  { id: "ghostty",     label: "Ghostty",       openWith: "Ghostty",             kind: "terminal", icon: Terminal, color: "text-fuchsia-400" },
-  { id: "terminal",    label: "Terminal",      openWith: "Terminal",            kind: "terminal", icon: Terminal, color: "text-neutral-400" },
+  { id: "vscode",          label: "VS Code",         openWith: "Visual Studio Code", kind: "gui",      icon: Code2,    color: "text-sky-400" },
+  { id: "cursor",          label: "Cursor",          openWith: "Cursor",              kind: "gui",      icon: Code2,    color: "text-neutral-200" },
+  { id: "windsurf",        label: "Windsurf",        openWith: "Windsurf",            kind: "gui",      icon: Wind,     color: "text-teal-400" },
+  { id: "antigravity",     label: "Antigravity",     openWith: "Antigravity",         kind: "gui",      icon: Sparkles, color: "text-emerald-400" },
+  { id: "zed",             label: "Zed",             openWith: "Zed",                 kind: "gui",      icon: Code2,    color: "text-orange-400" },
+  { id: "xcode",           label: "Xcode",           openWith: "Xcode",               kind: "gui",      icon: Hammer,   color: "text-sky-500" },
+  { id: "android-studio",  label: "Android Studio",  openWith: "Android Studio",      kind: "gui",      icon: Code2,    color: "text-emerald-400" },
+  { id: "intellij",        label: "IntelliJ IDEA",   openWith: "IntelliJ IDEA",       kind: "gui",      icon: Code2,    color: "text-fuchsia-400" },
+  { id: "webstorm",        label: "WebStorm",        openWith: "WebStorm",            kind: "gui",      icon: Code2,    color: "text-cyan-400" },
+  { id: "pycharm",         label: "PyCharm",         openWith: "PyCharm",             kind: "gui",      icon: Code2,    color: "text-amber-300" },
+  { id: "fleet",           label: "Fleet",           openWith: "Fleet",               kind: "gui",      icon: Code2,    color: "text-indigo-300" },
+  { id: "rider",           label: "Rider",           openWith: "Rider",               kind: "gui",      icon: Code2,    color: "text-rose-400" },
+  { id: "sublime",         label: "Sublime Text",    openWith: "Sublime Text",        kind: "gui",      icon: FileCode, color: "text-amber-400" },
+  { id: "textmate",        label: "TextMate",        openWith: "TextMate",            kind: "gui",      icon: FileText, color: "text-neutral-300" },
+  { id: "nova",            label: "Nova",            openWith: "Nova",                kind: "gui",      icon: FileCode, color: "text-indigo-400" },
+  { id: "bbedit",          label: "BBEdit",          openWith: "BBEdit",              kind: "gui",      icon: FileText, color: "text-orange-300" },
+  { id: "iterm2",          label: "iTerm",           openWith: "iTerm",               kind: "terminal", icon: Terminal, color: "text-emerald-400" },
+  { id: "warp",            label: "Warp",            openWith: "Warp",                kind: "terminal", icon: Terminal, color: "text-violet-400" },
+  { id: "ghostty",         label: "Ghostty",         openWith: "Ghostty",             kind: "terminal", icon: Terminal, color: "text-fuchsia-400" },
+  { id: "terminal",        label: "Terminal",        openWith: "Terminal",            kind: "terminal", icon: Terminal, color: "text-neutral-400" },
 ] as const;
 
 export const FINDER_APP: OpenInApp = {

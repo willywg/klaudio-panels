@@ -2,6 +2,7 @@ import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 import { ChevronDown, Check, ExternalLink } from "lucide-solid";
 import { useOpenIn } from "@/context/open-in";
 import type { OpenInApp } from "@/lib/open-in";
+import { AppIcon } from "@/components/app-icon";
 
 type Props = {
   /** Absolute path to open. Usually the active project dir but generic. */
@@ -48,16 +49,7 @@ export function OpenInDropdown(props: Props) {
           class="h-full px-2 flex items-center gap-1.5 text-[11px] text-neutral-300 hover:text-neutral-100 hover:bg-neutral-800 transition"
           title={`Open in ${openIn.resolveCurrent().label}`}
         >
-          {(() => {
-            const Icon = openIn.resolveCurrent().icon;
-            return (
-              <Icon
-                size={12}
-                strokeWidth={2}
-                class={"shrink-0 " + openIn.resolveCurrent().color}
-              />
-            );
-          })()}
+          <AppIcon app={openIn.resolveCurrent()} size={14} />
           <span class="font-medium truncate max-w-[88px]">
             {openIn.resolveCurrent().label}
           </span>
@@ -79,17 +71,12 @@ export function OpenInDropdown(props: Props) {
           <For each={openIn.availableApps()}>
             {(app) => {
               const isActive = () => openIn.resolveCurrent().id === app.id;
-              const Icon = app.icon;
               return (
                 <button
                   class="w-full px-3 py-1.5 flex items-center gap-2.5 text-left text-neutral-200 hover:bg-neutral-800 transition"
                   onClick={() => openWith(app)}
                 >
-                  <Icon
-                    size={14}
-                    strokeWidth={2}
-                    class={"shrink-0 " + app.color}
-                  />
+                  <AppIcon app={app} size={16} />
                   <span class="flex-1 truncate">{app.label}</span>
                   <Show when={isActive()}>
                     <Check size={12} strokeWidth={2.25} class="text-neutral-400" />
