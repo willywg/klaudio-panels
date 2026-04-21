@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -242,9 +242,72 @@ export function TerminalView(props: Props) {
     return rel;
   }
 
+  function absToRel(abs: string, projectPath: string): string {
+    const base = projectPath.endsWith("/")
+      ? projectPath.slice(0, -1)
+      : projectPath;
+    if (abs === base) return ".";
+    if (abs.startsWith(base + "/")) return abs.slice(base.length + 1);
+    return abs;
+  }
+
+  const [isDragOver, setIsDragOver] = createSignal(false);
+
+  function onDragOver(e: DragEvent) {
+    const types = e.dataTransfer?.types;
+    if (!types) return;
+    // Only intercept drags from our own file tree. Lets the native WebView
+    // handle file/image drops from Finder (future: open-file flow).
+    if (
+      !types.includes("application/x-klaudio-file") &&
+      !types.includes("text/plain")
+    ) {
+      return;
+    }
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    if (!isDragOver()) setIsDragOver(true);
+  }
+
+  function onDragLeave(e: DragEvent) {
+    // Fires on every child hover-out; use the relatedTarget nullity (the
+    // pointer left the drop zone entirely) to distinguish the real leave.
+    if (e.currentTarget === e.target || !e.relatedTarget) setIsDragOver(false);
+  }
+
+  function onDrop(e: DragEvent) {
+    setIsDragOver(false);
+    const abs =
+      e.dataTransfer?.getData("application/x-klaudio-file") ||
+      e.dataTransfer?.getData("text/plain");
+    if (!abs) return;
+    e.preventDefault();
+    const t = tab();
+    if (!t) return;
+    const rel = absToRel(abs, t.projectPath);
+    // Claude Code reads `@<path>` in its prompt as a file reference (same
+    // syntax the user types). Trailing space so the cursor sits past the
+    // token, ready for a follow-up question.
+    const payload = `@${rel} `;
+    void ctx.write(props.id, encoder.encode(payload));
+    term?.focus();
+  }
+
   return (
-    <div class="h-full w-full flex flex-col min-h-0 overflow-hidden">
+    <div
+      class="h-full w-full flex flex-col min-h-0 overflow-hidden relative"
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
       <div ref={container} class="flex-1 min-h-0 min-w-0 overflow-hidden p-2" />
+      <Show when={isDragOver()}>
+        <div class="absolute inset-1 border-2 border-dashed border-indigo-400/60 rounded pointer-events-none flex items-center justify-center">
+          <div class="px-3 py-1.5 rounded bg-indigo-500/20 text-indigo-200 text-[12px] font-medium">
+            Drop to insert <span class="font-mono">@file</span> reference
+          </div>
+        </div>
+      </Show>
       <Show when={tab()?.error}>
         <div class="border-t border-red-900/50 bg-red-950/40 px-3 py-1.5 text-[11px] text-red-300 font-mono">
           {tab()!.error}

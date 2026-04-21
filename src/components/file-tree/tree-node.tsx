@@ -37,8 +37,22 @@ export function TreeNode(props: Props) {
     }
   }
 
+  function onDragStart(e: DragEvent) {
+    if (!e.dataTransfer) return;
+    // Absolute path in both text/plain (so other apps can read it) and a
+    // Klaudio-specific MIME so TerminalView's drop handler can tell our
+    // own drags apart from arbitrary browser drags. Path → relative
+    // conversion happens at the drop site, since only the target knows
+    // which project it belongs to.
+    e.dataTransfer.setData("text/plain", props.node.path);
+    e.dataTransfer.setData("application/x-klaudio-file", props.node.path);
+    e.dataTransfer.effectAllowed = "copy";
+  }
+
   return (
     <button
+      draggable={true}
+      onDragStart={onDragStart}
       onClick={onClick}
       onDblClick={onDblClick}
       onContextMenu={(e) => {
