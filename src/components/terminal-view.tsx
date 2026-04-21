@@ -96,7 +96,16 @@ export function TerminalView(props: Props) {
       console.warn("WebGL renderer unavailable; falling back to canvas.", err);
     }
 
+    // Multiple staggered fits — the single rAF call caches a narrow width on
+    // the very first project/session load because the split container is
+    // still settling (sidebar panel width, diff panel measurements). A
+    // follow-up at 180ms + 500ms catches the final width without waiting
+    // for the user to resize anything. Same belt-and-suspenders pattern as
+    // editor-pty-view.
+    document.fonts.ready.then(() => safeFit()).catch(() => {});
     requestAnimationFrame(() => safeFit());
+    window.setTimeout(() => safeFit(), 180);
+    window.setTimeout(() => safeFit(), 500);
 
     term.onData((data) => {
       // Drop focus-in / focus-out (CSI I / CSI O). xterm.js forwards these
@@ -115,6 +124,18 @@ export function TerminalView(props: Props) {
 
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
+      // Shift+Enter → send ESC+CR (`\x1b\r`). Claude Code's prompt reads
+      // this as "insert newline" instead of "submit". Warp and iTerm's
+      // /terminal-setup do the same translation. preventDefault() is
+      // critical — xterm's hidden textarea would otherwise insert `\n`
+      // on its own and xterm's input listener would forward a plain `\r`
+      // to the PTY before our async write lands, so Claude sees submit
+      // first and our ESC-CR arrives too late.
+      if (e.key === "Enter" && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        void ctx.write(props.id, encoder.encode("\x1b\r"));
+        return false;
+      }
       const mac = navigator.platform.toUpperCase().includes("MAC");
       const meta = mac ? e.metaKey : e.ctrlKey && e.shiftKey;
       if (!meta) return true;

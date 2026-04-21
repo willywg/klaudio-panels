@@ -1,6 +1,6 @@
 [package]
 name = "cc-ui"
-version = "0.7.0"
+version = "0.7.1"
 description = "Claude Code UI — native window embedding the Claude Code CLI"
 authors = ["willywg"]
 edition = "2021"
