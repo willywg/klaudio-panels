@@ -289,6 +289,18 @@ function Shell() {
     projectTabs().some((t) => t.status === "opening"),
   );
 
+  // Every project that needs its ShellTerminalPanel mounted right now:
+  // any project with live shell PTYs (so switching away and back preserves
+  // xterm scrollback), plus the active project if its panel flag is on
+  // (covers the first-open case before the first tab has spawned).
+  const shellMountedProjects = createMemo(() => {
+    const set = new Set<string>();
+    for (const t of shellPty.store.tabs) set.add(t.projectPath);
+    const active = activeProjectPath();
+    if (active && shellPanel.openedFor(active)) set.add(active);
+    return Array.from(set);
+  });
+
   // Persist lastSessionId for the active project.
   createEffect(() => {
     const p = activeProjectPath();
@@ -556,9 +568,45 @@ function Shell() {
               )}
             </Show>
           </div>
-          <Show when={shellPanel.openedFor(activeProjectPath()!)}>
-            <ShellTerminalPanel projectPath={activeProjectPath()!} />
-          </Show>
+          {/* Shell dock. Mount a ShellTerminalPanel for every project that
+              has live shell PTYs, plus the active project if its panel is
+              open (first-open auto-spawn). Only the active project's panel
+              is visible; the rest are absolute-positioned + visibility:
+              hidden so their xterm scrollback survives project switches.
+              Without this, flipping activeProject disposes the panel and
+              the next mount is a fresh xterm with no history. Same pattern
+              as the Claude tab strip above. Container height collapses to
+              0 when the active project's panel is closed, so the dock
+              doesn't steal space from projects without a shell open. */}
+          <div
+            class="relative shrink-0 overflow-hidden"
+            style={{
+              height: shellPanel.openedFor(activeProjectPath()!)
+                ? `${shellPanel.heightPx()}px`
+                : "0px",
+            }}
+          >
+            <For each={shellMountedProjects()}>
+              {(p) => {
+                const visible = () =>
+                  p === activeProjectPath() && shellPanel.openedFor(p);
+                return (
+                  <div
+                    class="absolute inset-0"
+                    style={{
+                      visibility: visible() ? "visible" : "hidden",
+                      "pointer-events": visible() ? "auto" : "none",
+                    }}
+                  >
+                    <ShellTerminalPanel
+                      projectPath={p}
+                      isActive={visible()}
+                    />
+                  </div>
+                );
+              }}
+            </For>
+          </div>
           </div>
         </div>
       </Show>

@@ -14,6 +14,11 @@ import { ShellTerminalView } from "./shell-terminal-view";
 
 type Props = {
   projectPath: string;
+  /** True when this project is the currently-active project AND its shell
+   *  panel is open. Non-active panels stay mounted (to keep xterm buffer)
+   *  but must tell their ShellTerminalViews they're hidden so the views
+   *  don't steal focus or run fit/refresh loops while invisible. */
+  isActive: boolean;
 };
 
 export function ShellTerminalPanel(props: Props) {
@@ -108,10 +113,7 @@ export function ShellTerminalPanel(props: Props) {
   });
 
   return (
-    <div
-      class="shrink-0 flex flex-col border-t border-neutral-800 bg-neutral-950 overflow-hidden"
-      style={{ height: `${panel.heightPx()}px` }}
-    >
+    <div class="h-full flex flex-col border-t border-neutral-800 bg-neutral-950 overflow-hidden">
       {/* Resize handle — 4px tall hit area, thin visible line inside. */}
       <div
         class="h-1 w-full cursor-ns-resize select-none"
@@ -182,14 +184,19 @@ export function ShellTerminalPanel(props: Props) {
       <div class="relative flex-1 min-h-0 overflow-hidden">
         <For each={tabs()}>
           {(tab) => {
-            const visible = () => tab.ptyId === activeId();
+            // A tab's xterm is truly "active" only when its tab is the
+            // selected one AND this whole panel is visible (project active
+            // + panel open). Combining both stops hidden panels from
+            // triggering fit/refresh/focus on project switch.
+            const tabSelected = () => tab.ptyId === activeId();
+            const visible = () => tabSelected() && props.isActive;
             return (
               <div
                 class="absolute inset-0"
                 style={{
-                  visibility: visible() ? "visible" : "hidden",
+                  visibility: tabSelected() ? "visible" : "hidden",
                   "pointer-events": visible() ? "auto" : "none",
-                  "z-index": visible() ? 1 : 0,
+                  "z-index": tabSelected() ? 1 : 0,
                 }}
               >
                 <Show when={tab.status !== "opening"} fallback={<ShellLoading />}>

@@ -9,8 +9,32 @@ pub mod session_watcher;
 pub mod sessions;
 pub mod shell_env;
 
+/// Best-effort restoration of the outer terminal's tty modes when we exit.
+/// `bun tauri dev` runs cargo + vite inside the user's iTerm/Warp. If any
+/// of those (or we) enter the alt-screen buffer, bracketed-paste, or mouse
+/// reporting and die without emitting the matching OFF sequence, the
+/// terminal is left in that mode — visible as a black panel with a
+/// blinking cursor until the user types `reset`. Drop fires on clean exit
+/// AND on panic unwind (not SIGKILL, but that's rare).
+///
+/// Sequences, in order: exit alt-screen, show cursor, disable bracketed
+/// paste, disable mouse tracking (click / drag / any), disable
+/// focus-change reporting. All are safe no-ops when the mode wasn't on.
+struct TtyGuard;
+
+impl Drop for TtyGuard {
+    fn drop(&mut self) {
+        use std::io::Write;
+        let _ = std::io::stderr().write_all(
+            b"\x1b[?1049l\x1b[?25h\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l",
+        );
+        let _ = std::io::stderr().flush();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _tty_guard = TtyGuard;
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
