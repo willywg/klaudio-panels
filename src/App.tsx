@@ -187,6 +187,19 @@ function Shell() {
         e.preventDefault();
         shellPanel.toggleFor(p);
       }
+      // Cmd+1..8 jumps to the Nth pinned project; Cmd+9 goes to the last
+      // one (same convention as browser tabs, iTerm, Slack). The index is
+      // the sidebar's visual order — `projects.pinned` is exactly what
+      // ProjectsSidebar renders.
+      if (mod && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+        const pinned = projects.pinned;
+        if (pinned.length === 0) return;
+        const n = Number(e.key);
+        const target = n === 9 ? pinned[pinned.length - 1] : pinned[n - 1];
+        if (!target) return;
+        e.preventDefault();
+        setActiveProjectPath(target.path);
+      }
     };
     window.addEventListener("keydown", onKey);
     onCleanup(() => window.removeEventListener("keydown", onKey));
