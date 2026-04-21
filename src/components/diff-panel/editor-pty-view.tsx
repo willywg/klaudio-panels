@@ -5,6 +5,9 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
+import {
+  readText as readClipboardText,
+} from "@tauri-apps/plugin-clipboard-manager";
 import { useEditorPty } from "@/context/editor-pty";
 
 const THEME = {
@@ -201,10 +204,13 @@ export function EditorPtyView(props: Props) {
         return false;
       }
       if (key === "v") {
-        navigator.clipboard
-          .readText()
+        // Tauri plugin avoids WebKit's "Paste" permission popup.
+        // term.paste() wraps in bracketed-paste markers so nvim/helix get a
+        // clean paste instead of char-by-char typing (which would trigger
+        // indentation + autocomplete on every line).
+        readClipboardText()
           .then((text) => {
-            if (text) void editorPty.write(props.ptyId, encoder.encode(text));
+            if (text) term!.paste(text);
           })
           .catch((err) => console.warn("clipboard read failed", err));
         return false;

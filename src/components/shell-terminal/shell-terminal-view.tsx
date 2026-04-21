@@ -5,6 +5,9 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
+import {
+  readText as readClipboardText,
+} from "@tauri-apps/plugin-clipboard-manager";
 import { useShellPty } from "@/context/shell-pty";
 
 const THEME = {
@@ -117,10 +120,11 @@ export function ShellTerminalView(props: Props) {
         return false;
       }
       if (key === "v") {
-        navigator.clipboard
-          .readText()
+        // Tauri plugin bypasses WebKit's "Paste" permission bubble.
+        // term.paste() handles bracketed paste when the PTY enables it.
+        readClipboardText()
           .then((text) => {
-            if (text) void ctx.write(props.ptyId, encoder.encode(text));
+            if (text) term!.paste(text);
           })
           .catch((err) => console.warn("clipboard read failed", err));
         return false;

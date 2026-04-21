@@ -5,6 +5,9 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
+import {
+  readText as readClipboardText,
+} from "@tauri-apps/plugin-clipboard-manager";
 import { useTerminal } from "@/context/terminal";
 import { useDiffPanel } from "@/context/diff-panel";
 import { makeFileLinkProvider } from "@/lib/xterm-file-links";
@@ -147,10 +150,14 @@ export function TerminalView(props: Props) {
         return false;
       }
       if (key === "v") {
-        navigator.clipboard
-          .readText()
+        // Read via the Tauri plugin (native macOS pasteboard) instead of
+        // navigator.clipboard.readText(), which pops WebKit's "Paste"
+        // permission bubble every time. term.paste() wraps the text in
+        // bracketed-paste markers when the PTY has ?2004h active so Claude
+        // Code can tell pasted input apart from typed input.
+        readClipboardText()
           .then((text) => {
-            if (text) void ctx.write(props.id, encoder.encode(text));
+            if (text) term!.paste(text);
           })
           .catch((err) => console.warn("clipboard read failed", err));
         return false;
