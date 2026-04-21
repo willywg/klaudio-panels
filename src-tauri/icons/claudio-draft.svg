@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" shape-rendering="geometricPrecision">
+  <!-- Dark background -->
+  <rect width="512" height="512" rx="115" fill="#0F172A"/>
+
+  <!-- Single bold rooster silhouette, red, facing right -->
+  <path fill="#DC2626" d="
+    M 220 395
+    C 178 372 150 300 165 228
+    C 172 210 182 200 195 196
+    L 212 88
+    Q 230 138 250 132
+    L 268 58
+    Q 288 142 306 116
+    L 322 78
+    Q 358 140 362 200
+    Q 372 224 390 236
+    L 452 252
+    L 392 268
+    Q 370 278 360 302
+    L 345 372
+    Q 282 402 220 395
+    Z
+  "/>
+
+  <!-- Tiny negative-space eye -->
+  <circle cx="322" cy="200" r="8" fill="#0F172A"/>
+</svg>

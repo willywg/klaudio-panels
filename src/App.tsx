@@ -32,9 +32,12 @@ import { GitProvider, useGit } from "@/context/git";
 import { DiffPanelProvider, useDiffPanel } from "@/context/diff-panel";
 import { OpenInProvider } from "@/context/open-in";
 import { EditorPtyProvider, useEditorPty } from "@/context/editor-pty";
+import { ShellPtyProvider, useShellPty } from "@/context/shell-pty";
+import { ShellPanelProvider, useShellPanel } from "@/context/shell-panel";
 import { installGlobalErrorForwarding } from "@/lib/debug-log";
 import { DiffPanel } from "@/components/diff-panel/diff-panel";
 import { SplitDivider } from "@/components/diff-panel/split-pane";
+import { ShellTerminalPanel } from "@/components/shell-terminal/shell-terminal-panel";
 import { displayLabel } from "@/lib/session-label";
 
 const AUTO_RESUME_FAIL_WINDOW_MS = 2000;
@@ -51,6 +54,8 @@ function Shell() {
   const git = useGit();
   const diffPanel = useDiffPanel();
   const editorPty = useEditorPty();
+  const shellPty = useShellPty();
+  const shellPanel = useShellPanel();
   let splitContainerRef!: HTMLDivElement;
 
   // Remembered active tab per project. Set BEFORE changing activeProjectPath
@@ -172,6 +177,15 @@ function Shell() {
         if (key === "diff") return;
         e.preventDefault();
         diffPanel.closeActiveTab(p);
+      }
+      // Cmd+J toggles the bottom shell terminal. WebKit uses the same combo
+      // for "Jump to Downloads" when nothing is focused — preventDefault
+      // stops it stealing the shortcut.
+      if (mod && !e.shiftKey && !e.altKey && (e.key === "j" || e.key === "J")) {
+        const p = activeProjectPath();
+        if (!p) return;
+        e.preventDefault();
+        shellPanel.toggleFor(p);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -405,6 +419,7 @@ function Shell() {
     // the project was never opened in a diff panel).
     diffPanel.clearProject(path);
     editorPty.killAllForProject(path);
+    shellPty.killAllForProject(path);
     // Don't clear lastSessionId — keep it so next time the user re-pins from
     // Home, auto-resume picks up where they left off.
     projects.unpin(path);
@@ -439,7 +454,7 @@ function Shell() {
         when={activeProjectPath()}
         fallback={<HomeScreen onPick={handlePickFromHome} />}
       >
-        <div class="flex-1 flex min-h-0 overflow-hidden">
+        <div class="flex-1 flex min-w-0 min-h-0 overflow-hidden">
           <SidebarPanel
             projectPath={activeProjectPath()!}
             sessionsContent={
@@ -457,6 +472,10 @@ function Shell() {
             filesContent={<FileTree projectPath={activeProjectPath()!} />}
           />
 
+          {/* Central column: Claude terminal + diff panel (row) on top,
+              shell terminal dock below. Sits to the right of SidebarPanel
+              so the dock never steals space from Sessions/Files. */}
+          <div class="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
           <div
             ref={splitContainerRef}
             class="flex-1 flex min-w-0 min-h-0 overflow-hidden"
@@ -524,6 +543,10 @@ function Shell() {
               )}
             </Show>
           </div>
+          <Show when={shellPanel.openedFor(activeProjectPath()!)}>
+            <ShellTerminalPanel projectPath={activeProjectPath()!} />
+          </Show>
+          </div>
         </div>
       </Show>
       </main>
@@ -559,11 +582,15 @@ export default function App() {
           <DiffPanelProvider>
             <OpenInProvider>
               <EditorPtyProvider>
-                <TerminalProvider>
-                  <SessionWatcherProvider>
-                    <Shell />
-                  </SessionWatcherProvider>
-                </TerminalProvider>
+                <ShellPanelProvider>
+                  <ShellPtyProvider>
+                    <TerminalProvider>
+                      <SessionWatcherProvider>
+                        <Shell />
+                      </SessionWatcherProvider>
+                    </TerminalProvider>
+                  </ShellPtyProvider>
+                </ShellPanelProvider>
               </EditorPtyProvider>
             </OpenInProvider>
           </DiffPanelProvider>

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Claude Code UI",
-  "version": "0.0.1",
-  "identifier": "la.constructai.cc-ui",
+  "productName": "Klaudio UI",
+  "version": "0.7.0",
+  "identifier": "la.constructai.klaudio-ui",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,8 @@
   "app": {
     "windows": [
       {
-        "title": "Claude Code UI",
+        "label": "main",
+        "title": "Klaudio UI",
         "width": 1200,
         "height": 800,
         "minWidth": 900,
@@ -23,7 +24,8 @@
     ],
     "security": {
       "csp": null
-    }
+    },
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,
@@ -34,6 +36,10 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "macOS": {
+      "entitlements": "./entitlements.plist",
+      "signingIdentity": "-"
+    }
   }
 }

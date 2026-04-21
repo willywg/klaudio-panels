@@ -34,6 +34,52 @@ const THEME = {
 const FONT_FAMILY =
   "ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace";
 
+/** Strip `ESC [ ? Pn (; Pn)* $ p` DECRQM sequences from the byte stream.
+ *  xterm.js 6.x's requestMode handler throws on some of these under prod
+ *  minification, so we drop them before they reach the parser. */
+function stripDecrqm(bytes: Uint8Array): Uint8Array {
+  const ESC = 0x1b;
+  const LBR = 0x5b;
+  const QST = 0x3f;
+  const DLR = 0x24;
+  const P = 0x70;
+  let matched = false;
+  for (let i = 0; i < bytes.length - 2; i++) {
+    if (bytes[i] === ESC && bytes[i + 1] === LBR && bytes[i + 2] === QST) {
+      matched = true;
+      break;
+    }
+  }
+  if (!matched) return bytes;
+  const out: number[] = [];
+  let i = 0;
+  while (i < bytes.length) {
+    if (
+      i + 2 < bytes.length &&
+      bytes[i] === ESC &&
+      bytes[i + 1] === LBR &&
+      bytes[i + 2] === QST
+    ) {
+      let j = i + 3;
+      let found = false;
+      while (j + 1 < bytes.length && j - i < 64) {
+        if (bytes[j] === DLR && bytes[j + 1] === P) {
+          found = true;
+          break;
+        }
+        j++;
+      }
+      if (found) {
+        i = j + 2;
+        continue;
+      }
+    }
+    out.push(bytes[i]);
+    i++;
+  }
+  return new Uint8Array(out);
+}
+
 type Props = {
   ptyId: string;
   active: boolean;
@@ -171,7 +217,19 @@ export function EditorPtyView(props: Props) {
 
     detachData = editorPty.onData(props.ptyId, (bytes) => {
       if (disposed) return;
-      term?.write(bytes);
+      // nvim probes terminal capabilities with DECRQM (CSI ? Pn $ p) sequences
+      // at startup (modes 2026/2027/2031/2048). xterm.js 6.x's requestMode()
+      // handler throws on some of these, killing the render pipeline in the
+      // minified production bundle. Strip them before handing bytes to xterm
+      // — they're purely advisory probes nvim uses to detect modern terminal
+      // features; losing the reply just means nvim falls back to legacy
+      // behavior (same as running inside iTerm a few years ago).
+      const clean = stripDecrqm(bytes);
+      try {
+        term?.write(clean);
+      } catch (err) {
+        console.warn("xterm write failed (non-fatal)", err);
+      }
     });
     detachExit = editorPty.onExit(props.ptyId, (code) => {
       // DON'T writeln here — writing into xterm while the child's final

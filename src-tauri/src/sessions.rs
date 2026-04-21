@@ -85,6 +85,12 @@ pub(crate) struct SessionScan {
     pub(crate) first_timestamp: Option<String>,
     pub(crate) custom_title: Option<String>,
     pub(crate) summary: Option<String>,
+    /// Set to true when the JSONL contains at least one real `user` or
+    /// `assistant` turn. Used by `list_sessions_for_project` to hide ghost
+    /// sessions — JSONLs that only hold a `file-history-snapshot` because
+    /// the user opened a tab and never sent a prompt. Those can't be
+    /// resumed (`claude --resume` replies "No conversation found").
+    pub(crate) has_conversation: bool,
 }
 
 /// Single pass over the JSONL: captures first user message, custom-title and
@@ -95,6 +101,7 @@ pub(crate) fn scan_session_file(file: &Path) -> SessionScan {
         first_timestamp: None,
         custom_title: None,
         summary: None,
+        has_conversation: false,
     };
     let Ok(f) = fs::File::open(file) else {
         return scan;
@@ -113,9 +120,13 @@ pub(crate) fn scan_session_file(file: &Path) -> SessionScan {
                                 .get("timestamp")
                                 .and_then(|t| t.as_str())
                                 .map(str::to_string);
+                            scan.has_conversation = true;
                         }
                     }
                 }
+            }
+            Some("user") | Some("assistant") => {
+                scan.has_conversation = true;
             }
             Some("custom-title") => {
                 if let Some(t) = v.get("customTitle").and_then(|x| x.as_str()) {
@@ -185,6 +196,14 @@ pub fn list_sessions_for_project(project_path: String) -> Result<Vec<SessionMeta
                     None => continue,
                 };
                 let scan = scan_session_file(&p);
+                // Hide ghost sessions — a JSONL with only a
+                // file-history-snapshot line and no user/assistant turn can't
+                // be resumed by `claude --resume <id>` ("No conversation
+                // found with session ID..."). Treating them as non-existent
+                // keeps the sidebar actionable.
+                if !scan.has_conversation {
+                    continue;
+                }
                 out.push(SessionMeta {
                     id,
                     timestamp: scan.first_timestamp,

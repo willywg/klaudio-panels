@@ -1,6 +1,11 @@
 import { Show } from "solid-js";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-solid";
+import {
+  PanelLeftClose,
+  PanelLeftOpen,
+  SquareTerminal,
+} from "lucide-solid";
 import { useSidebar } from "@/context/sidebar";
+import { useShellPanel } from "@/context/shell-panel";
 import { GitSummaryPill } from "@/components/git-summary-pill";
 import { OpenInDropdown } from "@/components/open-in-dropdown";
 
@@ -15,6 +20,7 @@ type Props = {
  *  sits right after, matching OpenCode / Warp. */
 export function Titlebar(props: Props) {
   const sidebar = useSidebar();
+  const shellPanel = useShellPanel();
 
   return (
     <header
@@ -49,6 +55,20 @@ export function Titlebar(props: Props) {
         {(p) => (
           <div class="shrink-0 pr-2 flex items-center gap-2">
             <GitSummaryPill projectPath={p()} />
+            <button
+              class="w-8 h-7 rounded flex items-center justify-center text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/80 transition"
+              onClick={() => shellPanel.toggleFor(p())}
+              title={
+                shellPanel.openedFor(p())
+                  ? "Hide terminal (⌘J)"
+                  : "Show terminal (⌘J)"
+              }
+              classList={{
+                "text-neutral-100 bg-neutral-800/60": shellPanel.openedFor(p()),
+              }}
+            >
+              <SquareTerminal size={15} strokeWidth={1.75} />
+            </button>
             <OpenInDropdown path={p()} />
           </div>
         )}

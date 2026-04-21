@@ -1,6 +1,9 @@
 node_modules
 dist
 .DS_Store
+
+# Editor swap files
+.*.swp
 *.log
 
 # Claude Code local state

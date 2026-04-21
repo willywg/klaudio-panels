@@ -59,8 +59,10 @@ export function SplitDivider(props: Props) {
   return (
     <div
       class={
-        "w-1 cursor-ew-resize shrink-0 transition-colors " +
-        (dragging() ? "bg-indigo-500/80" : "bg-neutral-800 hover:bg-indigo-500/60")
+        "w-1 cursor-ew-resize shrink-0 select-none transition-colors " +
+        (dragging()
+          ? "bg-indigo-500/40"
+          : "bg-transparent hover:bg-neutral-700/60")
       }
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}

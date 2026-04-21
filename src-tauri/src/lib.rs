@@ -17,10 +17,16 @@ pub fn run() {
         .manage(pty::PtyState::default())
         .manage(fs::FsWatcherState::default())
         .setup(|app| {
+            if let Some(p) = debug_log::log_file_path() {
+                debug_log::write(
+                    "boot",
+                    &format!("Klaudio UI starting — log at {}", p.display()),
+                );
+            }
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 if let Err(e) = session_watcher::install(handle) {
-                    eprintln!("session_watcher install failed: {e}");
+                    debug_log::write("boot", &format!("session_watcher install failed: {e}"));
                 }
             });
             Ok(())
@@ -30,11 +36,13 @@ pub fn run() {
             sessions::list_sessions_for_project,
             pty::pty_open,
             pty::pty_open_editor,
+            pty::pty_open_shell,
             pty::pty_write,
             pty::pty_resize,
             pty::pty_kill,
             shell_env::check_binary_exists,
             debug_log::debug_log,
+            debug_log::get_log_path,
             fs::list_dir,
             fs::watch_project,
             fs::unwatch_project,

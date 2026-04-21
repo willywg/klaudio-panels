@@ -24,7 +24,7 @@ export function HomeScreen(props: Props) {
       <div class="w-full max-w-2xl">
         <div class="text-center mb-10">
           <h1 class="text-4xl font-semibold tracking-tight text-neutral-300 mb-3">
-            Claude Code UI
+            Klaudio UI
           </h1>
           <div class="flex items-center justify-center gap-2 text-xs text-neutral-500">
             <span class="inline-block w-1.5 h-1.5 rounded-full bg-green-500" />

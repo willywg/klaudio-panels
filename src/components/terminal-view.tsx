@@ -99,6 +99,14 @@ export function TerminalView(props: Props) {
     requestAnimationFrame(() => safeFit());
 
     term.onData((data) => {
+      // Drop focus-in / focus-out (CSI I / CSI O). xterm.js forwards these
+      // whenever our webview's focus changes and `?1004h` is active —
+      // which Claude Code enables very early in boot. The PTY is still in
+      // ECHO mode during that window, so Claude's tty echoes the bytes
+      // back as literal "^[[I" at the top of the screen before Claude
+      // flips to raw mode. Claude doesn't actually need these pings, so
+      // we just never forward them.
+      if (data === "\x1b[I" || data === "\x1b[O") return;
       void ctx.write(props.id, encoder.encode(data));
     });
     term.onResize(({ cols, rows }) => {
@@ -155,6 +163,19 @@ export function TerminalView(props: Props) {
       fitDebounce = window.setTimeout(() => safeFit(), 50);
     });
     resizeObs.observe(container!);
+
+    // Safety net for WebKit: the ResizeObserver sometimes fails to fire when
+    // a parent flex container reflows (e.g. resizing the window to full
+    // screen with the diff panel open). A window-level resize listener plus
+    // a follow-up fit 250ms later catches the case where xterm cached a
+    // cols=1 measurement from a transient mid-layout width.
+    const onWinResize = () => {
+      if (fitDebounce) window.clearTimeout(fitDebounce);
+      safeFit();
+      window.setTimeout(() => safeFit(), 250);
+    };
+    window.addEventListener("resize", onWinResize);
+    onCleanup(() => window.removeEventListener("resize", onWinResize));
   });
 
   // When the tab becomes visible again, re-measure (size may have changed
