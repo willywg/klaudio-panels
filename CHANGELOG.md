@@ -4,6 +4,46 @@ All notable changes to Klaudio UI are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [0.9.0] — 2026-04-22
+
+### Added
+- **Language-aware file icons** in the Files tree. `file-icon.ts` grew
+  from 5 generic buckets to ~70 entries, matching by full filename
+  (`Dockerfile`, `Makefile`, `.gitignore`, `package.json`, `Cargo.toml`,
+  `pyproject.toml`, `uv.lock`, `.env*`, ...) plus per-extension icons
+  with tailwind color classes so `.ts` is blue, `.rs` orange, `.py`
+  yellow, `.md` sky, etc.
+- **Header action bar** above the tree: New File, New Folder, Refresh,
+  show/hide Hidden (Eye / EyeOff), and Collapse All. New file / folder
+  opens an inline input rendered at the target directory's depth.
+- **Target-aware create.** Selecting a directory → creates inside it;
+  selecting a file → creates as sibling; nothing selected → project
+  root. Right-click on a directory also surfaces "New File" / "New
+  Folder" that pin the target to the clicked folder regardless of
+  selection. Target directory auto-expands before the input shows.
+- **Delete action.** Context-menu entry with a native confirm dialog;
+  also triggered by pressing Delete or Backspace while a tree row is
+  focused. Uses a new `fs_delete(path, is_dir)` Rust command that
+  picks `remove_file` or `remove_dir_all`.
+- **Hidden / gitignored entries are visible by default.** Shown dimmed
+  and italicized; the Eye / EyeOff toggle in the header hides them.
+  Preference persists in `localStorage["filetree:showIgnored"]`. Only
+  `.git/` itself stays hard-hidden — its contents churn on every git
+  op and are pure noise in a project explorer.
+
+### Fixed
+- **Claude-written files didn't appear in the tree.** `notify`'s macOS
+  FSEvents backend coalesces create + initial write into a single
+  `Modify(ModifyKind::Any)` event, and the old handler only dispatched
+  tree inserts on explicit `Create(File)`. Rewrote
+  `event_to_payloads` to probe `path.exists()` on every event:
+  exists → Created, missing → Removed, 2-path `Modify(Name)` →
+  Renamed. Frontend dedupes by path so duplicate Createds are
+  harmless.
+- **`>` phantom on the Files tab icon.** The `FolderTree` icon's lower
+  folder arm rendered as a chevron glyph at 12px; bumped to 13px with
+  strokeWidth 1.75 for clearer silhouettes.
+
 ## [0.8.1] — 2026-04-21
 
 ### Changed

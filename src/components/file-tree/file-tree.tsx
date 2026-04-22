@@ -556,6 +556,7 @@ export function FileTree(props: Props) {
                 onOpen={handleOpen}
                 onContextMenu={openContextMenu}
                 onModClick={handleClickWithMods}
+                onDelete={(path, isDir) => void deleteEntry(path, isDir)}
               />
             );
           }}

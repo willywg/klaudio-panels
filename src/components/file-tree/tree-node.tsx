@@ -16,6 +16,9 @@ type Props = {
   /** Intercepts clicks with Cmd/Ctrl held. Returns true if the click was
    *  consumed (skips the default select/toggle flow). */
   onModClick?: (e: MouseEvent, path: string, isDir: boolean) => boolean;
+  /** Delete / Backspace with the row focused triggers deletion (with
+   *  confirm dialog on the parent's side). */
+  onDelete: (path: string, isDir: boolean) => void;
 };
 
 export function TreeNode(props: Props) {
@@ -37,6 +40,14 @@ export function TreeNode(props: Props) {
     }
   }
 
+  function onKeyDown(e: KeyboardEvent) {
+    if (e.key === "Delete" || e.key === "Backspace") {
+      e.preventDefault();
+      e.stopPropagation();
+      props.onDelete(props.node.path, props.node.isDir);
+    }
+  }
+
   function onDragStart(e: DragEvent) {
     if (!e.dataTransfer) return;
     // Absolute path in both text/plain (so other apps can read it) and a
@@ -55,6 +66,7 @@ export function TreeNode(props: Props) {
       onDragStart={onDragStart}
       onClick={onClick}
       onDblClick={onDblClick}
+      onKeyDown={onKeyDown}
       onContextMenu={(e) => {
         e.preventDefault();
         props.onContextMenu(e, props.node.path, props.node.isDir);
