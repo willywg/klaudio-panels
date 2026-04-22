@@ -4,6 +4,30 @@ All notable changes to Klaudio UI are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [0.9.6] — 2026-04-22
+
+### Added
+- **Drag files from Finder into a terminal.** Dropping onto the
+  Claude view or the shell dock pastes the file path into the prompt:
+  `@relative-path` for files inside the active project, or the absolute
+  path (with spaces backslash-escaped) for anything else. Multi-file
+  drops are space-joined. Hit-testing uses `elementFromPoint` on
+  `data-pty-kind` / `data-pty-id` markers now present on every
+  xterm host. Requires re-enabling `dragDropEnabled: true`; the
+  internal file-tree drag was migrated to pointer events as a result.
+
+### Changed
+- **File-tree → terminal drag is pointer-based now.** With the NSView
+  drag hook turned back on, macOS intercepts every HTML5 drag before
+  the webview sees it (our own tree-node drags included — that's why
+  v0.7.2 had disabled `dragDropEnabled` in the first place). The tree
+  node now implements its own drag via `setPointerCapture`, a floating
+  indigo ghost pill for feedback, and the same
+  `elementFromPoint` + `data-pty-id` hit test the Finder drop uses.
+  A `window`-level `CustomEvent` carries the resolved pty target back
+  to `App.tsx`, which shares the `buildDropPayload` helper with the
+  Finder path so both flows produce the same `@rel` / absolute string.
+
 ## [0.9.5] — 2026-04-22
 
 ### Added

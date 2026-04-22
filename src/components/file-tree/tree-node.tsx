@@ -2,7 +2,15 @@ import { Show } from "solid-js";
 import { ChevronRight, Folder, FolderOpen } from "lucide-solid";
 import { iconForFile } from "@/lib/file-icon";
 import { BADGE_COLOR, BADGE_LETTER, type FileStatus } from "@/lib/git-status";
+import {
+  INTERNAL_DROP_EVENT,
+  type InternalDropDetail,
+  setHoverPtyId,
+  setInternalDragState,
+} from "@/lib/internal-drag";
 import type { TreeNode as TreeNodeType } from "./use-file-tree";
+
+const DRAG_THRESHOLD_PX = 5;
 
 type Props = {
   node: TreeNodeType;
@@ -24,8 +32,117 @@ type Props = {
 export function TreeNode(props: Props) {
   const fileIcon = () => iconForFile(props.node.name);
 
+  let pressStart: { x: number; y: number } | null = null;
+  let dragging = false;
+  let didDrag = false;
+  let ghost: HTMLDivElement | null = null;
+
+  function buildGhost(label: string): HTMLDivElement {
+    const el = document.createElement("div");
+    el.textContent = label;
+    el.style.cssText = [
+      "position:fixed",
+      "pointer-events:none",
+      "z-index:9999",
+      "padding:4px 8px",
+      "border-radius:6px",
+      "background:rgba(79,70,229,0.92)",
+      "color:#fff",
+      "font-size:12px",
+      "font-family:ui-sans-serif,system-ui",
+      "box-shadow:0 4px 10px rgba(0,0,0,0.3)",
+      "transform:translate(10px,10px)",
+      "max-width:260px",
+      "overflow:hidden",
+      "text-overflow:ellipsis",
+      "white-space:nowrap",
+    ].join(";");
+    return el;
+  }
+
+  function cleanup() {
+    ghost?.remove();
+    ghost = null;
+    dragging = false;
+    pressStart = null;
+    setInternalDragState(null);
+    setHoverPtyId(null);
+  }
+
+  function onPointerDown(e: PointerEvent) {
+    if (e.button !== 0) return;
+    pressStart = { x: e.clientX, y: e.clientY };
+    didDrag = false;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  }
+
+  function onPointerMove(e: PointerEvent) {
+    if (!pressStart) return;
+    if (!dragging) {
+      const dx = e.clientX - pressStart.x;
+      const dy = e.clientY - pressStart.y;
+      if (dx * dx + dy * dy < DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) return;
+      dragging = true;
+      didDrag = true;
+      ghost = buildGhost(props.node.name);
+      document.body.appendChild(ghost);
+      setInternalDragState({ path: props.node.path, name: props.node.name });
+    }
+    if (ghost) {
+      ghost.style.left = `${e.clientX}px`;
+      ghost.style.top = `${e.clientY}px`;
+    }
+    // Update the drop target highlight. elementFromPoint returns the
+    // topmost CSS-painted element under the coords; walk up to find
+    // whichever terminal host is advertising its pty id.
+    const under = document.elementFromPoint(e.clientX, e.clientY);
+    const host =
+      under instanceof Element
+        ? under.closest<HTMLElement>("[data-pty-id]")
+        : null;
+    setHoverPtyId(host?.dataset.ptyId ?? null);
+  }
+
+  function onPointerUp(e: PointerEvent) {
+    if (!pressStart) {
+      cleanup();
+      return;
+    }
+    if (dragging) {
+      const under = document.elementFromPoint(e.clientX, e.clientY);
+      const host =
+        under instanceof Element
+          ? under.closest<HTMLElement>("[data-pty-id]")
+          : null;
+      const kind = host?.dataset.ptyKind;
+      const ptyId = host?.dataset.ptyId;
+      if (host && (kind === "claude" || kind === "shell") && ptyId) {
+        const detail: InternalDropDetail = {
+          ptyKind: kind,
+          ptyId,
+          path: props.node.path,
+        };
+        window.dispatchEvent(
+          new CustomEvent<InternalDropDetail>(INTERNAL_DROP_EVENT, { detail }),
+        );
+      }
+    }
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore — capture may have been lost
+    }
+    cleanup();
+    // The click event fires right after pointerup; let the flag linger
+    // one frame so onClick can read it and skip the select/toggle.
+    requestAnimationFrame(() => {
+      didDrag = false;
+    });
+  }
+
   function onClick(e: MouseEvent) {
     e.preventDefault();
+    if (didDrag) return;
     if (props.onModClick?.(e, props.node.path, props.node.isDir)) return;
     props.onSelect(props.node.path);
     if (props.node.isDir) {
@@ -48,22 +165,12 @@ export function TreeNode(props: Props) {
     }
   }
 
-  function onDragStart(e: DragEvent) {
-    if (!e.dataTransfer) return;
-    // Absolute path in both text/plain (so other apps can read it) and a
-    // Klaudio-specific MIME so TerminalView's drop handler can tell our
-    // own drags apart from arbitrary browser drags. Path → relative
-    // conversion happens at the drop site, since only the target knows
-    // which project it belongs to.
-    e.dataTransfer.setData("text/plain", props.node.path);
-    e.dataTransfer.setData("application/x-klaudio-file", props.node.path);
-    e.dataTransfer.effectAllowed = "copy";
-  }
-
   return (
     <button
-      draggable={true}
-      onDragStart={onDragStart}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={cleanup}
       onClick={onClick}
       onDblClick={onDblClick}
       onKeyDown={onKeyDown}

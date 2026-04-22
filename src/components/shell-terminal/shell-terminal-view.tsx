@@ -204,7 +204,11 @@ export function ShellTerminalView(props: Props) {
   const tab = () => ctx.getTab(props.ptyId);
 
   return (
-    <div class="relative h-full w-full flex flex-col min-h-0 overflow-hidden">
+    <div
+      class="relative h-full w-full flex flex-col min-h-0 overflow-hidden"
+      data-pty-kind="shell"
+      data-pty-id={props.ptyId}
+    >
       <div
         ref={container}
         onContextMenu={(e) => e.preventDefault()}

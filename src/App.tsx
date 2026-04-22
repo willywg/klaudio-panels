@@ -9,6 +9,12 @@ import {
   onMount,
 } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { buildDropPayload, findDropTarget } from "@/lib/os-drop";
+import {
+  INTERNAL_DROP_EVENT,
+  type InternalDropDetail,
+} from "@/lib/internal-drag";
 import { HomeScreen } from "@/components/home-screen";
 import { ProjectsSidebar } from "@/components/projects-sidebar";
 import { SessionsList, type SessionMeta } from "@/components/sessions-list";
@@ -223,6 +229,59 @@ function Shell() {
     };
     window.addEventListener("keydown", onKey);
     onCleanup(() => window.removeEventListener("keydown", onKey));
+  });
+
+  // File drops from two independent sources:
+  //   (a) Finder / other apps — Tauri captures at the NSView layer
+  //       (needs `dragDropEnabled: true`) and hands us absolute paths.
+  //   (b) Our own file tree — pointer-based custom drag dispatches a
+  //       CustomEvent on `window` with the resolved pty target.
+  // The HTML5 drag-drop pipeline no longer works once the NSView hook
+  // is on (macOS intercepts all drags regardless of MIME), which is
+  // why the file tree runs its own pointer flow in tree-node.tsx.
+  onMount(() => {
+    const encoder = new TextEncoder();
+    let unlisten: (() => void) | undefined;
+    void getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type !== "drop") return;
+        const p = activeProjectPath();
+        if (!p) return;
+        const target = findDropTarget(event.payload.position);
+        if (!target) return;
+        const payload = buildDropPayload(event.payload.paths, p);
+        if (!payload) return;
+        const bytes = encoder.encode(payload);
+        if (target.kind === "claude") {
+          void term.write(target.ptyId, bytes);
+        } else {
+          void shellPty.write(target.ptyId, bytes);
+        }
+      })
+      .then((u) => {
+        unlisten = u;
+      })
+      .catch((err) => console.warn("drag-drop listen failed", err));
+
+    const onInternalDrop = (e: Event) => {
+      const detail = (e as CustomEvent<InternalDropDetail>).detail;
+      const p = activeProjectPath();
+      if (!p || !detail) return;
+      const payload = buildDropPayload([detail.path], p);
+      if (!payload) return;
+      const bytes = encoder.encode(payload);
+      if (detail.ptyKind === "claude") {
+        void term.write(detail.ptyId, bytes);
+      } else {
+        void shellPty.write(detail.ptyId, bytes);
+      }
+    };
+    window.addEventListener(INTERNAL_DROP_EVENT, onInternalDrop);
+
+    onCleanup(() => {
+      unlisten?.();
+      window.removeEventListener(INTERNAL_DROP_EVENT, onInternalDrop);
+    });
   });
 
   // Prime git status + summary for the active project. GitProvider itself
