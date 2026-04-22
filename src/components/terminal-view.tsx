@@ -172,12 +172,17 @@ export function TerminalView(props: Props) {
         // preventDefault() is critical — without it the webview also fires
         // its native paste into xterm's hidden textarea, xterm forwards
         // those bytes as onData, and the PTY receives the text twice.
+        // Always call term.paste(), even with empty text: the bracketed-
+        // paste markers alone trigger Claude Code to sniff the NSPasteboard
+        // for an image (same path that the WebKit right-click Paste used
+        // to reach).
         e.preventDefault();
         readClipboardText()
-          .then((text) => {
-            if (text) term!.paste(text);
-          })
-          .catch((err) => console.warn("clipboard read failed", err));
+          .then((text) => term!.paste(text ?? ""))
+          .catch((err) => {
+            console.warn("clipboard read failed", err);
+            term!.paste("");
+          });
         return false;
       }
       if (key === "k") {

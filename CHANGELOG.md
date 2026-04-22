@@ -4,6 +4,20 @@ All notable changes to Klaudio UI are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [0.9.3] — 2026-04-22
+
+### Fixed
+- **Cmd+V no longer pasted images into Claude Code.** The previous duplicate-
+  paste fix added `preventDefault()` + `if (text) term.paste(text)`, so an
+  image-only clipboard short-circuited the handler (empty text → skipped).
+  The WebKit right-click → Paste path still worked because xterm's native
+  paste listener calls `term.paste("")` unconditionally, and Claude Code
+  treats an empty bracketed-paste (`ESC[200~ESC[201~`) as its cue to sniff
+  the NSPasteboard for an image. Mirror that: always call `term.paste()`,
+  using the clipboard text if any and `""` otherwise, so the markers reach
+  the PTY and Claude Code finds the image via `osascript`/its native
+  clipboard module.
+
 ## [0.9.2] — 2026-04-22
 
 ### Added
