@@ -4,6 +4,15 @@ All notable changes to Klaudio UI are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [0.8.1] — 2026-04-21
+
+### Changed
+- **Uncaught error forwarding now captures the error name and message**,
+  not just the raw stack. WebKit's `error.stack` is bare frames (no
+  leading `TypeError: …` line), so the Rust log used to tell us *where*
+  something threw without telling us *what*. Diagnostic build for a
+  user-reported "blank Claude panel" issue.
+
 ## [0.8.0] — 2026-04-21
 
 ### Added

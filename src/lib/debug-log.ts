@@ -14,15 +14,25 @@ export function debugLog(tag: string, msg: string): void {
  *  promises into the Rust stderr channel. Call once from App bootstrap. */
 export function installGlobalErrorForwarding(): void {
   window.addEventListener("error", (e) => {
-    const detail = e.error ? String(e.error.stack ?? e.error) : e.message;
-    debugLog("window.error", `${e.filename}:${e.lineno}:${e.colno} — ${detail}`);
+    // WebKit's `e.error.stack` is bare frames — no leading
+    // `TypeError: message` line. Capture name + message separately so the
+    // log tells us WHAT threw, not just WHERE.
+    const err = e.error as { name?: string; message?: string; stack?: string } | undefined;
+    const name = err?.name ?? err?.constructor?.name ?? "Error";
+    const message = err?.message ?? e.message ?? "(no message)";
+    const stack = err?.stack ?? "(no stack)";
+    debugLog(
+      "window.error",
+      `${e.filename}:${e.lineno}:${e.colno} — ${name}: ${message}\n${stack}`,
+    );
   });
   window.addEventListener("unhandledrejection", (e) => {
-    const reason = e.reason;
-    const detail =
-      reason && typeof reason === "object" && "stack" in reason
-        ? String((reason as { stack?: string }).stack)
-        : String(reason);
-    debugLog("window.rejection", detail);
+    const reason = e.reason as
+      | { name?: string; message?: string; stack?: string }
+      | undefined;
+    const name = reason?.name ?? reason?.constructor?.name ?? "Rejection";
+    const message = reason?.message ?? String(e.reason);
+    const stack = reason?.stack ?? "(no stack)";
+    debugLog("window.rejection", `${name}: ${message}\n${stack}`);
   });
 }
