@@ -91,6 +91,19 @@ export function TerminalView(props: Props) {
     term.open(container!);
     term.unicode.activeVersion = "11";
 
+    // Short-circuit DECRQM (`CSI ? <mode> $ p`). xterm.js 6.0.0's shipped
+    // bundle has a closure-capture bug in `requestMode` that throws
+    // `ReferenceError: Can't find variable: i` under WebKit's stricter
+    // scoping, corrupting the parser state and rendering the panel black.
+    // Claude Code probes mode 2026 (synchronized output) very early, so the
+    // crash hits on first spawn. Returning `true` marks the sequence as
+    // handled, the built-in requestMode never runs, Claude gets no reply
+    // and falls back to the default ("not supported") path.
+    term.parser.registerCsiHandler(
+      { prefix: "?", intermediates: "$", final: "p" },
+      () => true,
+    );
+
     try {
       const webgl = new WebglAddon();
       webgl.onContextLoss(() => webgl.dispose());

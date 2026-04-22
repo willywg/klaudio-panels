@@ -4,6 +4,20 @@ All notable changes to Klaudio UI are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [0.9.1] — 2026-04-22
+
+### Fixed
+- **Black Claude panel on some WebKit builds.** `@xterm/xterm@6.0.0`'s
+  shipped bundle has a closure-capture bug in `requestMode` that throws
+  `ReferenceError: Can't find variable: i` under WebKit's stricter
+  scoping, corrupting the parser state on the very first write. Claude
+  Code probes mode 2026 (synchronized output) via `CSI ? 2026 $ p` at
+  startup, so the crash hit on every spawn. Short-circuited DECRQM with
+  `term.parser.registerCsiHandler({ prefix: "?", intermediates: "$",
+  final: "p" }, () => true)` so the built-in handler never runs; Claude
+  gets no reply and falls back to "not supported", same as pre-xterm-6
+  behavior. Diagnosed from Oliver's v0.8.1 diagnostic log.
+
 ## [0.9.0] — 2026-04-22
 
 ### Added
