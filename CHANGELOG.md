@@ -4,6 +4,16 @@ All notable changes to Klaudio UI are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [0.9.5] — 2026-04-22
+
+### Added
+- **Cmd+T opens a new tab contextual to the focused panel.** If the user
+  is typing inside the bottom shell dock, the shortcut appends a new
+  shell terminal; otherwise it opens a fresh Claude Code session in the
+  project's tab strip. Focus detection uses
+  `document.activeElement.closest("[data-shell-dock]")`, with the shell
+  panel's root div now marked by that attribute.
+
 ## [0.9.4] — 2026-04-22
 
 ### Added

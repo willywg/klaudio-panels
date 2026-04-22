@@ -113,7 +113,10 @@ export function ShellTerminalPanel(props: Props) {
   });
 
   return (
-    <div class="h-full flex flex-col border-t border-neutral-800 bg-neutral-950 overflow-hidden">
+    <div
+      data-shell-dock
+      class="h-full flex flex-col border-t border-neutral-800 bg-neutral-950 overflow-hidden"
+    >
       {/* Resize handle — 4px tall hit area, thin visible line inside. */}
       <div
         class="h-1 w-full cursor-ns-resize select-none"

@@ -188,6 +188,25 @@ function Shell() {
         e.preventDefault();
         shellPanel.toggleFor(p);
       }
+      // Cmd+T opens a new tab, contextual to where focus is: if the user
+      // is typing inside the shell dock, add a shell tab; otherwise add a
+      // new Claude session tab. Using `activeElement` (not `e.target`)
+      // because the key event on xterm's hidden textarea still reports
+      // the textarea as activeElement, which lets `closest` walk up.
+      if (mod && !e.shiftKey && !e.altKey && (e.key === "t" || e.key === "T")) {
+        const p = activeProjectPath();
+        if (!p) return;
+        e.preventDefault();
+        const inShellDock =
+          document.activeElement instanceof Element &&
+          document.activeElement.closest("[data-shell-dock]") !== null;
+        if (inShellDock) {
+          void shellPty.openTab(p);
+        } else {
+          void openNewTab();
+        }
+        return;
+      }
       // Cmd+1..8 jumps to the Nth pinned project; Cmd+9 goes to the last
       // one (same convention as browser tabs, iTerm, Slack). The index is
       // the sidebar's visual order — `projects.pinned` is exactly what
