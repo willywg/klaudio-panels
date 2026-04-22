@@ -20,12 +20,15 @@ pub struct FsEntry {
     pub name: String,
     pub is_dir: bool,
     pub size: Option<u64>,
+    /// Matches a gitignore rule or starts with a dot. The frontend renders
+    /// these grayed + italic, and a toggle in the header hides them.
+    pub ignored: bool,
 }
 
 #[derive(Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum FsEventPayload {
-    Created { path: String, is_dir: bool },
+    Created { path: String, is_dir: bool, ignored: bool },
     Modified { path: String },
     Removed { path: String },
     Renamed { from: String, to: String },
@@ -49,29 +52,43 @@ impl Default for FsWatcherState {
     }
 }
 
+/// List a single directory level. Always returns every entry (including
+/// dotfiles and gitignored ones) tagged with `ignored: bool`, except the
+/// `.git` directory itself which is always hidden — its contents change
+/// on every git operation and there's no realistic use case for showing
+/// them in a project explorer. The frontend decides whether to render
+/// ignored entries based on a user toggle.
 #[tauri::command]
 pub fn list_dir(path: String) -> Result<Vec<FsEntry>, String> {
     let root = PathBuf::from(&path);
     if !root.is_dir() {
         return Err(format!("not a directory: {path}"));
     }
+    // Find the project root for this path so we can resolve .gitignore
+    // rules correctly. For any directory, the project root is the nearest
+    // ancestor that contains a .git dir, falling back to the path itself.
+    let project_root = find_project_root(&root);
+    let gi = build_gitignore(&project_root);
+
     let mut out = Vec::new();
     let walker = WalkBuilder::new(&root)
         .max_depth(Some(1))
-        .hidden(true)
-        .git_ignore(true)
-        .git_global(true)
+        // Disable ignore filtering — we want every entry and we'll tag
+        // them ourselves. `.git/` is still hard-skipped below.
+        .hidden(false)
+        .git_ignore(false)
+        .git_global(false)
         .parents(false)
         .build();
     for entry in walker.flatten() {
         if entry.path() == root {
             continue;
         }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == ".git" {
+            continue;
+        }
         let p = entry.path().to_string_lossy().into_owned();
-        let name = entry
-            .file_name()
-            .to_string_lossy()
-            .into_owned();
         let is_dir = entry
             .file_type()
             .map(|t| t.is_dir())
@@ -81,11 +98,13 @@ pub fn list_dir(path: String) -> Result<Vec<FsEntry>, String> {
         } else {
             entry.metadata().ok().map(|m| m.len())
         };
+        let ignored = is_ignored(entry.path(), &project_root, &gi);
         out.push(FsEntry {
             path: p,
             name,
             is_dir,
             size,
+            ignored,
         });
     }
     out.sort_by(|a, b| match (a.is_dir, b.is_dir) {
@@ -94,6 +113,39 @@ pub fn list_dir(path: String) -> Result<Vec<FsEntry>, String> {
         _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
     });
     Ok(out)
+}
+
+/// Walk upwards looking for a `.git` sibling — that's the project root.
+/// Falls back to the input if nothing is found (e.g. non-repo directories).
+fn find_project_root(start: &Path) -> PathBuf {
+    let mut cur = start;
+    loop {
+        if cur.join(".git").exists() {
+            return cur.to_path_buf();
+        }
+        match cur.parent() {
+            Some(p) if p != cur => cur = p,
+            _ => return start.to_path_buf(),
+        }
+    }
+}
+
+/// An entry is "ignored" if any path component starts with a dot, or the
+/// .gitignore rules match it. Hidden and gitignored are conflated in the
+/// UI — both get the grayed + italic treatment.
+fn is_ignored(path: &Path, project_root: &Path, gi: &Gitignore) -> bool {
+    let rel = match path.strip_prefix(project_root) {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+    for component in rel.components() {
+        if let std::path::Component::Normal(name) = component {
+            if name.to_string_lossy().starts_with('.') {
+                return true;
+            }
+        }
+    }
+    gi.matched(rel, path.is_dir()).is_ignore()
 }
 
 fn build_gitignore(project_root: &Path) -> Gitignore {
@@ -107,8 +159,10 @@ fn build_gitignore(project_root: &Path) -> Gitignore {
         .unwrap_or_else(|_| GitignoreBuilder::new(project_root).build().unwrap())
 }
 
-/// Skip hidden path components (.git, .cache, .DS_Store) and gitignored entries.
-fn is_relevant(path: &Path, project_root: &Path, gi: &Gitignore) -> bool {
+/// Watcher-level relevance filter. We only hard-drop events under `.git/`
+/// — every other path fires an event (tagged `ignored` in the payload).
+/// The frontend decides whether to render ignored entries.
+fn is_relevant(path: &Path, project_root: &Path) -> bool {
     let rel = match path.strip_prefix(project_root) {
         Ok(r) => r,
         Err(_) => return false,
@@ -118,16 +172,19 @@ fn is_relevant(path: &Path, project_root: &Path, gi: &Gitignore) -> bool {
     }
     for component in rel.components() {
         if let std::path::Component::Normal(name) = component {
-            if name.to_string_lossy().starts_with('.') {
+            if name == ".git" {
                 return false;
             }
         }
     }
-    let is_dir = path.is_dir();
-    !gi.matched(rel, is_dir).is_ignore()
+    true
 }
 
-fn event_to_payloads(event: &notify::Event) -> Vec<FsEventPayload> {
+fn event_to_payloads(
+    event: &notify::Event,
+    project_root: &Path,
+    gi: &Gitignore,
+) -> Vec<FsEventPayload> {
     // FSEvents on macOS coalesces rapid changes — a newly created file that's
     // written to immediately (the typical `Write` / `echo >` flow) usually
     // arrives as a single `Modify(ModifyKind::Any)` event, NOT
@@ -150,6 +207,7 @@ fn event_to_payloads(event: &notify::Event) -> Vec<FsEventPayload> {
                     payloads.push(FsEventPayload::Created {
                         path: p.to_string_lossy().into_owned(),
                         is_dir: p.is_dir(),
+                        ignored: is_ignored(p, project_root, gi),
                     });
                 } else {
                     payloads.push(FsEventPayload::Removed {
@@ -194,11 +252,11 @@ pub fn watch_project(app: AppHandle, project_path: String) -> Result<(), String>
                     if !ev
                         .paths
                         .iter()
-                        .any(|p| is_relevant(p, &root_for_handler, &gi))
+                        .any(|p| is_relevant(p, &root_for_handler))
                     {
                         continue;
                     }
-                    for payload in event_to_payloads(&ev.event) {
+                    for payload in event_to_payloads(&ev.event, &root_for_handler, &gi) {
                         let _ = app_for_handler
                             .emit(&format!("fs:event:{project_key}"), payload);
                     }
@@ -255,4 +313,17 @@ pub fn fs_create_dir(path: String) -> Result<(), String> {
         }
     }
     std::fs::create_dir(&p).map_err(|e| format!("create dir failed: {e}"))
+}
+
+#[tauri::command]
+pub fn fs_delete(path: String, is_dir: bool) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("does not exist: {path}"));
+    }
+    if is_dir {
+        std::fs::remove_dir_all(&p).map_err(|e| format!("remove dir failed: {e}"))
+    } else {
+        std::fs::remove_file(&p).map_err(|e| format!("remove file failed: {e}"))
+    }
 }

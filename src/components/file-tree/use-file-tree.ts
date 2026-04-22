@@ -9,6 +9,7 @@ export type TreeNode = {
   expanded: boolean;
   loaded: boolean;
   children: TreeNode[];
+  ignored: boolean;
 };
 
 type FsEntry = {
@@ -16,10 +17,11 @@ type FsEntry = {
   name: string;
   is_dir: boolean;
   size: number | null;
+  ignored: boolean;
 };
 
 export type FsEvent =
-  | { kind: "created"; path: string; is_dir: boolean }
+  | { kind: "created"; path: string; is_dir: boolean; ignored: boolean }
   | { kind: "modified"; path: string }
   | { kind: "removed"; path: string }
   | { kind: "renamed"; from: string; to: string };
@@ -69,6 +71,7 @@ export function makeFileTreeStore(projectPath: string) {
     expanded: true,
     loaded: false,
     children: [],
+    ignored: false,
   });
 
   function updateNode(path: string, fn: (node: TreeNode) => void) {
@@ -90,6 +93,7 @@ export function makeFileTreeStore(projectPath: string) {
       expanded: false,
       loaded: false,
       children: [],
+      ignored: e.ignored,
     }));
     updateNode(path, (n) => {
       n.children = children;
@@ -147,6 +151,7 @@ export function makeFileTreeStore(projectPath: string) {
                   ...prev,
                   name: e.name,
                   size: e.size,
+                  ignored: e.ignored,
                 };
               }
               return {
@@ -157,6 +162,7 @@ export function makeFileTreeStore(projectPath: string) {
                 expanded: false,
                 loaded: false,
                 children: [],
+                ignored: e.ignored,
               };
             });
             node.children = merged;
@@ -206,6 +212,7 @@ export function makeFileTreeStore(projectPath: string) {
               expanded: false,
               loaded: false,
               children: [],
+              ignored: ev.ignored,
             });
           }),
         );
@@ -229,17 +236,31 @@ export function makeFileTreeStore(projectPath: string) {
       }
       case "renamed": {
         applyFsEvent({ kind: "removed", path: ev.from });
-        applyFsEvent({ kind: "created", path: ev.to, is_dir: false });
+        // The rename payload doesn't carry is_dir / ignored — probe shape
+        // by inheriting the previous node's flags before they're gone.
+        // Safe fallback: treat as a non-ignored file; the next watcher
+        // event will correct it if wrong.
+        applyFsEvent({
+          kind: "created",
+          path: ev.to,
+          is_dir: false,
+          ignored: false,
+        });
         return;
       }
     }
   }
 
-  /** Depth-first flatten of all visible (expanded) rows for rendering. */
-  function flatten(): FlatRow[] {
+  /** Depth-first flatten of all visible (expanded) rows for rendering.
+   *  When `showIgnored` is false, entries whose `ignored` flag is true are
+   *  skipped along with their entire subtree. */
+  function flatten(showIgnored: boolean): FlatRow[] {
     const rows: FlatRow[] = [];
     const walk = (node: TreeNode, depth: number) => {
-      if (depth > 0) rows.push({ node, depth: depth - 1 });
+      if (depth > 0) {
+        if (!showIgnored && node.ignored) return;
+        rows.push({ node, depth: depth - 1 });
+      }
       if (node.isDir && node.expanded) {
         for (const child of node.children) walk(child, depth + 1);
       }

@@ -395,3 +395,29 @@ bun tauri dev
   straightforward follow-up but out of scope).
 - Future work: drag to reorder / move; per-folder "New file here" in
   context menu.
+
+---
+
+## Revision v1.1 (2026-04-22)
+
+First-pass UX feedback shipped:
+
+- **Target-aware create.** New file / new folder now honors the current
+  selection: selected dir → create inside; selected file → create as
+  sibling; nothing selected → project root. The inline input is
+  injected at the correct depth inside the target dir (or prepended at
+  root) instead of always at the top. Target dir is auto-expanded
+  before the input appears.
+- **Delete action.** Context menu grows a "Delete" entry with a native
+  confirm dialog (`@tauri-apps/plugin-dialog`). New Rust command
+  `fs_delete(path, is_dir)` that picks `remove_file` vs
+  `remove_dir_all`.
+- **Hidden / gitignored entries shown by default, grayed + italic.**
+  `list_dir` and the watcher now emit all entries (minus `.git/`)
+  tagged with `ignored: bool`; the frontend renders them with a
+  dimmed + italic style. A new Eye/EyeOff toggle in the header
+  (persisted in `localStorage["filetree:showIgnored"]`) flips between
+  show and hide. `is_relevant` in the watcher now only drops `.git/*`;
+  everything else fires events.
+- **Files tab icon swap.** `FolderTree` looked like it had a `>` glyph
+  at 12px (one of the icon's branch arms); replaced with `Files`.

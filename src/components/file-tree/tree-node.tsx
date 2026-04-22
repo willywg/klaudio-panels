@@ -63,7 +63,8 @@ export function TreeNode(props: Props) {
         "w-full flex items-center gap-1 px-2 py-0.5 text-[12px] text-left transition border-l-2 " +
         (props.selected
           ? "bg-neutral-800/60 border-indigo-500 text-neutral-100"
-          : "border-transparent text-neutral-300 hover:bg-neutral-900/60")
+          : "border-transparent text-neutral-300 hover:bg-neutral-900/60") +
+        (props.node.ignored ? " italic opacity-55" : "")
       }
       style={{ "padding-left": `${8 + props.depth * 12}px` }}
       title={props.node.name}

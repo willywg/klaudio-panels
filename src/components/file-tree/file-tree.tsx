@@ -11,14 +11,17 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import {
   ChevronsDownUp,
   Copy,
   Eye,
+  EyeOff,
   FilePlus,
   FolderOpen,
   FolderPlus,
   RotateCw,
+  Trash2,
 } from "lucide-solid";
 import { ContextMenu, type ContextMenuItem } from "@/components/context-menu";
 import { useGit } from "@/context/git";
@@ -26,7 +29,30 @@ import { useDiffPanel } from "@/context/diff-panel";
 import { useOpenIn } from "@/context/open-in";
 import { useEditorPty } from "@/context/editor-pty";
 import { TreeNode } from "./tree-node";
-import { makeFileTreeStore, type FsEvent } from "./use-file-tree";
+import {
+  makeFileTreeStore,
+  type FsEvent,
+  type TreeNode as TreeNodeType,
+} from "./use-file-tree";
+
+function stripTrailingSlash(p: string): string {
+  return p.endsWith("/") ? p.slice(0, -1) : p;
+}
+
+/** Read-only walk of the tree store to locate a node by absolute path. */
+function findNodeByPath(
+  root: TreeNodeType,
+  path: string,
+): TreeNodeType | null {
+  if (root.path === path) return root;
+  if (!root.isDir) return null;
+  if (!path.startsWith(root.path + "/") && root.path !== "/") return null;
+  for (const child of root.children) {
+    const found = findNodeByPath(child, path);
+    if (found) return found;
+  }
+  return null;
+}
 
 type Props = {
   projectPath: string;
@@ -48,6 +74,31 @@ function getStore(projectPath: string): Store {
 }
 
 type CreateMode = "file" | "folder";
+type CreateState = {
+  mode: CreateMode;
+  /** Absolute path of the directory the new entry will be created in. */
+  targetDir: string;
+};
+
+const SHOW_IGNORED_KEY = "filetree:showIgnored";
+
+function readShowIgnored(): boolean {
+  try {
+    const v = localStorage.getItem(SHOW_IGNORED_KEY);
+    // Default to true — matches user request ("por defecto que se muestren").
+    return v === null ? true : v === "1";
+  } catch {
+    return true;
+  }
+}
+
+function writeShowIgnored(v: boolean) {
+  try {
+    localStorage.setItem(SHOW_IGNORED_KEY, v ? "1" : "0");
+  } catch {
+    // localStorage unavailable — silent skip.
+  }
+}
 
 export function FileTree(props: Props) {
   const [selected, setSelected] = createSignal<string | null>(null);
@@ -56,8 +107,9 @@ export function FileTree(props: Props) {
     | { open: true; x: number; y: number; path: string; isDir: boolean }
   >({ open: false });
   const [error, setError] = createSignal<string | null>(null);
-  const [createMode, setCreateMode] = createSignal<CreateMode | null>(null);
+  const [createState, setCreateState] = createSignal<CreateState | null>(null);
   const [createValue, setCreateValue] = createSignal("");
+  const [showIgnored, setShowIgnored] = createSignal(readShowIgnored());
   let createInputEl: HTMLInputElement | undefined;
 
   const git = useGit();
@@ -200,36 +252,55 @@ export function FileTree(props: Props) {
     }
   }
 
-  function startCreate(mode: CreateMode) {
-    setCreateMode(mode);
+  /** Compute where a new file/folder should be created, based on the
+   *  current selection. If a directory is selected → create inside it.
+   *  If a file is selected → create next to it (in its parent dir).
+   *  Nothing selected → project root. */
+  function resolveCreateTarget(): string {
+    const sel = selected();
+    if (!sel) return stripTrailingSlash(props.projectPath);
+    const node = findNodeByPath(store().root, sel);
+    if (!node) return stripTrailingSlash(props.projectPath);
+    if (node.isDir) return sel;
+    // File selected → create in its parent.
+    const idx = sel.lastIndexOf("/");
+    return idx > 0 ? sel.slice(0, idx) : stripTrailingSlash(props.projectPath);
+  }
+
+  async function startCreate(mode: CreateMode) {
+    const targetDir = resolveCreateTarget();
+    // Make sure the target directory is expanded so the user sees the
+    // inline input (and the created entry, once the watcher emits).
+    if (targetDir !== stripTrailingSlash(props.projectPath)) {
+      const node = findNodeByPath(store().root, targetDir);
+      if (node && node.isDir && !node.expanded) {
+        await store().toggleDir(targetDir);
+      }
+    }
+    setCreateState({ mode, targetDir });
     setCreateValue("");
-    // Focus the input on next frame (after the row mounts).
     queueMicrotask(() => createInputEl?.focus());
   }
 
   function cancelCreate() {
-    setCreateMode(null);
+    setCreateState(null);
     setCreateValue("");
   }
 
   async function submitCreate() {
-    const mode = createMode();
+    const st = createState();
     const name = createValue().trim();
-    if (!mode || !name) {
+    if (!st || !name) {
       cancelCreate();
       return;
     }
-    // Guard against path separators — v1 creates at project root only.
     if (name.includes("/") || name === "." || name === "..") {
       setError(`invalid name: ${name}`);
       return;
     }
-    const base = props.projectPath.endsWith("/")
-      ? props.projectPath.slice(0, -1)
-      : props.projectPath;
-    const target = `${base}/${name}`;
+    const target = `${st.targetDir}/${name}`;
     try {
-      await invoke(mode === "file" ? "fs_create_file" : "fs_create_dir", {
+      await invoke(st.mode === "file" ? "fs_create_file" : "fs_create_dir", {
         path: target,
       });
       setError(null);
@@ -239,6 +310,28 @@ export function FileTree(props: Props) {
     } finally {
       cancelCreate();
     }
+  }
+
+  async function deleteEntry(path: string, isDir: boolean) {
+    const name = path.split("/").pop() ?? path;
+    const what = isDir ? "folder" : "file";
+    const ok = await confirm(
+      `Move ${what} "${name}" to the trash?\n\n${path}`,
+      { title: "Delete", kind: "warning" },
+    );
+    if (!ok) return;
+    try {
+      await invoke("fs_delete", { path, isDir });
+      if (selected() === path) setSelected(null);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  function toggleShowIgnored() {
+    const next = !showIgnored();
+    setShowIgnored(next);
+    writeShowIgnored(next);
   }
 
   function onCreateKey(e: KeyboardEvent) {
@@ -311,8 +404,46 @@ export function FileTree(props: Props) {
       icon: FolderOpen,
       onClick: () => void reveal(m.path),
     });
+    items.push({ kind: "divider" });
+    items.push({
+      label: "Delete",
+      icon: Trash2,
+      iconClass: "text-red-400",
+      onClick: () => void deleteEntry(m.path, m.isDir),
+    });
     return items;
   };
+
+  /** Compose the list of rows to render — tree nodes + the inline input
+   *  for new file/folder, injected at the correct depth inside the target
+   *  directory (or at the top when the target is the project root). */
+  const renderRows = createMemo(() => {
+    const rows = store()
+      .flatten(showIgnored())
+      .map((r) => ({ kind: "node" as const, row: r }));
+    const st = createState();
+    if (!st) return rows;
+
+    if (st.targetDir === stripTrailingSlash(props.projectPath)) {
+      return [
+        { kind: "input" as const, depth: 0 },
+        ...rows,
+      ];
+    }
+
+    const targetIdx = rows.findIndex(
+      (r) => r.kind === "node" && r.row.node.path === st.targetDir,
+    );
+    if (targetIdx < 0) return rows;
+    const targetRow = rows[targetIdx];
+    if (targetRow.kind !== "node") return rows;
+    const depth = targetRow.row.depth + 1;
+    return [
+      ...rows.slice(0, targetIdx + 1),
+      { kind: "input" as const, depth },
+      ...rows.slice(targetIdx + 1),
+    ];
+  });
 
   return (
     <div class="h-full flex flex-col">
@@ -323,20 +454,32 @@ export function FileTree(props: Props) {
         <div class="flex items-center gap-0.5">
           <HeaderButton
             title="New File"
-            onClick={() => startCreate("file")}
-            disabled={createMode() !== null}
+            onClick={() => void startCreate("file")}
+            disabled={createState() !== null}
           >
             <FilePlus size={13} strokeWidth={2} />
           </HeaderButton>
           <HeaderButton
             title="New Folder"
-            onClick={() => startCreate("folder")}
-            disabled={createMode() !== null}
+            onClick={() => void startCreate("folder")}
+            disabled={createState() !== null}
           >
             <FolderPlus size={13} strokeWidth={2} />
           </HeaderButton>
           <HeaderButton title="Refresh" onClick={() => void onRefresh()}>
             <RotateCw size={13} strokeWidth={2} />
+          </HeaderButton>
+          <HeaderButton
+            title={
+              showIgnored() ? "Hide hidden / ignored" : "Show hidden / ignored"
+            }
+            onClick={toggleShowIgnored}
+          >
+            {showIgnored() ? (
+              <Eye size={13} strokeWidth={2} />
+            ) : (
+              <EyeOff size={13} strokeWidth={2} />
+            )}
           </HeaderButton>
           <HeaderButton
             title="Collapse All"
@@ -358,48 +501,54 @@ export function FileTree(props: Props) {
         </div>
       </Show>
       <div class="flex-1 overflow-y-auto py-1">
-        <Show when={createMode() !== null}>
-          <div
-            class="flex items-center gap-1 px-2 py-0.5"
-            style={{ "padding-left": "8px" }}
-          >
-            <span class="w-[11px] shrink-0" />
-            <span class="w-[13px] h-[13px] shrink-0" />
-            <input
-              ref={createInputEl}
-              value={createValue()}
-              onInput={(e) => setCreateValue(e.currentTarget.value)}
-              onKeyDown={onCreateKey}
-              onBlur={() => {
-                // Submit on blur if there's content, otherwise cancel.
-                if (createValue().trim()) void submitCreate();
-                else cancelCreate();
-              }}
-              placeholder={
-                createMode() === "file" ? "new file name" : "new folder name"
-              }
-              class="flex-1 min-w-0 bg-neutral-900 border border-indigo-500/60 rounded px-1.5 py-0 text-[12px] text-neutral-100 outline-none focus:border-indigo-400"
-            />
-          </div>
-        </Show>
-        <For each={store().flatten()}>
-          {(row) => (
-            <TreeNode
-              node={row.node}
-              depth={row.depth}
-              selected={selected() === row.node.path}
-              status={statusMap().get(row.node.path)}
-              onToggle={(path) => void store().toggleDir(path)}
-              onSelect={(path) => setSelected(path)}
-              onOpen={handleOpen}
-              onContextMenu={openContextMenu}
-              onModClick={handleClickWithMods}
-            />
-          )}
+        <For each={renderRows()}>
+          {(row) => {
+            if (row.kind === "input") {
+              return (
+                <div
+                  class="flex items-center gap-1 px-2 py-0.5"
+                  style={{ "padding-left": `${8 + row.depth * 12}px` }}
+                >
+                  <span class="w-[11px] shrink-0" />
+                  <span class="w-[13px] h-[13px] shrink-0" />
+                  <input
+                    ref={createInputEl}
+                    value={createValue()}
+                    onInput={(e) => setCreateValue(e.currentTarget.value)}
+                    onKeyDown={onCreateKey}
+                    onBlur={() => {
+                      if (createValue().trim()) void submitCreate();
+                      else cancelCreate();
+                    }}
+                    placeholder={
+                      createState()?.mode === "file"
+                        ? "new file name"
+                        : "new folder name"
+                    }
+                    class="flex-1 min-w-0 bg-neutral-900 border border-indigo-500/60 rounded px-1.5 py-0 text-[12px] text-neutral-100 outline-none focus:border-indigo-400"
+                  />
+                </div>
+              );
+            }
+            const r = row.row;
+            return (
+              <TreeNode
+                node={r.node}
+                depth={r.depth}
+                selected={selected() === r.node.path}
+                status={statusMap().get(r.node.path)}
+                onToggle={(path) => void store().toggleDir(path)}
+                onSelect={(path) => setSelected(path)}
+                onOpen={handleOpen}
+                onContextMenu={openContextMenu}
+                onModClick={handleClickWithMods}
+              />
+            );
+          }}
         </For>
         <Show when={store().root.loaded && store().root.children.length === 0}>
           <div class="px-3 py-4 text-[11px] text-neutral-500">
-            Empty (or fully gitignored).
+            Empty.
           </div>
         </Show>
       </div>

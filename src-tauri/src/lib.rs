@@ -73,6 +73,7 @@ pub fn run() {
             fs::unwatch_project,
             fs::fs_create_file,
             fs::fs_create_dir,
+            fs::fs_delete,
             git::git_status,
             git::git_summary,
             git::git_diff_file,
