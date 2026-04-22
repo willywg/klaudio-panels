@@ -165,14 +165,15 @@ function Shell() {
       }
       if (mod && e.shiftKey && !e.altKey && (e.key === "d" || e.key === "D")) {
         e.preventDefault();
-        if (activeProjectPath()) diffPanel.toggle();
+        const p = activeProjectPath();
+        if (p) diffPanel.toggle(p);
       }
       // Cmd+W closes the active file-preview tab in the diff panel. Only
       // when the panel is open and a file tab is active — otherwise Cmd+W
       // is left alone for future tab-close wiring.
       if (mod && !e.shiftKey && !e.altKey && e.key === "w") {
         const p = activeProjectPath();
-        if (!p || !diffPanel.isOpen()) return;
+        if (!p || !diffPanel.isOpen(p)) return;
         const key = diffPanel.activeKeyFor(p);
         if (key === "diff") return;
         e.preventDefault();
@@ -211,12 +212,6 @@ function Shell() {
     on(activeProjectPath, (p) => {
       if (p) void git.ensureFor(p);
     }),
-  );
-
-  // Close the diff panel on project switch so it never shows stale content
-  // from the previous project. Width (per-project) is still persisted.
-  createEffect(
-    on(activeProjectPath, () => diffPanel.close(), { defer: true }),
   );
 
   const projectTabs = createMemo(() => {
@@ -547,7 +542,7 @@ function Shell() {
                 </Show>
               </div>
             </section>
-            <Show when={diffPanel.isOpen() && activeProjectPath()}>
+            <Show when={activeProjectPath() && diffPanel.isOpen(activeProjectPath()!) ? activeProjectPath() : null}>
               {(p) => (
                 <>
                   <SplitDivider

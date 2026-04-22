@@ -9,6 +9,7 @@ import {
   readText as readClipboardText,
 } from "@tauri-apps/plugin-clipboard-manager";
 import { useShellPty } from "@/context/shell-pty";
+import { openUrlInSystemBrowser } from "@/lib/open-url";
 
 const THEME = {
   background: "#0b0b0c",
@@ -82,7 +83,7 @@ export function ShellTerminalView(props: Props) {
     fit = new FitAddon();
     term.loadAddon(fit);
     term.loadAddon(new Unicode11Addon());
-    term.loadAddon(new WebLinksAddon());
+    term.loadAddon(new WebLinksAddon(openUrlInSystemBrowser));
 
     term.open(container!);
     term.unicode.activeVersion = "11";

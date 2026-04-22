@@ -194,9 +194,18 @@ export function ShellTerminalPanel(props: Props) {
               <div
                 class="absolute inset-0"
                 style={{
-                  visibility: tabSelected() ? "visible" : "hidden",
+                  // MUST use `visible()` (tabSelected && panel active), not
+                  // `tabSelected()`. CSS `visibility: visible` on a child
+                  // overrides `visibility: hidden` on its ancestor — the one
+                  // property in CSS that cascades this way. App.tsx hides
+                  // the whole panel of an inactive project via the outer
+                  // wrapper; if this inner div forces `visible` on the
+                  // selected tab, the inactive project's xterm re-emerges
+                  // and, being later in DOM, stacks above the active one →
+                  // terminals "cross" between projects when switching.
+                  visibility: visible() ? "visible" : "hidden",
                   "pointer-events": visible() ? "auto" : "none",
-                  "z-index": tabSelected() ? 1 : 0,
+                  "z-index": visible() ? 1 : 0,
                 }}
               >
                 <Show when={tab.status !== "opening"} fallback={<ShellLoading />}>

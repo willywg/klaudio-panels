@@ -1,18 +1,18 @@
-const OPEN_KEY = "diffPanelOpen";
+const OPEN_PREFIX = "diffPanelOpen:";
 const WIDTH_PREFIX = "diffPanelWidth:";
 
-export function getDiffPanelOpen(): boolean {
+export function getDiffPanelOpen(projectPath: string): boolean {
   try {
-    return localStorage.getItem(OPEN_KEY) === "1";
+    return localStorage.getItem(OPEN_PREFIX + projectPath) === "1";
   } catch {
     return false;
   }
 }
 
-export function setDiffPanelOpen(v: boolean): void {
+export function setDiffPanelOpen(projectPath: string, v: boolean): void {
   try {
-    if (v) localStorage.setItem(OPEN_KEY, "1");
-    else localStorage.removeItem(OPEN_KEY);
+    if (v) localStorage.setItem(OPEN_PREFIX + projectPath, "1");
+    else localStorage.removeItem(OPEN_PREFIX + projectPath);
   } catch {
     // ignore
   }

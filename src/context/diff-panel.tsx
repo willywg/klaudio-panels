@@ -43,7 +43,24 @@ function freshState(): ProjectPanelState {
 }
 
 function makeDiffPanelContext() {
-  const [open, setOpen] = createSignal<boolean>(getDiffPanelOpen());
+  // Open/closed state is per-project. Stored as a reactive Record so any read
+  // of `isOpen(path)` subscribes to changes for that path, and persisted
+  // under `diffPanelOpen:<path>`. Solves the "close in A also closes B"
+  // cross-talk of the previous single-signal design.
+  const [openMap, setOpenMap] = createSignal<Record<string, boolean>>({});
+
+  function isOpen(projectPath: string): boolean {
+    const cached = openMap()[projectPath];
+    if (cached !== undefined) return cached;
+    const initial = getDiffPanelOpen(projectPath);
+    setOpenMap((m) => ({ ...m, [projectPath]: initial }));
+    return initial;
+  }
+
+  function writeOpen(projectPath: string, value: boolean) {
+    setDiffPanelOpen(projectPath, value);
+    setOpenMap((m) => ({ ...m, [projectPath]: value }));
+  }
   /** Set of rel paths that the user has explicitly expanded. Default is
    *  COLLAPSED so opening the panel against 50 changed files doesn't render
    *  50 Shiki/FileDiff instances at once. */
@@ -104,10 +121,7 @@ function makeDiffPanelContext() {
         setPanels(projectPath, "activeKey", key);
       }
     }
-    if (!open()) {
-      setOpen(true);
-      setDiffPanelOpen(true);
-    }
+    if (!isOpen(projectPath)) writeOpen(projectPath, true);
   }
 
   /** Callers may register a disposer (e.g. editor-pty kill) to run whenever
@@ -191,10 +205,7 @@ function makeDiffPanelContext() {
         state.activeKey = key;
       }),
     );
-    if (!open()) {
-      setOpen(true);
-      setDiffPanelOpen(true);
-    }
+    if (!isOpen(projectPath)) writeOpen(projectPath, true);
   }
 
   function widthFor(projectPath: string): number {
@@ -237,10 +248,7 @@ function makeDiffPanelContext() {
     setFocused(rel);
     ensureProject(projectPath);
     setPanels(projectPath, "activeKey", "diff");
-    if (!open()) {
-      setOpen(true);
-      setDiffPanelOpen(true);
-    }
+    if (!isOpen(projectPath)) writeOpen(projectPath, true);
   }
 
   function clearFocus() {
@@ -255,21 +263,17 @@ function makeDiffPanelContext() {
     setExpanded(new Set<string>());
   }
 
-  function openPanel() {
-    if (!open()) {
-      setOpen(true);
-      setDiffPanelOpen(true);
-    }
+  function openPanel(projectPath: string) {
+    if (!isOpen(projectPath)) writeOpen(projectPath, true);
   }
 
-  function close() {
-    setOpen(false);
-    setDiffPanelOpen(false);
+  function close(projectPath: string) {
+    writeOpen(projectPath, false);
   }
 
-  function toggle() {
-    if (open()) close();
-    else openPanel();
+  function toggle(projectPath: string) {
+    if (isOpen(projectPath)) close(projectPath);
+    else openPanel(projectPath);
   }
 
   function setDiffStyle(s: DiffStyle) {
@@ -277,7 +281,7 @@ function makeDiffPanelContext() {
   }
 
   return {
-    isOpen: open,
+    isOpen,
     isExpanded,
     focused,
     clearFocus,

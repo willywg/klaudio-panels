@@ -167,8 +167,12 @@ export function ProjectsSidebar(props: Props) {
                 onPointerDown={(e) => onPointerDown(e, proj.path)}
                 onClick={(e) => onClickAvatar(e, proj.path)}
                 onContextMenu={(e) => {
+                  // Suppress the native context menu but do NOT trigger
+                  // close — too destructive for an accidental right-click,
+                  // and has surfaced hard-to-reproduce side effects on the
+                  // other projects' panels. Close lives on the × hover
+                  // affordance only.
                   e.preventDefault();
-                  requestClose(proj.path);
                 }}
                 class={
                   "w-10 h-10 rounded-lg flex items-center justify-center text-[15px] font-semibold text-white transition shadow-sm select-none " +
@@ -181,7 +185,7 @@ export function ProjectsSidebar(props: Props) {
                   opacity: isDragging() ? 0.4 : undefined,
                   cursor: isDragging() ? "grabbing" : "pointer",
                 }}
-                title={`${label()}\n${proj.path}${openCount() > 0 ? `\n${openCount()} open tab(s)` : ""}\n\nClick: open. Hold + drag: reorder. Right-click or ×: close.`}
+                title={`${label()}\n${proj.path}${openCount() > 0 ? `\n${openCount()} open tab(s)` : ""}\n\nClick: open. Hold + drag: reorder. × (hover): close.`}
               >
                 {initial()}
               </button>

@@ -9,6 +9,7 @@ import {
   readText as readClipboardText,
 } from "@tauri-apps/plugin-clipboard-manager";
 import { useEditorPty } from "@/context/editor-pty";
+import { openUrlInSystemBrowser } from "@/lib/open-url";
 
 const THEME = {
   background: "#0b0b0c",
@@ -151,7 +152,7 @@ export function EditorPtyView(props: Props) {
     const unicode11 = new Unicode11Addon();
     term.loadAddon(fit);
     term.loadAddon(unicode11);
-    term.loadAddon(new WebLinksAddon());
+    term.loadAddon(new WebLinksAddon(openUrlInSystemBrowser));
 
     term.open(container!);
     term.unicode.activeVersion = "11";

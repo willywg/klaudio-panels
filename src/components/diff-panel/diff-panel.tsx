@@ -241,7 +241,7 @@ function TabStrip(props: { projectPath: string }) {
       );
       if (existing) {
         panel.setActiveTab(props.projectPath, existing);
-        panel.openPanel();
+        panel.openPanel(props.projectPath);
         return;
       }
       try {
@@ -356,7 +356,7 @@ function TabStrip(props: { projectPath: string }) {
         <button
           class="w-9 shrink-0 text-neutral-500 hover:text-neutral-200 hover:bg-neutral-800 transition flex items-center justify-center"
           title="Close diff panel (⌘⇧D)"
-          onClick={() => panel.close()}
+          onClick={() => panel.close(props.projectPath)}
         >
           <X size={14} strokeWidth={2} />
         </button>

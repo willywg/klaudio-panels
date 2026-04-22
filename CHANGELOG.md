@@ -4,6 +4,52 @@ All notable changes to Klaudio UI are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [0.9.2] — 2026-04-22
+
+### Added
+- **URLs in any terminal now open in the system default browser.** Wired
+  `xterm.WebLinksAddon` with a handler that calls `@tauri-apps/plugin-opener`'s
+  `openUrl`. WebKit's default `window.open(uri, "_blank")` either no-ops
+  or opens a second webview inside Tauri; users expect Safari/Chrome.
+  Applied consistently across the Claude terminal, shell dock, and
+  embedded editor PTY views.
+
+### Fixed
+- **Cmd+V pasted text twice.** The custom key handler called
+  `term.paste()` with the clipboard contents but didn't `preventDefault()`,
+  so the webview's native paste also fired into xterm's hidden textarea
+  and xterm forwarded those bytes through `onData` — the PTY received the
+  same string twice. Matches the same `preventDefault()` the Shift+Enter
+  branch already used.
+- **Shell terminals cross-bled between projects on switch.** CSS quirk:
+  `visibility: visible` on a child **overrides** `visibility: hidden` on
+  an ancestor (the one CSS property that cascades that way). The outer
+  `<App>` wrapper hides inactive projects' dock panels, but the per-tab
+  `<div>` inside `ShellTerminalPanel` was forcing `visibility: visible`
+  on the selected tab of every panel — re-exposing the inactive
+  project's xterm canvas. Being absolute-positioned siblings, whichever
+  panel came later in DOM won visually. Switched the inner toggle from
+  `tabSelected()` to `visible()` (tabSelected && panel active) so the
+  inner `visible` only ever appears when the outer panel is also
+  visible. `z-index` tightened for the same reason.
+- **Diff / file-preview panel state is now per-project.** The panel
+  used a single global open/closed flag that leaked across projects —
+  opening it in A also opened it in B, closing it in B re-closed it in
+  A, and App.tsx compensated by force-closing on every project switch
+  (so a panel you'd opened in A was gone when you came back). Migrated
+  to a per-project `Record<string, boolean>` backed by
+  `localStorage["diffPanelOpen:<projectPath>"]`, threaded `projectPath`
+  through `isOpen` / `openPanel` / `close` / `toggle`, and removed the
+  force-close effect on project switch. Each project now remembers its
+  own panel state across switches and app restarts.
+- **Right-click on a project avatar no longer closes the project.** The
+  context-menu handler was wired to the destructive "close project"
+  flow. A single accidental right-click was enough to kill all PTYs and
+  unpin the project; one user also reported a rare follow-on where the
+  other projects' Claude/shell panels blanked. `onContextMenu` now only
+  suppresses the native menu; close is available via the hover × button
+  only. Tooltip updated.
+
 ## [0.9.1] — 2026-04-22
 
 ### Fixed

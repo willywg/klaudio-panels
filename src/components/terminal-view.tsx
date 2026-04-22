@@ -11,6 +11,7 @@ import {
 import { useTerminal } from "@/context/terminal";
 import { useDiffPanel } from "@/context/diff-panel";
 import { makeFileLinkProvider } from "@/lib/xterm-file-links";
+import { openUrlInSystemBrowser } from "@/lib/open-url";
 
 const THEME = {
   background: "#0b0b0c",
@@ -86,7 +87,7 @@ export function TerminalView(props: Props) {
     const unicode11 = new Unicode11Addon();
     term.loadAddon(fit);
     term.loadAddon(unicode11);
-    term.loadAddon(new WebLinksAddon());
+    term.loadAddon(new WebLinksAddon(openUrlInSystemBrowser));
 
     term.open(container!);
     term.unicode.activeVersion = "11";
@@ -168,6 +169,10 @@ export function TerminalView(props: Props) {
         // permission bubble every time. term.paste() wraps the text in
         // bracketed-paste markers when the PTY has ?2004h active so Claude
         // Code can tell pasted input apart from typed input.
+        // preventDefault() is critical — without it the webview also fires
+        // its native paste into xterm's hidden textarea, xterm forwards
+        // those bytes as onData, and the PTY receives the text twice.
+        e.preventDefault();
         readClipboardText()
           .then((text) => {
             if (text) term!.paste(text);

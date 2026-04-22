@@ -16,7 +16,7 @@ export function GitSummaryPill(props: Props) {
   const visible = () => summary().adds > 0 || summary().dels > 0;
 
   function onClick() {
-    panel.toggle();
+    panel.toggle(props.projectPath);
   }
 
   return (

@@ -156,7 +156,7 @@ export function FileTree(props: Props) {
     );
     if (existing) {
       diffPanel.setActiveTab(props.projectPath, existing);
-      diffPanel.openPanel();
+      diffPanel.openPanel(props.projectPath);
       return;
     }
     try {
