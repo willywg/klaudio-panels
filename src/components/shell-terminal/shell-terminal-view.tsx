@@ -134,6 +134,19 @@ export function ShellTerminalView(props: Props) {
         term!.clear();
         return false;
       }
+      // Cmd+Left/Right → beginning/end of line (iTerm2 "Natural Text
+      // Editing" preset). Works in bash/zsh/fish line editors via
+      // Ctrl+A / Ctrl+E.
+      if (key === "arrowleft") {
+        e.preventDefault();
+        void ctx.write(props.ptyId, encoder.encode("\x01"));
+        return false;
+      }
+      if (key === "arrowright") {
+        e.preventDefault();
+        void ctx.write(props.ptyId, encoder.encode("\x05"));
+        return false;
+      }
       // Cmd+J / Cmd+W / Cmd+B are app-level; don't forward a literal letter
       // into the PTY when the global handler is about to claim it.
       if (key === "j" || key === "w" || key === "b") return false;

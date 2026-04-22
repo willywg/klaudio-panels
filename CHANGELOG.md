@@ -4,6 +4,16 @@ All notable changes to Klaudio UI are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [0.9.4] — 2026-04-22
+
+### Added
+- **Cmd+← / Cmd+→ jump to start/end of the prompt line.** Matches the
+  iTerm2 "Natural Text Editing" preset and Warp's default. The custom
+  xterm key handler translates each to `Ctrl+A` / `Ctrl+E`, which Ink's
+  text input (Claude Code prompt) and every POSIX line editor
+  (bash/zsh/fish) honor as home/end. Applied to both the Claude
+  terminal view and the shell dock.
+
 ## [0.9.3] — 2026-04-22
 
 ### Fixed

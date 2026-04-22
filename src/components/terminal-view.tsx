@@ -189,6 +189,19 @@ export function TerminalView(props: Props) {
         term!.clear();
         return false;
       }
+      // Cmd+Left/Right → beginning/end of line (iTerm2 "Natural Text
+      // Editing" preset, Warp default). Ink's text input (used by
+      // Claude Code's prompt) reads Ctrl+A / Ctrl+E as home/end.
+      if (key === "arrowleft") {
+        e.preventDefault();
+        void ctx.write(props.id, encoder.encode("\x01"));
+        return false;
+      }
+      if (key === "arrowright") {
+        e.preventDefault();
+        void ctx.write(props.id, encoder.encode("\x05"));
+        return false;
+      }
       return true;
     });
 
