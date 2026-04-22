@@ -19,7 +19,7 @@ type Props = {
 };
 
 export function TreeNode(props: Props) {
-  const FileIcon = () => iconForFile(props.node.name);
+  const fileIcon = () => iconForFile(props.node.name);
 
   function onClick(e: MouseEvent) {
     e.preventDefault();
@@ -88,8 +88,14 @@ export function TreeNode(props: Props) {
         <>
           <span class="w-[11px] shrink-0" />
           {(() => {
-            const Icon = FileIcon();
-            return <Icon size={13} strokeWidth={2} class="shrink-0 text-neutral-500" />;
+            const { Icon, color } = fileIcon();
+            return (
+              <Icon
+                size={13}
+                strokeWidth={2}
+                class={"shrink-0 " + color}
+              />
+            );
           })()}
         </>
       )}

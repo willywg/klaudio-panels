@@ -128,59 +128,36 @@ fn is_relevant(path: &Path, project_root: &Path, gi: &Gitignore) -> bool {
 }
 
 fn event_to_payloads(event: &notify::Event) -> Vec<FsEventPayload> {
+    // FSEvents on macOS coalesces rapid changes — a newly created file that's
+    // written to immediately (the typical `Write` / `echo >` flow) usually
+    // arrives as a single `Modify(ModifyKind::Any)` event, NOT
+    // `Create(File)` + `Modify(Data)`. Relying on EventKind granularity
+    // loses those creates, so we probe the filesystem instead: if the
+    // path exists now → Created; otherwise → Removed. Renames with both
+    // endpoints present keep their dedicated payload so the frontend
+    // can preserve expanded state across the move.
     let mut payloads = Vec::new();
-    let paths: Vec<String> = event
-        .paths
-        .iter()
-        .map(|p| p.to_string_lossy().into_owned())
-        .collect();
-    match event.kind {
-        EventKind::Create(_) => {
-            for p in &event.paths {
-                let is_dir = p.is_dir();
-                payloads.push(FsEventPayload::Created {
-                    path: p.to_string_lossy().into_owned(),
-                    is_dir,
-                });
-            }
+    match &event.kind {
+        EventKind::Modify(notify::event::ModifyKind::Name(_)) if event.paths.len() == 2 => {
+            payloads.push(FsEventPayload::Renamed {
+                from: event.paths[0].to_string_lossy().into_owned(),
+                to: event.paths[1].to_string_lossy().into_owned(),
+            });
         }
-        EventKind::Modify(notify::event::ModifyKind::Name(_)) => {
-            if paths.len() == 2 {
-                payloads.push(FsEventPayload::Renamed {
-                    from: paths[0].clone(),
-                    to: paths[1].clone(),
-                });
-            } else {
-                // Partial rename (from or to only) — surface as removed/created.
-                for p in &event.paths {
-                    if p.exists() {
-                        payloads.push(FsEventPayload::Created {
-                            path: p.to_string_lossy().into_owned(),
-                            is_dir: p.is_dir(),
-                        });
-                    } else {
-                        payloads.push(FsEventPayload::Removed {
-                            path: p.to_string_lossy().into_owned(),
-                        });
-                    }
+        _ => {
+            for p in &event.paths {
+                if p.exists() {
+                    payloads.push(FsEventPayload::Created {
+                        path: p.to_string_lossy().into_owned(),
+                        is_dir: p.is_dir(),
+                    });
+                } else {
+                    payloads.push(FsEventPayload::Removed {
+                        path: p.to_string_lossy().into_owned(),
+                    });
                 }
             }
         }
-        EventKind::Modify(_) => {
-            for p in &event.paths {
-                payloads.push(FsEventPayload::Modified {
-                    path: p.to_string_lossy().into_owned(),
-                });
-            }
-        }
-        EventKind::Remove(_) => {
-            for p in &event.paths {
-                payloads.push(FsEventPayload::Removed {
-                    path: p.to_string_lossy().into_owned(),
-                });
-            }
-        }
-        _ => {}
     }
     payloads
 }
@@ -250,4 +227,32 @@ pub fn unwatch_project(app: AppHandle, project_path: String) -> Result<(), Strin
     let mut cache = state.inner.lock().map_err(|e| e.to_string())?;
     cache.pop(&project_path);
     Ok(())
+}
+
+#[tauri::command]
+pub fn fs_create_file(path: String) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    if p.exists() {
+        return Err(format!("already exists: {path}"));
+    }
+    if let Some(parent) = p.parent() {
+        if !parent.is_dir() {
+            return Err(format!("parent directory does not exist: {}", parent.display()));
+        }
+    }
+    std::fs::write(&p, b"").map_err(|e| format!("create file failed: {e}"))
+}
+
+#[tauri::command]
+pub fn fs_create_dir(path: String) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    if p.exists() {
+        return Err(format!("already exists: {path}"));
+    }
+    if let Some(parent) = p.parent() {
+        if !parent.is_dir() {
+            return Err(format!("parent directory does not exist: {}", parent.display()));
+        }
+    }
+    std::fs::create_dir(&p).map_err(|e| format!("create dir failed: {e}"))
 }

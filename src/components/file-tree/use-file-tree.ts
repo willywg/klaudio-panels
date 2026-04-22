@@ -117,6 +117,76 @@ export function makeFileTreeStore(projectPath: string) {
     });
   }
 
+  /** Re-list every currently-loaded directory, preserving expanded state
+   *  for paths that still exist. Used by the header "refresh" button. */
+  async function refresh() {
+    // Collect loaded dir paths before we mutate.
+    const loadedDirs: string[] = [];
+    const walk = (n: TreeNode) => {
+      if (n.isDir && n.loaded) {
+        loadedDirs.push(n.path);
+        for (const c of n.children) walk(c);
+      }
+    };
+    walk(root);
+
+    for (const p of loadedDirs) {
+      try {
+        const entries = (await invoke("list_dir", { path: p })) as FsEntry[];
+        setRoot(
+          produce((r: TreeNode) => {
+            const node = findNodeMut(r, p);
+            if (!node) return;
+            const prevByPath = new Map(node.children.map((c) => [c.path, c]));
+            const merged: TreeNode[] = entries.map((e) => {
+              const prev = prevByPath.get(e.path);
+              if (prev && prev.isDir === e.is_dir) {
+                // Preserve expanded/loaded/children so the user's state
+                // survives the refresh.
+                return {
+                  ...prev,
+                  name: e.name,
+                  size: e.size,
+                };
+              }
+              return {
+                path: e.path,
+                name: e.name,
+                isDir: e.is_dir,
+                size: e.size,
+                expanded: false,
+                loaded: false,
+                children: [],
+              };
+            });
+            node.children = merged;
+          }),
+        );
+      } catch (err) {
+        // Directory was removed while we were iterating — drop it from
+        // the parent's children list.
+        console.warn("list_dir failed during refresh", p, err);
+      }
+    }
+  }
+
+  /** Collapse every directory except root. */
+  function collapseAll() {
+    setRoot(
+      produce((r: TreeNode) => {
+        const walk = (n: TreeNode) => {
+          for (const c of n.children) {
+            if (c.isDir) {
+              c.expanded = false;
+              walk(c);
+            }
+          }
+        };
+        walk(r);
+      }),
+    );
+  }
+
   function applyFsEvent(ev: FsEvent) {
     switch (ev.kind) {
       case "created": {
@@ -184,5 +254,7 @@ export function makeFileTreeStore(projectPath: string) {
     toggleDir,
     applyFsEvent,
     flatten,
+    refresh,
+    collapseAll,
   };
 }

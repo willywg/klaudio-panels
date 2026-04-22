@@ -6,11 +6,20 @@ import {
   createSignal,
   on,
   onCleanup,
+  type JSX,
 } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Copy, Eye, FolderOpen } from "lucide-solid";
+import {
+  ChevronsDownUp,
+  Copy,
+  Eye,
+  FilePlus,
+  FolderOpen,
+  FolderPlus,
+  RotateCw,
+} from "lucide-solid";
 import { ContextMenu, type ContextMenuItem } from "@/components/context-menu";
 import { useGit } from "@/context/git";
 import { useDiffPanel } from "@/context/diff-panel";
@@ -38,6 +47,8 @@ function getStore(projectPath: string): Store {
   return s;
 }
 
+type CreateMode = "file" | "folder";
+
 export function FileTree(props: Props) {
   const [selected, setSelected] = createSignal<string | null>(null);
   const [menu, setMenu] = createSignal<
@@ -45,6 +56,9 @@ export function FileTree(props: Props) {
     | { open: true; x: number; y: number; path: string; isDir: boolean }
   >({ open: false });
   const [error, setError] = createSignal<string | null>(null);
+  const [createMode, setCreateMode] = createSignal<CreateMode | null>(null);
+  const [createValue, setCreateValue] = createSignal("");
+  let createInputEl: HTMLInputElement | undefined;
 
   const git = useGit();
   const diffPanel = useDiffPanel();
@@ -186,6 +200,66 @@ export function FileTree(props: Props) {
     }
   }
 
+  function startCreate(mode: CreateMode) {
+    setCreateMode(mode);
+    setCreateValue("");
+    // Focus the input on next frame (after the row mounts).
+    queueMicrotask(() => createInputEl?.focus());
+  }
+
+  function cancelCreate() {
+    setCreateMode(null);
+    setCreateValue("");
+  }
+
+  async function submitCreate() {
+    const mode = createMode();
+    const name = createValue().trim();
+    if (!mode || !name) {
+      cancelCreate();
+      return;
+    }
+    // Guard against path separators — v1 creates at project root only.
+    if (name.includes("/") || name === "." || name === "..") {
+      setError(`invalid name: ${name}`);
+      return;
+    }
+    const base = props.projectPath.endsWith("/")
+      ? props.projectPath.slice(0, -1)
+      : props.projectPath;
+    const target = `${base}/${name}`;
+    try {
+      await invoke(mode === "file" ? "fs_create_file" : "fs_create_dir", {
+        path: target,
+      });
+      setError(null);
+      setSelected(target);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      cancelCreate();
+    }
+  }
+
+  function onCreateKey(e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void submitCreate();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      cancelCreate();
+    }
+  }
+
+  async function onRefresh() {
+    try {
+      await store().refresh();
+      setError(null);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
   const menuItems = (): ContextMenuItem[] => {
     const m = menu();
     if (!m.open) return [];
@@ -242,12 +316,72 @@ export function FileTree(props: Props) {
 
   return (
     <div class="h-full flex flex-col">
+      <div class="h-7 shrink-0 flex items-center justify-between pl-3 pr-1 border-b border-neutral-800/60">
+        <span class="text-[10px] uppercase tracking-wider text-neutral-500 truncate">
+          Explorer
+        </span>
+        <div class="flex items-center gap-0.5">
+          <HeaderButton
+            title="New File"
+            onClick={() => startCreate("file")}
+            disabled={createMode() !== null}
+          >
+            <FilePlus size={13} strokeWidth={2} />
+          </HeaderButton>
+          <HeaderButton
+            title="New Folder"
+            onClick={() => startCreate("folder")}
+            disabled={createMode() !== null}
+          >
+            <FolderPlus size={13} strokeWidth={2} />
+          </HeaderButton>
+          <HeaderButton title="Refresh" onClick={() => void onRefresh()}>
+            <RotateCw size={13} strokeWidth={2} />
+          </HeaderButton>
+          <HeaderButton
+            title="Collapse All"
+            onClick={() => store().collapseAll()}
+          >
+            <ChevronsDownUp size={13} strokeWidth={2} />
+          </HeaderButton>
+        </div>
+      </div>
       <Show when={error()}>
-        <div class="px-3 py-2 text-[11px] text-red-400">
-          Error: {error()}
+        <div class="px-3 py-2 text-[11px] text-red-400 flex items-start gap-2">
+          <span class="flex-1">Error: {error()}</span>
+          <button
+            class="text-neutral-500 hover:text-neutral-300"
+            onClick={() => setError(null)}
+          >
+            ✕
+          </button>
         </div>
       </Show>
       <div class="flex-1 overflow-y-auto py-1">
+        <Show when={createMode() !== null}>
+          <div
+            class="flex items-center gap-1 px-2 py-0.5"
+            style={{ "padding-left": "8px" }}
+          >
+            <span class="w-[11px] shrink-0" />
+            <span class="w-[13px] h-[13px] shrink-0" />
+            <input
+              ref={createInputEl}
+              value={createValue()}
+              onInput={(e) => setCreateValue(e.currentTarget.value)}
+              onKeyDown={onCreateKey}
+              onBlur={() => {
+                // Submit on blur if there's content, otherwise cancel.
+                if (createValue().trim()) void submitCreate();
+                else cancelCreate();
+              }}
+              placeholder={
+                createMode() === "file" ? "new file name" : "new folder name"
+              }
+              class="flex-1 min-w-0 bg-neutral-900 border border-indigo-500/60 rounded px-1.5 py-0 text-[12px] text-neutral-100 outline-none focus:border-indigo-400"
+            />
+          </div>
+        </Show>
         <For each={store().flatten()}>
           {(row) => (
             <TreeNode
@@ -282,5 +416,25 @@ export function FileTree(props: Props) {
         );
       })()}
     </div>
+  );
+}
+
+function HeaderButton(props: {
+  title: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: JSX.Element;
+}) {
+  return (
+    <button
+      type="button"
+      title={props.title}
+      aria-label={props.title}
+      disabled={props.disabled}
+      onClick={props.onClick}
+      class="p-1 rounded text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed"
+    >
+      {props.children}
+    </button>
   );
 }
