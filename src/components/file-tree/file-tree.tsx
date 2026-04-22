@@ -267,8 +267,10 @@ export function FileTree(props: Props) {
     return idx > 0 ? sel.slice(0, idx) : stripTrailingSlash(props.projectPath);
   }
 
-  async function startCreate(mode: CreateMode) {
-    const targetDir = resolveCreateTarget();
+  async function startCreate(mode: CreateMode, targetOverride?: string) {
+    // Callers (context menu) can pin the target to the right-clicked
+    // folder; otherwise we fall back to the current selection.
+    const targetDir = targetOverride ?? resolveCreateTarget();
     // Make sure the target directory is expanded so the user sees the
     // inline input (and the created entry, once the watcher emits).
     if (targetDir !== stripTrailingSlash(props.projectPath)) {
@@ -358,7 +360,19 @@ export function FileTree(props: Props) {
     if (!m.open) return [];
     const items: ContextMenuItem[] = [];
 
-    if (!m.isDir) {
+    if (m.isDir) {
+      items.push({
+        label: "New File",
+        icon: FilePlus,
+        onClick: () => void startCreate("file", m.path),
+      });
+      items.push({
+        label: "New Folder",
+        icon: FolderPlus,
+        onClick: () => void startCreate("folder", m.path),
+      });
+      items.push({ kind: "divider" });
+    } else {
       items.push({
         label: "Open in preview",
         icon: Eye,

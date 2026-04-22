@@ -1,4 +1,4 @@
-import { ChevronLeft, Files, MessagesSquare } from "lucide-solid";
+import { ChevronLeft, FolderTree, MessagesSquare } from "lucide-solid";
 import type { SidebarTab } from "@/lib/sidebar-prefs";
 
 type Props = {
@@ -18,7 +18,7 @@ export function SidebarTabs(props: Props) {
       />
       <TabButton
         label="Files"
-        icon={<Files size={12} strokeWidth={2} />}
+        icon={<FolderTree size={13} strokeWidth={1.75} />}
         active={props.active === "files"}
         onClick={() => props.onChange("files")}
       />
