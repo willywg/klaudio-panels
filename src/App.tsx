@@ -548,27 +548,42 @@ function Shell() {
         openTabsByProject={openTabsByProject()}
       />
 
-      <Show
-        when={activeProjectPath()}
-        fallback={<HomeScreen onPick={handlePickFromHome} />}
-      >
-        <div class="flex-1 flex min-w-0 min-h-0 overflow-hidden">
-          <SidebarPanel
-            projectPath={activeProjectPath()!}
-            sessionsContent={
-              <SessionsList
-                projectPath={activeProjectPath()!}
-                activeSessionId={activeSessionId()}
-                openSessionIds={openSessionIds()}
-                openingSessionIds={openingSessionIds()}
-                onNew={() => void openNewTab()}
-                onSelect={handleSelectSession}
-                onRefresh={() => setSessionsRefresh((k) => k + 1)}
-                refreshKey={sessionsRefresh()}
+      {/* The project view stays mounted across home round-trips —
+          otherwise every TerminalView / ShellTerminalView would unmount
+          when the user hits the home icon, losing the Claude WebGL
+          buffer (recoverable with a SIGWINCH because Ink redraws) and
+          the bash shell scrollback (NOT recoverable, because that
+          scrollback lives in xterm, not in bash). Absolute-positioning
+          both layers lets HomeScreen overlay while the project view
+          survives underneath with its xterms intact. */}
+      <div class="flex-1 relative min-w-0 min-h-0">
+        <div
+          class="absolute inset-0 flex min-w-0 min-h-0 overflow-hidden"
+          style={{
+            visibility: activeProjectPath() ? "visible" : "hidden",
+            "pointer-events": activeProjectPath() ? "auto" : "none",
+          }}
+        >
+          <Show when={activeProjectPath()}>
+            {(p) => (
+              <SidebarPanel
+                projectPath={p()}
+                sessionsContent={
+                  <SessionsList
+                    projectPath={p()}
+                    activeSessionId={activeSessionId()}
+                    openSessionIds={openSessionIds()}
+                    openingSessionIds={openingSessionIds()}
+                    onNew={() => void openNewTab()}
+                    onSelect={handleSelectSession}
+                    onRefresh={() => setSessionsRefresh((k) => k + 1)}
+                    refreshKey={sessionsRefresh()}
+                  />
+                }
+                filesContent={<FileTree projectPath={p()} />}
               />
-            }
-            filesContent={<FileTree projectPath={activeProjectPath()!} />}
-          />
+            )}
+          </Show>
 
           {/* Central column: Claude terminal + diff panel (row) on top,
               shell terminal dock below. Sits to the right of SidebarPanel
@@ -579,14 +594,16 @@ function Shell() {
             class="flex-1 flex min-w-0 min-h-0 overflow-hidden"
           >
             <section class="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
-              <TabStrip
-                tabs={projectTabs()}
-                activeTabId={term.store.activeTabId}
-                onActivate={handleActivateTab}
-                onClose={(id) => void handleCloseTab(id)}
-                onNew={() => void openNewTab()}
-                canOpenNew={!anyTabOpeningForActive()}
-              />
+              <Show when={activeProjectPath()}>
+                <TabStrip
+                  tabs={projectTabs()}
+                  activeTabId={term.store.activeTabId}
+                  onActivate={handleActivateTab}
+                  onClose={(id) => void handleCloseTab(id)}
+                  onNew={() => void openNewTab()}
+                  canOpenNew={!anyTabOpeningForActive()}
+                />
+              </Show>
               <div class="relative flex-1 min-h-0 overflow-hidden">
                 <For each={term.store.tabs}>
                   {(tab) => {
@@ -613,7 +630,7 @@ function Shell() {
                     );
                   }}
                 </For>
-                <Show when={projectTabs().length === 0}>
+                <Show when={activeProjectPath() && projectTabs().length === 0}>
                   <div class="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm">
                     Pick a session or start a new one.
                   </div>
@@ -654,9 +671,12 @@ function Shell() {
           <div
             class="relative shrink-0 overflow-hidden"
             style={{
-              height: shellPanel.openedFor(activeProjectPath()!)
-                ? `${shellPanel.heightPx()}px`
-                : "0px",
+              height: (() => {
+                const p = activeProjectPath();
+                return p && shellPanel.openedFor(p)
+                  ? `${shellPanel.heightPx()}px`
+                  : "0px";
+              })(),
             }}
           >
             <For each={shellMountedProjects()}>
@@ -682,7 +702,12 @@ function Shell() {
           </div>
           </div>
         </div>
-      </Show>
+        <Show when={!activeProjectPath()}>
+          <div class="absolute inset-0">
+            <HomeScreen onPick={handlePickFromHome} />
+          </div>
+        </Show>
+      </div>
       </main>
     </div>
   );

@@ -171,6 +171,28 @@ export function ShellTerminalView(props: Props) {
       fitDebounce = window.setTimeout(() => safeFit(), 50);
     });
     resizeObs.observe(container!);
+
+    // Mirror terminal-view: ResizeObserver occasionally misses a reflow
+    // when the parent flex layout settles (notably on home → project
+    // re-mount), leaving xterm's canvas sized to an earlier 0x0 rect.
+    // The synthetic `resize` event App.tsx dispatches on that
+    // transition needs this listener to bite on the shell dock too.
+    const onWinResize = () => {
+      if (disposed) return;
+      if (fitDebounce) window.clearTimeout(fitDebounce);
+      safeFit();
+      window.setTimeout(() => {
+        if (disposed) return;
+        safeFit();
+        try {
+          term?.refresh(0, (term?.rows ?? 1) - 1);
+        } catch {
+          // ignore
+        }
+      }, 250);
+    };
+    window.addEventListener("resize", onWinResize);
+    onCleanup(() => window.removeEventListener("resize", onWinResize));
   });
 
   // Same visibility re-fit + refresh + focus dance as the Claude terminal.

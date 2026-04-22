@@ -237,7 +237,19 @@ export function TerminalView(props: Props) {
     const onWinResize = () => {
       if (fitDebounce) window.clearTimeout(fitDebounce);
       safeFit();
-      window.setTimeout(() => safeFit(), 250);
+      window.setTimeout(() => {
+        safeFit();
+        // After a home → project remount the container's final rect
+        // arrives late; if fit didn't change cols/rows the onResize
+        // callback never fires and Claude gets no SIGWINCH, so nothing
+        // repaints the fresh WebGL canvas. Calling refresh here forces
+        // xterm to repaint whatever is already in its buffer.
+        try {
+          if (term) term.refresh(0, term.rows - 1);
+        } catch {
+          // ignore
+        }
+      }, 250);
     };
     window.addEventListener("resize", onWinResize);
     onCleanup(() => window.removeEventListener("resize", onWinResize));

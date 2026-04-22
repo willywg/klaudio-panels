@@ -4,6 +4,27 @@ All notable changes to Klaudio UI are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [0.9.7] — 2026-04-22
+
+### Fixed
+- **Terminals were blank (and the shell had lost its scrollback) after
+  returning from the HomeScreen.** The project view sat inside
+  `<Show when={activeProjectPath()}>`, so every home round-trip
+  disposed every TerminalView / ShellTerminalView and mounted fresh
+  xterms with empty buffers. A SIGWINCH trick could coax Claude (Ink
+  redraws the whole TUI on resize) but not bash — bash's scrollback
+  lives in xterm, not in bash, so anything the xterm forgot is gone
+  for good. Fix: the project view is now always mounted, toggled with
+  `visibility: hidden` + `pointer-events: none` while on Home, and
+  HomeScreen is rendered as an absolute-positioned overlay on top.
+  Every xterm (Claude and shell) keeps its buffer intact across home
+  round-trips — same trick we already use for project switches.
+  Shell scrollback now survives going home and back. Also adds a
+  matching `resize` window listener to shell-terminal-view and a
+  trailing `term.refresh()` to the Claude view's follow-up fit so
+  genuine window resizes repaint reliably even when cols/rows don't
+  change.
+
 ## [0.9.6] — 2026-04-22
 
 ### Added
