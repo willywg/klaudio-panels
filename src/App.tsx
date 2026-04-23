@@ -62,6 +62,18 @@ function dirname(p: string): string {
   return i <= 0 ? "/" : p.slice(0, i);
 }
 
+function installSuccessMessage(where: string): string {
+  const dir = dirname(where);
+  const inPrimary = where.startsWith("/usr/local/bin");
+  const header = `Installed at ${where}.`;
+  const reloadHint =
+    "Open a new terminal window to pick it up. In a still-open shell, run `rehash` (zsh) or `hash -r` (bash).";
+  const pathHint = inPrimary
+    ? `If klaudio is still "not found", /usr/local/bin may be missing from your PATH — common in iTerm profiles that aren't set to "Login shell". Fix the profile, or add:\n\n  export PATH="/usr/local/bin:$PATH"\n\nto ~/.zshrc.`
+    : `Make sure ${dir} is on your PATH. Add this to ~/.zshrc (or ~/.bashrc) if needed:\n\n  export PATH="${dir}:$PATH"`;
+  return `${header}\n\n${reloadHint}\n\n${pathHint}`;
+}
+
 function Shell() {
   const [activeProjectPath, setActiveProjectPathSignal] = createSignal<
     string | null
@@ -588,11 +600,7 @@ function Shell() {
     void listen("menu:install-cli", async () => {
       try {
         const where = await invoke<string>("install_cli");
-        const onPath = where.startsWith("/usr/local/bin");
-        const hint = onPath
-          ? "You can now run `klaudio /path/to/project` from any terminal."
-          : `Make sure ${dirname(where)} is on your PATH. Add this to your shell rc if needed:\n  export PATH="${dirname(where)}:$PATH"`;
-        await message(`Installed at ${where}.\n\n${hint}`, {
+        await message(installSuccessMessage(where), {
           title: "klaudio CLI installed",
           kind: "info",
         });
@@ -607,10 +615,10 @@ function Shell() {
     void listen("menu:uninstall-cli", async () => {
       try {
         await invoke("uninstall_cli");
-        await message("The klaudio command has been removed from PATH.", {
-          title: "klaudio CLI uninstalled",
-          kind: "info",
-        });
+        await message(
+          "The klaudio command has been removed from PATH.\n\nOpen a new terminal window — shells opened before this will still have klaudio cached until you run `rehash` (zsh) or `hash -r` (bash).",
+          { title: "klaudio CLI uninstalled", kind: "info" },
+        );
       } catch (err) {
         await message(String(err), {
           title: "Uninstall failed",

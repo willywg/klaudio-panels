@@ -4,6 +4,21 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.1.1] — 2026-04-23
+
+### Added
+- **`SECURITY.md`.** Vulnerability reporting policy (contact, scope,
+  likely attack surfaces, what we won't treat as a security bug).
+- **GitHub issue + PR templates.** `.github/ISSUE_TEMPLATE/bug_report.md`,
+  `.github/ISSUE_TEMPLATE/feature_request.md`, and
+  `.github/PULL_REQUEST_TEMPLATE.md`.
+
+### Changed
+- **Install dialog copy** after "Install 'klaudio' Command in PATH"
+  now explains how to pick up the binary in an already-open shell
+  (`rehash` / `hash -r`) and calls out the iTerm "Login shell" PATH
+  gotcha when the symlink lands in `/usr/local/bin`.
+
 ## [1.1.0] — 2026-04-23
 
 ### Added
