@@ -20,6 +20,53 @@ Claude Code's terminal UI is already excellent. What's missing when you run it i
 
 Think of it as a native window around the CLI, not a replacement for it.
 
+## Install (macOS)
+
+Klaudio Panels ships as a **universal .dmg** — one binary that runs natively on both Apple Silicon and Intel Macs.
+
+**Via Homebrew (recommended):**
+
+```bash
+brew tap willywg/klaudio-panels
+brew install --cask klaudio-panels
+```
+
+**Or download directly:** grab `Klaudio Panels_<version>_universal.dmg` from the [latest release](https://github.com/willywg/klaudio-panels/releases/latest) and drag the app into `/Applications`.
+
+## First launch
+
+Klaudio Panels is **not yet signed with an Apple Developer ID** — see [Platform support](#platform-support) for why. On first launch, macOS will refuse to open the app and show one of these two warnings:
+
+**"Klaudio Panels" can't be opened because it is from an unidentified developer**
+
+1. Open `/Applications` in Finder.
+2. **Right-click** (or Control-click) on **Klaudio Panels** → **Open**.
+3. Click **Open** in the confirmation dialog.
+
+After that one-time approval, the app launches normally like any other app.
+
+**"Klaudio Panels" is damaged and can't be opened**
+
+Run this once in Terminal:
+
+```bash
+xattr -cr "/Applications/Klaudio Panels.app"
+```
+
+Then open the app normally. This clears a macOS quarantine flag that sometimes lingers on unsigned downloads.
+
+Both warnings are Gatekeeper defaults for unsigned apps, not signs that anything is wrong with the binary — the source is public and inspectable right here.
+
+## Platform support
+
+| OS | Status | Notes |
+| --- | --- | --- |
+| **macOS 14+** (Sonoma, Sequoia) | ✅ primary target | Tested on Apple Silicon and Intel. Universal `.dmg` is what the maintainer ships. |
+| **Linux** | 🧪 untested | Should build via `bun tauri build` (Tauri is cross-platform). Help validating is very welcome — see [#1](https://github.com/willywg/klaudio-panels/issues/1). |
+| **Windows** | ❌ not supported yet | Several backend modules are stubbed on Windows. Help porting is welcome — see [#2](https://github.com/willywg/klaudio-panels/issues/2). |
+
+**About code signing.** Apple's Developer Program is US$99/year. We'll pay it once the project has real usage; until then, the first-launch workaround above is the cost of keeping the project free. Apple has been tightening the unsigned-app escape hatches with each macOS release, so this is a temporary state, not a permanent stance.
+
 ## Screenshots
 
 > _TODO: add screenshots once the UI settles._
@@ -62,7 +109,7 @@ Full design doc: [`PROJECT.md`](./PROJECT.md).
 - [Bun](https://bun.com) 1.3+
 - [Rust](https://rustup.rs) stable toolchain
 - The [`claude` CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated (run `claude` once in a terminal first).
-- macOS for now. Linux/Windows should work (Tauri is cross-platform) but haven't been tested this sprint.
+- macOS is the primary development target. See [Platform support](#platform-support) for Linux / Windows status.
 
 ## Development
 
@@ -96,7 +143,7 @@ Building with a plain `bun tauri build` is fine for local smoke-testing, but **d
 
 On Windows / Linux, `bun tauri build` is still the right command; artifacts land under `src-tauri/target/release/bundle/`.
 
-_Note: we haven't shipped signed release builds yet. Expect a Gatekeeper warning on macOS until code signing + notarization are added (Sprint 05+)._
+_Note: release builds are not yet signed with an Apple Developer ID. End-users hit a Gatekeeper warning on first launch — see [First launch](#first-launch) for the one-time workaround._
 
 ## Sprint history
 
