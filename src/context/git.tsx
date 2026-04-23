@@ -90,9 +90,10 @@ function makeGitContext() {
     if (store[projectPath]) return;
     setStore(projectPath, emptyState());
     try {
-      const un = await listen(`fs:event:${projectPath}`, () =>
-        scheduleRefetch(projectPath),
-      );
+      const un = await listen<{ project_path: string }>("fs-event", (ev) => {
+        if (ev.payload.project_path !== projectPath) return;
+        scheduleRefetch(projectPath);
+      });
       unlisteners.set(projectPath, un);
     } catch (err) {
       console.warn("git: failed to subscribe to fs events", err);

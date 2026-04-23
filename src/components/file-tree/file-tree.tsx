@@ -32,6 +32,7 @@ import { TreeNode } from "./tree-node";
 import {
   makeFileTreeStore,
   type FsEvent,
+  type FsEventEnvelope,
   type TreeNode as TreeNodeType,
 } from "./use-file-tree";
 
@@ -211,9 +212,10 @@ export function FileTree(props: Props) {
             setError(String(err));
           }
           try {
-            unlisten = await listen<FsEvent>(`fs:event:${path}`, (e) =>
-              pathStore.applyFsEvent(e.payload),
-            );
+            unlisten = await listen<FsEventEnvelope>("fs-event", (e) => {
+              if (e.payload.project_path !== path) return;
+              pathStore.applyFsEvent(e.payload as FsEvent);
+            });
             await invoke("watch_project", { projectPath: path });
           } catch (err) {
             console.warn("watch_project failed", err);

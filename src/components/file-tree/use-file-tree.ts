@@ -26,6 +26,12 @@ export type FsEvent =
   | { kind: "removed"; path: string }
   | { kind: "renamed"; from: string; to: string };
 
+/** Envelope emitted by Rust on the global `fs-event` channel. The
+ *  inner fields are flattened into the same object, so consumers can
+ *  pass the payload directly to FsEvent-aware handlers after checking
+ *  `project_path`. */
+export type FsEventEnvelope = FsEvent & { project_path: string };
+
 export type FlatRow = { node: TreeNode; depth: number };
 
 function basename(p: string): string {

@@ -1,6 +1,6 @@
 {
   "name": "klaudio-ui",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "description": "Klaudio UI — native window embedding the Claude Code CLI",
   "type": "module",
   "scripts": {

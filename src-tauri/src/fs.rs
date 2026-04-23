@@ -34,6 +34,19 @@ pub enum FsEventPayload {
     Renamed { from: String, to: String },
 }
 
+/// Wire format for the global `fs-event` channel. We used to emit
+/// `fs:event:<project_path>` so each listener subscribed by name, but
+/// Tauri v2's listen validator silently rejects names containing file-
+/// system separators — the whole watch path was dead and the git panel
+/// never refreshed from watcher events. Now everyone subscribes to
+/// the single `fs-event` name and filters by `project_path`.
+#[derive(Serialize, Clone)]
+pub struct FsEventEnvelope {
+    pub project_path: String,
+    #[serde(flatten)]
+    pub payload: FsEventPayload,
+}
+
 /// Watcher debouncer is stored as Any — we never retrieve it, we only keep it
 /// alive in the LRU. Eviction drops it, which stops its internal thread.
 type AnyWatcher = Box<dyn std::any::Any + Send>;
@@ -159,9 +172,11 @@ fn build_gitignore(project_root: &Path) -> Gitignore {
         .unwrap_or_else(|_| GitignoreBuilder::new(project_root).build().unwrap())
 }
 
-/// Watcher-level relevance filter. We only hard-drop events under `.git/`
-/// — every other path fires an event (tagged `ignored` in the payload).
-/// The frontend decides whether to render ignored entries.
+/// Watcher-level relevance filter. Everything outside `.git/` is a pass.
+/// Inside `.git/` we keep only the files that flip when the user stages,
+/// commits, switches branches or fetches (so the git pill / status panel
+/// can refetch) and drop the noisy subtrees git writes on every
+/// operation (object packs, reflog entries, hook scripts, etc.).
 fn is_relevant(path: &Path, project_root: &Path) -> bool {
     let rel = match path.strip_prefix(project_root) {
         Ok(r) => r,
@@ -170,14 +185,31 @@ fn is_relevant(path: &Path, project_root: &Path) -> bool {
     if rel.as_os_str().is_empty() {
         return false;
     }
-    for component in rel.components() {
-        if let std::path::Component::Normal(name) = component {
-            if name == ".git" {
-                return false;
-            }
-        }
+    let mut comps = rel.components();
+    let first = match comps.next() {
+        Some(std::path::Component::Normal(n)) => n,
+        _ => return true,
+    };
+    if first != ".git" {
+        return true;
     }
-    true
+    match comps.next() {
+        // Bare `.git` (file in submodule checkouts, or dir itself) — skip.
+        None => false,
+        Some(std::path::Component::Normal(name)) => {
+            let n = name.to_string_lossy();
+            // Drop the noisy subtrees — objects / logs / hooks / info /
+            // modules / lfs rewrite on every git op and would spam the
+            // debouncer. Everything else inside .git/ is a potential
+            // signal: HEAD / index / packed-refs / refs/** / FETCH_HEAD
+            // / ORIG_HEAD / MERGE_HEAD / CHERRY_PICK_HEAD / config.
+            !matches!(
+                n.as_ref(),
+                "objects" | "logs" | "hooks" | "info" | "modules" | "lfs"
+            )
+        }
+        _ => false,
+    }
 }
 
 fn event_to_payloads(
@@ -257,8 +289,11 @@ pub fn watch_project(app: AppHandle, project_path: String) -> Result<(), String>
                         continue;
                     }
                     for payload in event_to_payloads(&ev.event, &root_for_handler, &gi) {
-                        let _ = app_for_handler
-                            .emit(&format!("fs:event:{project_key}"), payload);
+                        let envelope = FsEventEnvelope {
+                            project_path: project_key.clone(),
+                            payload,
+                        };
+                        let _ = app_for_handler.emit("fs-event", envelope);
                     }
                 }
             }

@@ -4,6 +4,34 @@ All notable changes to Klaudio UI are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [0.9.8] — 2026-04-22
+
+### Fixed
+- **Git panel / file tree never reacted to filesystem changes made from
+  the shell.** The Rust watcher emitted `fs:event:<projectPath>` and
+  the frontend listened on the same name, but Tauri v2's event-name
+  validator silently drops strings that contain filesystem separators
+  — so `listen()` in git.tsx and file-tree.tsx resolved to a no-op
+  subscription and no `touch`, `echo >>`, `git commit` from inside the
+  shell dock ever reached the UI. Now the watcher emits a single
+  `fs-event` and the envelope carries `project_path`; listeners filter
+  by it. Initial fetch in `ensureFor` still ran, which is why the
+  panel was up-to-date at boot but frozen afterwards.
+- **`.git/` events were hard-dropped, so committing from the terminal
+  left the diff panel stuck.** The watcher filter excluded everything
+  under `.git/`. Now it keeps the files that signal user intent
+  (`HEAD`, `index`, `packed-refs`, `refs/**`, `FETCH_HEAD`,
+  `ORIG_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `config`) and drops
+  only the noisy subtrees (`objects/`, `logs/`, `hooks/`, `info/`,
+  `modules/`, `lfs/`). Commits, stages, branch switches and fetches
+  now refresh the status panel automatically.
+- **Pasting in the shell dock duplicated the text** — same bug the
+  Claude view had in v0.9.3. The shell-terminal-view Cmd+V handler
+  was missing `preventDefault()`, so WebKit's native paste fired
+  into xterm's textarea and the shell received the clipboard string
+  twice. Mirrored the Claude view's handler (preventDefault +
+  term.paste(text ?? "")).
+
 ## [0.9.7] — 2026-04-22
 
 ### Fixed

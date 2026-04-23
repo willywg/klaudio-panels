@@ -285,7 +285,8 @@ function Shell() {
   });
 
   // Prime git status + summary for the active project. GitProvider itself
-  // subscribes to fs:event:<projectPath> on first ensureFor.
+  // subscribes to the `fs-event` channel on first ensureFor and filters
+  // by project_path.
   createEffect(
     on(activeProjectPath, (p) => {
       if (p) void git.ensureFor(p);

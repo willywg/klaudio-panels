@@ -123,11 +123,17 @@ export function ShellTerminalView(props: Props) {
       if (key === "v") {
         // Tauri plugin bypasses WebKit's "Paste" permission bubble.
         // term.paste() handles bracketed paste when the PTY enables it.
+        // preventDefault() is critical — without it WebKit also fires
+        // its native paste into xterm's hidden textarea and the shell
+        // receives the clipboard text twice (same fix Claude view got
+        // in v0.9.3).
+        e.preventDefault();
         readClipboardText()
-          .then((text) => {
-            if (text) term!.paste(text);
-          })
-          .catch((err) => console.warn("clipboard read failed", err));
+          .then((text) => term!.paste(text ?? ""))
+          .catch((err) => {
+            console.warn("clipboard read failed", err);
+            term!.paste("");
+          });
         return false;
       }
       if (key === "k") {
