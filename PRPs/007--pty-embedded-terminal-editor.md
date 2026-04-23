@@ -27,7 +27,7 @@ scroll, focus, and cleanup work per-tab.
   `.app` bundle. Users expecting them to work get nothing.
 - Major differentiator vs OpenCode — they don't embed terminal editors.
 - Re-uses the PTY infra from Sprint 01 almost verbatim. Low risk, high payoff.
-- Unblocks the "edit from inside cc-ui without switching to another window"
+- Unblocks the "edit from inside klaudio-panels without switching to another window"
   use case for users who live in nvim/helix.
 
 ## What
@@ -99,7 +99,7 @@ scroll, focus, and cleanup work per-tab.
 ```
 CRITICAL:
 - nvim/helix require the shell env with PATH + XDG_CONFIG_HOME. Without them
-  plugins fail silently and the user thinks cc-ui is broken. Same
+  plugins fail silently and the user thinks klaudio-panels is broken. Same
   merge_shell_env as Claude's pty.
 - xterm.js WebGL renderer BLANKS OUT when `visibility:hidden`. The main
   terminal already calls `term.refresh(0, rows-1)` on visibility change —

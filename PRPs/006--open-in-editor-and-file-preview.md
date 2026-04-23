@@ -9,7 +9,7 @@
 
 ## Goal
 
-Make the app useful for **browsing and jumping out to external editors** without leaving cc-ui:
+Make the app useful for **browsing and jumping out to external editors** without leaving klaudio-panels:
 
 1. A titlebar **"Open in"** dropdown that lists detected desktop editors (VS Code, Cursor, Zed, iTerm2, Warp, Xcode, …) and opens the active project with `tauri-plugin-opener`. Remembers the last choice. Click = open project in last used; click the caret = choose another.
 2. A **read-only file preview tab** next to the diff panel. The diff panel becomes a tab strip: `Git changes [+N −M]  |  CLAUDE.md  [+]`. Double-clicking an unchanged file in the tree or `Cmd`-clicking a file path anywhere opens it as a preview tab with Shiki syntax highlighting.

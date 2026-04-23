@@ -1,5 +1,5 @@
 //! File-based diagnostic log. Writes to
-//! `~/Library/Logs/Klaudio UI/klaudio.log` on macOS so end-users can ship
+//! `~/Library/Logs/Klaudio Panels/klaudio.log` on macOS so end-users can ship
 //! their log without enabling dev tools. Also mirrors to stderr when we're
 //! running under `bun tauri dev` for live tail-ability.
 
@@ -12,9 +12,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 fn log_dir() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     #[cfg(target_os = "macos")]
-    let dir = home.join("Library/Logs/Klaudio UI");
+    let dir = home.join("Library/Logs/Klaudio Panels");
     #[cfg(not(target_os = "macos"))]
-    let dir = home.join(".klaudio-ui").join("logs");
+    let dir = home.join(".klaudio-panels").join("logs");
     Some(dir)
 }
 

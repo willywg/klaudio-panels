@@ -45,7 +45,7 @@ pub fn run() {
             if let Some(p) = debug_log::log_file_path() {
                 debug_log::write(
                     "boot",
-                    &format!("Klaudio UI starting — log at {}", p.display()),
+                    &format!("Klaudio Panels starting — log at {}", p.display()),
                 );
             }
             let handle = app.handle().clone();

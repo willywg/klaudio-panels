@@ -382,7 +382,7 @@ Steps:
 
 Expected:
 - No red in devtools console.
-- `~/Library/Logs/Klaudio UI/klaudio.log` has `[shell] id=<uuid> shell=/bin/zsh cwd=<project>` on each open.
+- `~/Library/Logs/Klaudio Panels/klaudio.log` has `[shell] id=<uuid> shell=/bin/zsh cwd=<project>` on each open.
 - No regressions: diff panel Cmd+Shift+D still works; Claude terminal resizes correctly when dock opens/closes (the ResizeObserver on `TerminalView` re-fits automatically).
 
 ---

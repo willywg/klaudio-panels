@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in Claude Code UI. This project is an early-stage personal project that aims to be a useful native shell around the Claude Code CLI. Contributions are welcome, with a few ground rules.
+Thanks for your interest in Klaudio Panels. This project is an early-stage personal project that aims to be a useful native shell around the Claude Code CLI. Contributions are welcome, with a few ground rules.
 
 ## Before you start
 
@@ -26,8 +26,8 @@ Prerequisites:
 Clone and run:
 
 ```bash
-git clone https://github.com/willywg/cc-ui.git
-cd cc-ui
+git clone https://github.com/willywg/klaudio-panels.git
+cd klaudio-panels
 bun install
 bun tauri dev
 ```

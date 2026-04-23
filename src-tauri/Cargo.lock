@@ -457,35 +457,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cc-ui"
-version = "0.9.9"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "chrono",
- "dirs",
- "futures",
- "git2",
- "ignore",
- "lru",
- "notify",
- "notify-debouncer-full",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "portable-pty",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-clipboard-manager",
- "tauri-plugin-dialog",
- "tauri-plugin-opener",
- "tokio",
- "which",
-]
-
-[[package]]
 name = "cesu8"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2229,6 +2200,35 @@ dependencies = [
  "bitflags 2.11.1",
  "serde",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "klaudio-panels"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "chrono",
+ "dirs",
+ "futures",
+ "git2",
+ "ignore",
+ "lru",
+ "notify",
+ "notify-debouncer-full",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "portable-pty",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-clipboard-manager",
+ "tauri-plugin-dialog",
+ "tauri-plugin-opener",
+ "tokio",
+ "which",
 ]
 
 [[package]]

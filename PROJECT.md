@@ -1,4 +1,4 @@
-# Claude Code UI — Project Blueprint
+# Klaudio Panels — Project Blueprint
 
 > Native window that **embeds Claude Code running in a PTY**, with a projects/sessions sidebar and (later) file tree, diff viewer, and free-form terminal.
 
@@ -103,7 +103,7 @@ A desktop app built with Tauri v2 + SolidJS that **shows the real Claude Code TU
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  Claude Code UI                            ─ □ ✕          │
+│  Klaudio Panels                            ─ □ ✕          │
 ├───────────────┬──────────────────────────────────────────────┤
 │  Project      │                                              │
 │  psicolab     │  $ claude                                    │
@@ -128,7 +128,7 @@ A single active PTY. Switching sessions kills the previous PTY and spawns a new 
 ## Project Structure
 
 ```
-cc-ui/
+klaudio-panels/
 ├── src-tauri/
 │   ├── Cargo.toml
 │   ├── tauri.conf.json

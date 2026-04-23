@@ -1,8 +1,35 @@
 # Changelog
 
-All notable changes to Klaudio UI are documented here. Format follows
+All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
+
+## [1.0.0] — 2026-04-23
+
+First release under the new name. No functional changes — purely a rename
+and marker for the first public/OSS-ready cut.
+
+### Changed
+- **Product renamed from "Klaudio UI" to "Klaudio Panels."** The app
+  started as a single-terminal shell; it now hosts three peer panels
+  (Claude terminal, shell dock, git/diff), and the new name reflects
+  that plural nature.
+- **Bundle identifier changed** from `la.constructai.klaudio-ui` to
+  `la.constructai.klaudio-panels`. Existing installs keep their old
+  `~/Library/Application Support/la.constructai.klaudio-ui` and
+  `~/Library/Logs/Klaudio UI` directories untouched; the new version
+  writes to `la.constructai.klaudio-panels` and `~/Library/Logs/Klaudio Panels`
+  instead. In-app settings / localStorage from v0.9.x don't carry over.
+- **Rust crate** `cc-ui` → `klaudio-panels`; the Mach-O binary inside
+  the `.app` is now named `klaudio-panels` (was `cc-ui`).
+- **npm package** `klaudio-ui` → `klaudio-panels`.
+- **Window title, Dock icon, log paths, docs, PRPs, CHANGELOG header,
+  in-app home screen** all updated to the new name.
+- **New icon.** Replaced the placeholder with a rooster-in-panels mark
+  referencing both "Claude" and the Spanish "gallo Claudio" joke, plus
+  the three-panel layout of the app. Master PNG kept at
+  `src-tauri/icons/klaudio-panels-source.png`; `tauri icon` regenerates
+  all platform assets from it.
 
 ## [0.9.9] — 2026-04-23
 
@@ -309,7 +336,7 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   project auto-spawn of the first tab. The dock sits below the Claude
   terminal / diff split but never under the `Sessions`/`Files` sidebar.
 - **UI rebrand to Klaudio.** Window title, bundle identifier, and docs
-  updated. Product name: Klaudio UI.
+  updated. Product name: Klaudio UI (later renamed to Klaudio Panels in v1.0.0).
 - **DMG hardening.** Ad-hoc codesign (`signingIdentity: "-"`) with
   embedded entitlements for hardened runtime, so the distributed DMG
   launches without per-launch Gatekeeper warnings.

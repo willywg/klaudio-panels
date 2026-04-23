@@ -4,7 +4,7 @@
 
 ## Why now
 
-Sprint 03 shipped the file tree but without diffs the tree is "just a list". The diff viewer is the single feature that turns cc-ui into an IDE-lite around `claude`, which is the product differentiator over running the CLI in iTerm.
+Sprint 03 shipped the file tree but without diffs the tree is "just a list". The diff viewer is the single feature that turns klaudio-panels into an IDE-lite around `claude`, which is the product differentiator over running the CLI in iTerm.
 
 ## Scope (v1)
 

@@ -1,4 +1,4 @@
-# Claude Code UI
+# Klaudio Panels
 
 > A native desktop window that **embeds the real [Claude Code](https://claude.com/claude-code) CLI** via PTY, with a Slack-style projects sidebar, multi-tab sessions, and auto-resume.
 

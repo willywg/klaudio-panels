@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Klaudio UI",
-  "version": "0.9.9",
-  "identifier": "la.constructai.klaudio-ui",
+  "productName": "Klaudio Panels",
+  "version": "1.0.0",
+  "identifier": "la.constructai.klaudio-panels",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Klaudio UI",
+        "title": "Klaudio Panels",
         "width": 1200,
         "height": 800,
         "minWidth": 900,

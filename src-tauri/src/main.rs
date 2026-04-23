@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    cc_ui_lib::run()
+    klaudio_panels_lib::run()
 }

@@ -59,7 +59,7 @@ export const MAC_APPS: readonly OpenInApp[] = [
   { id: "terminal",        label: "Terminal",        openWith: "Terminal",            kind: "terminal", icon: Terminal, color: "text-neutral-400" },
 ] as const;
 
-/** Terminal editors that cc-ui embeds in a secondary PTY (Sprint 06). They
+/** Terminal editors that Klaudio Panels embeds in a secondary PTY (Sprint 06). They
  *  ship no `.app` bundle, so `open -a nvim` fails silently — we detect them
  *  via `check_binary_exists` on the hydrated shell PATH. */
 export const TERMINAL_EDITOR_APPS: readonly OpenInApp[] = [

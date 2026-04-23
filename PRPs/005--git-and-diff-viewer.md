@@ -13,8 +13,8 @@ When the user opens a project, each file in the file-tree shows an A/M/D/? badge
 
 ## Why
 
-- **Closes the "Claude edited X" loop.** Sprint 03 gave us a file tree — you can *see* which files exist but not which ones changed, and you have to leave cc-ui to review the diff. Without this, the file tree is decorative.
-- **Converts cc-ui from "terminal shell" into "IDE-lite for Claude."** The diff viewer is the single biggest feature that justifies running `claude` inside cc-ui instead of iTerm. Everything else (tabs, session list, file tree) is incremental; this is a *visible* differentiator.
+- **Closes the "Claude edited X" loop.** Sprint 03 gave us a file tree — you can *see* which files exist but not which ones changed, and you have to leave klaudio-panels to review the diff. Without this, the file tree is decorative.
+- **Converts klaudio-panels from "terminal shell" into "IDE-lite for Claude."** The diff viewer is the single biggest feature that justifies running `claude` inside klaudio-panels instead of iTerm. Everything else (tabs, session list, file tree) is incremental; this is a *visible* differentiator.
 - **Unblocks future review flows.** Once the diff rendering and git layer are in place, staged-vs-workdir toggles, accept/reject hunks, and inline comments (future sprints) become additive, not structural.
 - **Empirical validation of rule #7.** CLAUDE.md says "filesystem + git = source of truth." Sprint 03 tested filesystem; Sprint 04 tests git. If we need to revisit that decision, this is when we'll know.
 
@@ -28,7 +28,7 @@ When the user opens a project, each file in the file-tree shows an A/M/D/? badge
 
 ### Success Criteria
 
-- [ ] Opening a project inside cc-ui populates A/M/D/? badges on each changed file in the tree within 500ms of the tree loading. Unchanged files have no badge.
+- [ ] Opening a project inside klaudio-panels populates A/M/D/? badges on each changed file in the tree within 500ms of the tree loading. Unchanged files have no badge.
 - [ ] Titlebar pill shows `+N −M` where N and M are the total workdir adds/dels across all non-binary tracked files plus untracked files' line counts. Pill is hidden when both are zero.
 - [ ] Editing a file (via Claude or externally) updates the badge + pill within one debounce window (~450ms) without any manual refresh.
 - [ ] Double-clicking a changed file in the tree opens the diff panel and renders the diff. The terminal stays visible on the left and remains interactive.
