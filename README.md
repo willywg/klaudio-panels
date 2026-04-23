@@ -16,7 +16,9 @@ Claude Code's terminal UI is already excellent. What's missing when you run it i
 - Multiple sessions per project, each in its own tab with its own PTY, independent scrollback.
 - Auto-resume the last active session when you reopen a project.
 - Real session titles (`/rename`) in the sidebar, not just session IDs.
-- (Coming soon) a live file tree + diff viewer that shows what Claude is touching, without parsing its output — we watch the filesystem and git instead.
+- A live file tree + a shell dock at the bottom of the window, so you can inspect files and run commands alongside your Claude session without leaving the app.
+- **Terminal editors embedded in a secondary PTY.** Click any file in the tree → pick your editor → it opens in-window. Today: **Neovim**, **Vim**, **Helix**, **Micro**. Plus "Open in…" routing for GUI editors (VS Code, Cursor, Windsurf, Zed, JetBrains family, Xcode, Sublime, etc.) via `open -a`.
+- (Coming soon) a diff viewer showing what Claude is touching, without parsing the PTY — we watch the filesystem and git instead.
 
 Think of it as a native window around the CLI, not a replacement for it.
 
@@ -69,7 +71,13 @@ Both warnings are Gatekeeper defaults for unsigned apps, not signs that anything
 
 ## Screenshots
 
-> _TODO: add screenshots once the UI settles._
+**Sessions sidebar + inline Markdown preview with the shell dock at the bottom.**
+
+![Claude session with Markdown preview and shell dock](./docs/screenshots/sessions-and-diff-panel.png)
+
+**File tree on the left, Neovim embedded in a secondary PTY on the right, Claude session in the middle.**
+
+![File tree with Neovim editor embedded](./docs/screenshots/file-tree-and-terminal-editor.png)
 
 ## Architecture at a glance
 
