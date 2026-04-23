@@ -83,11 +83,18 @@ cd src-tauri && cargo clippy -- -D warnings
 
 ## Building a release
 
+On macOS, build a **universal** binary (native on both Apple Silicon and Intel):
+
 ```bash
-bun tauri build
+rustup target add aarch64-apple-darwin x86_64-apple-darwin   # one-time
+bun run release:mac
 ```
 
-This produces `.dmg` / `.app` on macOS, `.msi` on Windows, `.deb` / `.AppImage` on Linux under `src-tauri/target/release/bundle/`.
+Artifacts land under `src-tauri/target/universal-apple-darwin/release/bundle/`.
+
+Building with a plain `bun tauri build` is fine for local smoke-testing, but **don't ship it** — it produces a host-arch-only binary, which on an x86_64 toolchain means Intel-only, and Apple Silicon users will run it under Rosetta and see macOS's "End of support for Intel-based apps" warning.
+
+On Windows / Linux, `bun tauri build` is still the right command; artifacts land under `src-tauri/target/release/bundle/`.
 
 _Note: we haven't shipped signed release builds yet. Expect a Gatekeeper warning on macOS until code signing + notarization are added (Sprint 05+)._
 

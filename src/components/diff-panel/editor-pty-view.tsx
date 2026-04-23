@@ -145,7 +145,6 @@ export function EditorPtyView(props: Props) {
       cursorBlink: true,
       allowProposedApi: true,
       scrollback: 10_000,
-      macOptionIsMeta: true,
       convertEol: false,
     });
     fit = new FitAddon();

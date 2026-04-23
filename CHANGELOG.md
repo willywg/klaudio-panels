@@ -4,6 +4,32 @@ All notable changes to Klaudio UI are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [0.9.9] — 2026-04-23
+
+### Fixed
+- **macOS release bundle shipped as Intel-only.** `bun tauri build` on
+  an x86_64 Rust toolchain (very easy to end up on, e.g. a Terminal
+  opened with "Open using Rosetta") emits a host-arch binary, so the
+  DMGs we were distributing were x86_64 even though all our users are
+  on Apple Silicon. macOS then ran Klaudio under Rosetta and warned
+  "End of support for Intel-based apps" on a future macOS release.
+  Switched the release path to `tauri build --target universal-apple-darwin`
+  via a new `bun run release:mac` script; the resulting `.app` is a
+  universal binary (`arm64` + `x86_64`) and runs natively on both
+  architectures. README updated to document the new flow and warn
+  against using `bun tauri build` for distribution.
+- **Users on non-US keyboards couldn't type `@`, `#`, `|`, backticks
+  or other Option-composed symbols.** xterm.js was configured with
+  `macOptionIsMeta: true` in all three terminal views (Claude PTY,
+  shell dock, diff-panel editor PTY), which intercepts the Option
+  modifier before macOS composes the character — so on Spanish /
+  German / French / etc. layouts, `Option+2` sent `ESC 2` to the PTY
+  instead of producing `@`. Removed the override in all three places
+  so xterm.js falls back to its default (`false`), matching the
+  behavior of Terminal.app, iTerm2, Warp and WezTerm. Cmd+←/→ (home/end)
+  still covers the common word-nav use case for anyone who relied on
+  Option for emacs-style bindings.
+
 ## [0.9.8] — 2026-04-22
 
 ### Fixed
