@@ -33,11 +33,28 @@ labels: bug
 
 ## Logs
 
-<!--
-Grab the last relevant chunk from:
-  ~/Library/Logs/Klaudio Panels/klaudio.log
+Klaudio Panels writes a diagnostic log on every run. Please grab the
+chunk around when the bug happened and paste it below.
 
-Please redact any secrets or paths you'd rather not share.
+**macOS**
+
+```bash
+# Tail the last ~200 lines:
+tail -n 200 "$HOME/Library/Logs/Klaudio Panels/klaudio.log"
+
+# Or reveal the file in Finder:
+open "$HOME/Library/Logs/Klaudio Panels"
+```
+
+**Linux**
+
+```bash
+tail -n 200 "$HOME/.klaudio-panels/logs/klaudio.log"
+```
+
+<!--
+Please redact anything you'd rather not share (project paths, usernames,
+tokens, etc.). If the log is large, a Gist link is fine too.
 -->
 
 ```

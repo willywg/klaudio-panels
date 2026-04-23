@@ -112,6 +112,27 @@ _Note: we haven't shipped signed release builds yet. Expect a Gatekeeper warning
 
 Retros are in [`docs/`](./docs/); PRPs in [`PRPs/`](./PRPs/).
 
+## Troubleshooting
+
+Klaudio Panels writes a diagnostic log on every run. If something goes
+wrong, grab it before filing an issue:
+
+**macOS** — `~/Library/Logs/Klaudio Panels/klaudio.log`
+
+```bash
+tail -n 200 "$HOME/Library/Logs/Klaudio Panels/klaudio.log"
+open "$HOME/Library/Logs/Klaudio Panels"   # reveal in Finder
+```
+
+**Linux** — `~/.klaudio-panels/logs/klaudio.log`
+
+```bash
+tail -n 200 "$HOME/.klaudio-panels/logs/klaudio.log"
+```
+
+Please redact anything you'd rather not share (project paths, usernames,
+tokens). The bug report template has a slot for the log chunk.
+
 ## Contributing
 
 See [`CONTRIBUTING.md`](./CONTRIBUTING.md). In short:
