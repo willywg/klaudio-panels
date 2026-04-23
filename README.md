@@ -4,7 +4,7 @@
 
 Built with Tauri v2 + SolidJS + xterm.js. The app is a thin shell around the `claude` CLI — it does **not** reimplement Claude Code's UI, it embeds it. You get every CLI feature for free: slash commands, permission prompts, the `-r` session picker, autocomplete, hooks, colors, mouse tracking.
 
-**Status:** early work-in-progress (v0.2.0). Multi-project + multi-tab + last-session persistence landed in Sprint 02. File tree, JSONL watcher, and diff viewer are the next sprints.
+**Status:** `v1.1.2` — first public release. Multi-project + multi-tab + auto-resume, file tree with `notify` watcher, JSONL session watcher, `klaudio` shell command, and the Homebrew tap are all shipped. Diff viewer and code signing are the next milestones.
 
 ---
 
@@ -145,19 +145,23 @@ On Windows / Linux, `bun tauri build` is still the right command; artifacts land
 
 _Note: release builds are not yet signed with an Apple Developer ID. End-users hit a Gatekeeper warning on first launch — see [First launch](#first-launch) for the one-time workaround._
 
-## Sprint history
+## Release history
 
-| Sprint | Scope                                            | Status       | Tag                          |
-| ------ | ------------------------------------------------ | ------------ | ---------------------------- |
-| 00     | stream-json PoC — pivoted to PTY                 | ✅ archived  | `v0.0.1-stream-json-poc`     |
-| 01     | `claude` in PTY, single tab, sidebar sessions     | ✅ merged    | `v0.1.0-pty`                 |
-| 02     | Multi-tab + multi-project + auto-resume + sidebar | ✅ merged    | `v0.2.0`                     |
-| 03a    | Full English translation for public readiness    | 🚧 this branch | `v0.2.1` (planned)         |
-| 03     | File tree + `notify` watcher + JSONL tailer      | 🔜 planned   | —                            |
-| 04     | Diff viewer (`@pierre/diffs`)                    | 🔜 planned   | —                            |
-| 05     | SQLite settings, keyboard shortcuts, signed release | 🔜 planned | —                            |
+Milestones only — intermediate tags (`v0.4.x` through `v0.9.x`) covered polish and bug fixes on the Sprint 02/03 feature set. Full detail in [`CHANGELOG.md`](./CHANGELOG.md); every tag is at [GitHub Releases](https://github.com/willywg/klaudio-panels/releases).
 
-Retros are in [`docs/`](./docs/); PRPs in [`PRPs/`](./PRPs/).
+| Tag                      | Milestone                                                        | Status      |
+| ------------------------ | ---------------------------------------------------------------- | ----------- |
+| `v0.0.1-stream-json-poc` | Sprint 00 — stream-json PoC, pivoted to PTY                      | ✅ archived |
+| `v0.1.0-pty`             | Sprint 01 — `claude` in PTY, single tab, sidebar sessions        | ✅ shipped  |
+| `v0.2.0`                 | Sprint 02 — multi-tab, multi-project, auto-resume                | ✅ shipped  |
+| `v0.3.0`                 | Sprint 03 — file tree, `notify` watcher, JSONL session watcher   | ✅ shipped  |
+| `v1.0.0`                 | Rename "Klaudio UI" → "Klaudio Panels"                           | ✅ shipped  |
+| `v1.1.0`                 | `klaudio` shell command + `klaudio://` URL scheme                | ✅ shipped  |
+| `v1.1.2`                 | **First public release** — Homebrew tap, OSS hygiene, bundle id  | ✅ shipped  |
+| next                     | Sprint 04 — diff viewer (`@pierre/diffs`)                        | 🔜 planned  |
+| later                    | Code signing + notarization (Apple Developer Program)            | 🔜 planned  |
+
+Retros live in [`docs/`](./docs/); PRPs in [`PRPs/`](./PRPs/).
 
 ## Troubleshooting
 
