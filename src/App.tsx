@@ -9,6 +9,8 @@ import {
   onMount,
 } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { message } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { buildDropPayload, findDropTarget } from "@/lib/os-drop";
 import {
@@ -47,6 +49,18 @@ import { ShellTerminalPanel } from "@/components/shell-terminal/shell-terminal-p
 import { displayLabel } from "@/lib/session-label";
 
 const AUTO_RESUME_FAIL_WINDOW_MS = 2000;
+
+function relPathInside(base: string, full: string): string | null {
+  const b = base.endsWith("/") ? base.slice(0, -1) : base;
+  if (full === b) return null;
+  const prefix = b + "/";
+  return full.startsWith(prefix) ? full.slice(prefix.length) : null;
+}
+
+function dirname(p: string): string {
+  const i = p.lastIndexOf("/");
+  return i <= 0 ? "/" : p.slice(0, i);
+}
 
 function Shell() {
   const [activeProjectPath, setActiveProjectPathSignal] = createSignal<
@@ -532,6 +546,83 @@ function Shell() {
   function goHome() {
     setActiveProjectPath(null);
   }
+
+  // `klaudio <path>` from the shell delivers a klaudio://open?path=... URL,
+  // which Rust's deep-link handler turns into a `cli:open` event. Always open
+  // a brand-new Claude tab (never reuse an existing one or resume) — that's
+  // the contract: the user invoked the CLI expressly, they get a fresh tab.
+  // If the path was a file, also route it into the diff panel.
+  async function handleCliOpen(projectPath: string, filePath?: string) {
+    // Suppress auto-resume for this project — the user's intent is a fresh
+    // tab, not continuation. Adding to the set BEFORE setActiveProjectPath
+    // short-circuits the maybeAutoResume call inside the active-path effect.
+    autoResumed.add(projectPath);
+    projects.touch(projectPath);
+    setActiveProjectPath(projectPath);
+    try {
+      await term.openTab(projectPath, [], {
+        label: "New session",
+        sessionId: null,
+      });
+    } catch (err) {
+      console.error("cli:open → openTab failed", err);
+    } finally {
+      setSessionsRefresh((k) => k + 1);
+    }
+    if (filePath) {
+      const rel = relPathInside(projectPath, filePath);
+      if (rel) diffPanel.openFile(projectPath, rel);
+    }
+  }
+
+  onMount(() => {
+    const unlistens: Array<() => void> = [];
+
+    void listen<{ project_path: string; file_path: string | null }>(
+      "cli:open",
+      (e) => {
+        void handleCliOpen(e.payload.project_path, e.payload.file_path ?? undefined);
+      },
+    ).then((off) => unlistens.push(off));
+
+    void listen("menu:install-cli", async () => {
+      try {
+        const where = await invoke<string>("install_cli");
+        const onPath = where.startsWith("/usr/local/bin");
+        const hint = onPath
+          ? "You can now run `klaudio /path/to/project` from any terminal."
+          : `Make sure ${dirname(where)} is on your PATH. Add this to your shell rc if needed:\n  export PATH="${dirname(where)}:$PATH"`;
+        await message(`Installed at ${where}.\n\n${hint}`, {
+          title: "klaudio CLI installed",
+          kind: "info",
+        });
+      } catch (err) {
+        await message(String(err), {
+          title: "Install failed",
+          kind: "error",
+        });
+      }
+    }).then((off) => unlistens.push(off));
+
+    void listen("menu:uninstall-cli", async () => {
+      try {
+        await invoke("uninstall_cli");
+        await message("The klaudio command has been removed from PATH.", {
+          title: "klaudio CLI uninstalled",
+          kind: "info",
+        });
+      } catch (err) {
+        await message(String(err), {
+          title: "Uninstall failed",
+          kind: "error",
+        });
+      }
+    }).then((off) => unlistens.push(off));
+
+    onCleanup(() => {
+      for (const off of unlistens) off();
+    });
+  });
 
   return (
     <div class="h-screen w-screen flex flex-col bg-neutral-950 text-neutral-200 overflow-hidden">

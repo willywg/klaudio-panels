@@ -4,6 +4,59 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.1.0] — 2026-04-23
+
+### Added
+- **`klaudio` shell command.** Opens projects (or files) in the app from
+  any terminal: `klaudio /path/to/project`, `klaudio .`, or
+  `klaudio /path/to/file.ts` — the last variant opens the parent dir
+  as the project and routes the file into the diff panel. Always opens
+  a fresh Claude tab; auto-resume is suppressed for the target
+  project on that invocation (the user asked for a new tab by running
+  the command, so we honor that). If the app is already running, it
+  activates the existing window instead of spawning a second instance.
+- **"Install / Uninstall 'klaudio' Command in PATH" menu items.** Under
+  a new "Klaudio" submenu in the macOS menu bar. Install symlinks the
+  script shipped at `<AppBundle>/Contents/Resources/scripts/klaudio`
+  into `/usr/local/bin/klaudio` (falling back to `~/.local/bin/klaudio`
+  when `/usr/local/bin` isn't writable — in that case the dialog
+  reminds the user to add the location to their `PATH`). Uninstall
+  removes the symlink from every known location. Linux mirrors the
+  flow with `~/.local/bin` only; Windows is stubbed and returns an
+  error until we add a proper shim.
+
+### How it works
+- The `klaudio` shell script resolves its argument to an absolute path
+  (the `.app`'s CWD at launch is `/`, so relative paths must be
+  resolved before we hand them off) and invokes
+  `open klaudio://open?path=<url-encoded>` on macOS / `xdg-open` on
+  Linux. LaunchServices delivers the URL to the running instance via
+  Apple Event "GetURL" on warm start and as a launch argument on cold
+  start; both surface identically through `RunEvent::Opened { urls }`,
+  which `tauri-plugin-deep-link` exposes as
+  `DeepLinkExt::on_open_url`. We chose a URL scheme over
+  `open -a ... --args` + `tauri-plugin-single-instance` because
+  `open --args` does **not** deliver args to an already-running app —
+  LaunchServices only sends an "activate" Apple event, so no second
+  process spawns and the plugin callback never fires. URL schemes
+  route through LaunchServices on both paths and avoid the whole
+  problem.
+- `cli_args::handle_url` parses the URL, classifies the path as
+  directory vs file (using `std::fs::metadata`), and emits `cli:open`
+  with `{ project_path, file_path? }`. The frontend listener in
+  `Shell()` activates the project, marks it as already-auto-resumed
+  (so the fresh tab isn't racing with a resume of the last session),
+  opens a new Claude PTY tab, and if `file_path` is present opens the
+  diff panel on the file's relative path.
+- The menu items just emit `menu:install-cli` / `menu:uninstall-cli`
+  intents; the frontend invokes the Tauri command and shows a native
+  dialog with the outcome. Keeps all dialog plumbing on the JS side.
+
+### Deps
+- `tauri-plugin-deep-link` 2.4 (Rust) + `@tauri-apps/plugin-deep-link`
+  2.4 (JS).
+- `url` 2.5 (Rust) for `klaudio://` URL parsing.
+
 ## [1.0.0] — 2026-04-23
 
 First release under the new name. No functional changes — purely a rename

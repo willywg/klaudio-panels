@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Klaudio Panels CLI wrapper.
+#
+# Resolves the user-supplied path to an absolute one (the .app's CWD at launch
+# is `/`, so relative paths would be misinterpreted) and invokes the app via a
+# klaudio:// URL. LaunchServices / xdg-open deliver the URL to the running
+# instance if one exists (warm start) or cold-start the app otherwise — both
+# routes surface in RunEvent::Opened on the Rust side.
+set -e
+
+APP_NAME="Klaudio Panels"
+SCHEME="klaudio"
+
+urlenc() {
+    # Bash 3.2-compatible RFC 3986 encoder. Keeps `/` for readable URLs —
+    # the Rust `url` crate accepts raw forward slashes in query values.
+    local raw="$1" i c
+    for ((i = 0; i < ${#raw}; i++)); do
+        c="${raw:$i:1}"
+        case "$c" in
+            [a-zA-Z0-9.~_\-/]) printf '%s' "$c" ;;
+            *) printf '%%%02X' "'$c" ;;
+        esac
+    done
+}
+
+resolve_abs() {
+    local p="$1"
+    if [ -d "$p" ]; then
+        (cd "$p" && pwd)
+    elif [ -e "$p" ]; then
+        printf '%s/%s' "$(cd "$(dirname "$p")" && pwd)" "$(basename "$p")"
+    else
+        case "$p" in
+            /*) printf '%s' "$p" ;;
+            *) printf '%s/%s' "$PWD" "$p" ;;
+        esac
+    fi
+}
+
+os="$(uname -s)"
+
+if [ $# -eq 0 ]; then
+    case "$os" in
+        Darwin) exec open -a "$APP_NAME" ;;
+        Linux)  exec xdg-open "$SCHEME://open" ;;
+        *)
+            echo "klaudio: unsupported OS ($os)" >&2
+            exit 1
+            ;;
+    esac
+fi
+
+abs="$(resolve_abs "$1")"
+encoded="$(urlenc "$abs")"
+url="$SCHEME://open?path=$encoded"
+
+case "$os" in
+    Darwin) exec open "$url" ;;
+    Linux)  exec xdg-open "$url" ;;
+    *)
+        echo "klaudio: unsupported OS ($os)" >&2
+        exit 1
+        ;;
+esac
