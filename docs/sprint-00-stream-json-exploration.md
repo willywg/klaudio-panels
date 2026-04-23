@@ -83,7 +83,7 @@ The correct approach is to **embed the real TUI in a PTY**, like OpenCode Deskto
 ```
 1. Run `bun tauri dev`
 2. Window opens → "Open project" screen with a single button
-3. Click the button → native dialog → pick /Users/willywg/proyectos/construct-ai/copilot-agent
+3. Click the button → native dialog → pick /Users/alice/dev/my-claude-project
 4. UI switches to a 2-column layout:
    - Left: list of sessions for that project (e.g. 8 sessions with date + preview)
    - Right: empty + "New session" button

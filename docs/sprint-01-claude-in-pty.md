@@ -38,7 +38,7 @@ Sprint 00 proved that stream-json works but reimplements Claude Code's UI, givin
 
 ```
 1. bun tauri dev → window opens without warnings
-2. Pick a project with previous sessions (e.g. construct-ai/copilot-agent)
+2. Pick a project with previous sessions
 3. 2-col layout: sidebar with 5 sessions + panel with empty xterm.js terminal
 4. Click "+ New session" → I see:
    ✻ Claude Code v2.1.112

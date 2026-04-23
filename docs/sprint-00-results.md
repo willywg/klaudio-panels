@@ -21,7 +21,7 @@ Open **devtools** in the window (Cmd+Option+I) before you start; stream-json eve
 Check each one off as you go. If something fails, note it under *Bugs*.
 
 - [ ] **1.** The window opens without red warnings in the Tauri/Vite console.
-- [ ] **2.** I see the initial screen with the **"Open project…"** button. Click → native dialog → pick a folder with previous sessions (suggestion: `/Users/willywg/proyectos/construct-ai/copilot-agent` has 5 sessions).
+- [ ] **2.** I see the initial screen with the **"Open project…"** button. Click → native dialog → pick a folder with previous sessions (suggestion: `/Users/alice/dev/my-claude-project` with ~5 sessions).
 - [ ] **3.** The UI switches to a 2-column layout. The left side shows the project + list of previous sessions with date and preview. The right side shows an empty header + input.
 - [ ] **4.** Click **"+ New session"** → the right side is ready, header says `— · idle`.
 - [ ] **5.** I type a short prompt (e.g. `hi, list the files in this repo`) and send with ⌘+Enter or by clicking Send.

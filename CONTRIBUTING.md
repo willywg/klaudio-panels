@@ -54,6 +54,21 @@ Longer commit bodies are welcome when the *why* isn't obvious from the diff. Ref
 
 The maintainer's commits include a `Co-Authored-By: Claude Opus 4.x` trailer when an LLM agent substantially authored the change. Not required from external contributors.
 
+## Using AI tools (Claude Code and similar)
+
+PRs authored or co-authored with [Claude Code](https://claude.com/claude-code) or similar agents are welcome — this project is literally a shell around Claude Code and the maintainer uses it daily. A few notes:
+
+- Include a `Co-Authored-By: Claude <trailer>` in commits when the agent did substantial authoring. Not required, but appreciated for transparency.
+- For non-trivial changes, consider drafting a **PRP** (Product Requirement Prompt) first. PRPs live in `PRPs/` and are how we plan sprints in this repo — see existing ones for style and structure.
+- If you want tooling help writing PRPs, the maintainer publishes a Claude Code skill for it:
+
+  ```bash
+  npx skills add https://github.com/willywg/prp-manager --skill prp-manager
+  ```
+
+  More info: <https://skills.sh/willywg/prp-manager/prp-manager>
+- Whatever tool you use, **you are responsible for the code**. Read the diff, run typecheck + clippy, smoke-test in `bun tauri dev`. An LLM is an author, not a reviewer — that part is still on you.
+
 ## Code style
 
 **TypeScript / SolidJS:**

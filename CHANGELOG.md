@@ -4,6 +4,28 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.1.2] — 2026-04-23
+
+### Changed
+- **Bundle identifier changed** from `la.constructai.klaudio-panels` to
+  `com.willywg.klaudio-panels`. The previous identifier used a domain
+  that belongs to the maintainer's employer; the new one uses a domain
+  the maintainer owns personally (`willywg.com`), which is the right
+  call before the repo goes public. **Migration impact**: existing
+  installs will effectively be "a new app" from macOS's perspective —
+  window state, theme, and any other preference keyed by bundle ID
+  will reset to defaults. Conversation history is unaffected (it lives
+  in `~/.claude/projects/`, not in app preferences). Logs path is
+  unchanged (`~/Library/Logs/Klaudio Panels/klaudio.log`).
+- **CONTRIBUTING.md**: added a "Using AI tools" section welcoming
+  contributions authored with Claude Code or similar agents, and
+  pointing at the `prp-manager` skill for drafting PRPs.
+
+### Docs
+- Redacted references to a specific internal project path in four
+  Sprint 00/01 planning docs; replaced with a generic placeholder.
+  Purely cosmetic cleanup before publishing.
+
 ## [1.1.1] — 2026-04-23
 
 ### Added

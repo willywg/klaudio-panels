@@ -608,7 +608,7 @@ bun tauri dev
 ```
 
 1. Window opens → "Open project" screen.
-2. Click the button → native dialog → pick `/Users/willywg/proyectos/construct-ai/copilot-agent` (or any project with real sessions).
+2. Click the button → native dialog → pick `/Users/alice/dev/my-claude-project` (or any project with real sessions).
 3. UI switches to a 2-col layout with the sessions listed.
 4. Click "New session" → empty chat panel + input.
 5. Type "hi, what's in this repo?" + enter.
