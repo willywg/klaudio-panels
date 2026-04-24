@@ -45,6 +45,12 @@ import { ShellPanelProvider, useShellPanel } from "@/context/shell-panel";
 import { installGlobalErrorForwarding } from "@/lib/debug-log";
 import { DiffPanel } from "@/components/diff-panel/diff-panel";
 import { SplitDivider } from "@/components/diff-panel/split-pane";
+import {
+  CENTER_MIN,
+  DIFF_MIN,
+  SIDEBAR_MIN,
+  computePanelLayout,
+} from "@/lib/panel-layout";
 import { ShellTerminalPanel } from "@/components/shell-terminal/shell-terminal-panel";
 import { displayLabel } from "@/lib/session-label";
 
@@ -90,6 +96,32 @@ function Shell() {
   const shellPanel = useShellPanel();
   let splitContainerRef!: HTMLDivElement;
   let sidebarRowRef!: HTMLDivElement;
+
+  // Live width of the outer flex row that hosts sidebar + center + diff
+  // panel. Drives the proportional shrink logic below. Updated by a
+  // ResizeObserver installed onMount; zero until first measurement so the
+  // contexts' effectiveWidthFor() fallback to stored width during the
+  // first render tick.
+  const [rowWidth, setRowWidth] = createSignal(0);
+
+  const sidebarVisible = () =>
+    !sidebar.collapsed() && activeProjectPath() !== null;
+
+  // Combined layout: we compute BOTH panels' effective widths together
+  // because the interaction between them matters. Each panel capped
+  // independently at row*0.5 lets them both reach 50%, leaving nothing
+  // for the center. `computePanelLayout` does the joint clamp and the
+  // auto-hide decision in one pure pass.
+  const panelLayout = createMemo(() => {
+    const p = activeProjectPath();
+    return computePanelLayout({
+      rowWidth: rowWidth(),
+      sidebarVisible: sidebarVisible(),
+      diffOpen: p !== null && diffPanel.isOpen(p),
+      sidebarStored: p !== null ? sidebar.widthFor(p) : 0,
+      diffStored: p !== null ? diffPanel.widthFor(p) : 0,
+    });
+  });
 
   // Remembered active tab per project. Set BEFORE changing activeProjectPath
   // (inside setActiveProjectPath) so it's never wrong when the switch effect
@@ -166,6 +198,19 @@ function Shell() {
       { defer: true },
     ),
   );
+
+  // Track the outer flex row's width so the sidebar and diff panel can
+  // clamp their rendered widths on window resize without mutating stored
+  // preferences. ResizeObserver's callback is already rAF-aligned by the
+  // browser — no debounce needed.
+  onMount(() => {
+    const ro = new ResizeObserver((entries) => {
+      const e = entries[0];
+      if (e) setRowWidth(e.contentRect.width);
+    });
+    ro.observe(sidebarRowRef);
+    onCleanup(() => ro.disconnect());
+  });
 
   // Seed recent projects with the project loaded from localStorage on boot.
   onMount(() => {
@@ -670,6 +715,7 @@ function Shell() {
             {(p) => (
               <SidebarPanel
                 projectPath={p()}
+                width={panelLayout().sidebarEff}
                 sessionsContent={
                   <SessionsList
                     projectPath={p()}
@@ -696,12 +742,14 @@ function Shell() {
             {(p) => (
               <SplitDivider
                 edge="left"
-                width={sidebar.widthFor(p())}
+                width={panelLayout().sidebarEff}
                 onResize={(w) => sidebar.setWidth(p(), w)}
                 onResizeEnd={(w) => sidebar.setWidth(p(), w)}
                 getParentRect={() => sidebarRowRef.getBoundingClientRect()}
-                minSelf={200}
-                minOther={360}
+                minSelf={SIDEBAR_MIN}
+                minOther={
+                  CENTER_MIN + (panelLayout().diffVisible ? DIFF_MIN : 0)
+                }
                 maxFraction={0.5}
               />
             )}
@@ -759,20 +807,29 @@ function Shell() {
                 </Show>
               </div>
             </section>
-            <Show when={activeProjectPath() && diffPanel.isOpen(activeProjectPath()!) ? activeProjectPath() : null}>
+            <Show
+              when={
+                panelLayout().diffVisible ? activeProjectPath() : null
+              }
+            >
               {(p) => (
                 <>
                   <SplitDivider
-                    width={diffPanel.widthFor(p())}
+                    width={panelLayout().diffEff}
                     onResize={(w) => diffPanel.setWidth(p(), w)}
                     onResizeEnd={(w) => diffPanel.setWidth(p(), w)}
                     getParentRect={() =>
                       splitContainerRef.getBoundingClientRect()
                     }
+                    minSelf={DIFF_MIN}
+                    minOther={
+                      CENTER_MIN + (sidebarVisible() ? SIDEBAR_MIN : 0)
+                    }
+                    maxFraction={0.5}
                   />
                   <div
                     class="shrink-0 min-h-0 flex flex-col overflow-hidden"
-                    style={{ width: `${diffPanel.widthFor(p())}px` }}
+                    style={{ width: `${panelLayout().diffEff}px` }}
                   >
                     <DiffPanel projectPath={p()} />
                   </div>

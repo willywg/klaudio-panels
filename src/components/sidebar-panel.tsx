@@ -5,6 +5,9 @@ import { SidebarTabs } from "./sidebar-tabs";
 
 type Props = {
   projectPath: string;
+  /** Effective (clamped-to-window) width in px. Computed by App.tsx so the
+   *  clamp stays consistent with the diff panel's side of the layout. */
+  width: number;
   sessionsContent: JSX.Element;
   filesContent: JSX.Element;
 };
@@ -20,7 +23,7 @@ export function SidebarPanel(props: Props) {
     <Show when={!sidebar.collapsed()}>
       <aside
         class="shrink-0 border-r border-neutral-800 flex flex-col min-h-0 overflow-hidden bg-neutral-950"
-        style={{ width: `${sidebar.widthFor(props.projectPath)}px` }}
+        style={{ width: `${props.width}px` }}
       >
         <div class="px-3 py-2 border-b border-neutral-800">
           <div class="text-[10px] uppercase tracking-wider text-neutral-500">
