@@ -1,6 +1,6 @@
 {
   "name": "klaudio-panels",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "Klaudio Panels — native window embedding the Claude Code CLI",
   "type": "module",
   "scripts": {

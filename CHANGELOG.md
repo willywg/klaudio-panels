@@ -4,6 +4,52 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.2.0] — 2026-04-24
+
+### Added
+- **Resizable Sessions/Files sidebar with per-project width.** A 4px
+  drag handle on the sidebar's right edge resizes it live. The chosen
+  width is persisted **per project** under
+  `localStorage["sidebarWidth:<projectPath>"]`, mirroring the
+  `sidebarTab:` and `diffPanelWidth:` patterns. Default is still 280px,
+  so existing users see zero visual change until they grab the handle.
+  Hard caps: min 200px, max 500px (independent of window width — keeps
+  the center terminal as the priority on ultrawide monitors). Closes
+  [#3](https://github.com/willywg/klaudio-panels/issues/3).
+
+### Fixed
+- **Proportional shrink of side panels on window resize.** When the
+  app window narrows, the sidebar and diff panel now give back space
+  proportionally instead of holding their absolute stored widths and
+  crushing the center terminal. Both panels are clamped *together*
+  (in a new pure helper, `src/lib/panel-layout.ts`) so the center is
+  guaranteed a 360px floor whenever the diff panel is visible. The
+  diff panel **auto-hides non-destructively** when the window can't
+  fit sidebar + diff + a usable center — `diffPanelOpen:<path>` in
+  localStorage is unchanged, so widening the window brings it back.
+  Stored panel widths are never mutated by window resizes; only
+  drag intent writes. Closes
+  [#4](https://github.com/willywg/klaudio-panels/issues/4).
+- **Terminal one row short after switching projects.** The activation
+  path in `terminal-view.tsx` ran a single rAF fit, while the initial-
+  mount path already used staggered fits at rAF + 180ms + 500ms with
+  a comment explaining why one shot is unreliable. The two layout PRs
+  above amplified the outer reflow on project switch (per-project
+  sidebar width, panel auto-hide), tipping that race over often
+  enough to be visible: xterm measured one row short, the shell
+  prompt sat clipped below the canvas, and only a keystroke (auto-
+  scroll) brought it back. The activation effect now mirrors
+  onMount's staggered pattern — fit at rAF + 180ms + 500ms, with
+  focus claimed only on the first pass. Closes
+  [#7](https://github.com/willywg/klaudio-panels/issues/7).
+
+### Changed
+- **First test suite in the repo.** `bun test` is wired as a script
+  and `@types/bun` lands as a devDep. The 10-case suite around
+  `computePanelLayout` locks in the center-floor invariant across a
+  rowWidth sweep — caught a 3px violation at the auto-hide threshold
+  during review.
+
 ## [1.1.2] — 2026-04-23
 
 ### Changed
