@@ -257,10 +257,18 @@ export function TerminalView(props: Props) {
   // When the tab becomes visible again, re-measure (size may have changed
   // while hidden), force a full redraw (xterm WebGL stops painting while the
   // canvas is `visibility: hidden` — without refresh the panel stays blank),
-  // and refocus so keyboard input lands in the active tab.
+  // and refocus so keyboard input lands in the active tab. Uses the same
+  // staggered-fit pattern as onMount because a single rAF caches a too-short
+  // height on project switch while the outer layout is still reflowing
+  // (per-project sidebar width from PR #5, panelLayout memo recompute from
+  // PR #6). Without the follow-ups, xterm ends up one row short and the
+  // shell prompt is clipped until the user's next keystroke triggers auto-
+  // scroll. Focus is claimed only on the first pass so later fits don't
+  // steal it back if the user already clicked elsewhere.
   createEffect(() => {
     if (!props.active) return;
-    requestAnimationFrame(() => {
+
+    const rafId = requestAnimationFrame(() => {
       safeFit();
       try {
         if (term) term.refresh(0, term.rows - 1);
@@ -268,6 +276,22 @@ export function TerminalView(props: Props) {
       } catch {
         // ignore
       }
+    });
+
+    const t180 = window.setTimeout(() => safeFit(), 180);
+    const t500 = window.setTimeout(() => {
+      safeFit();
+      try {
+        if (term) term.refresh(0, term.rows - 1);
+      } catch {
+        // ignore
+      }
+    }, 500);
+
+    onCleanup(() => {
+      cancelAnimationFrame(rafId);
+      window.clearTimeout(t180);
+      window.clearTimeout(t500);
     });
   });
 
