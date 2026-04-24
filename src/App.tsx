@@ -89,6 +89,7 @@ function Shell() {
   const shellPty = useShellPty();
   const shellPanel = useShellPanel();
   let splitContainerRef!: HTMLDivElement;
+  let sidebarRowRef!: HTMLDivElement;
 
   // Remembered active tab per project. Set BEFORE changing activeProjectPath
   // (inside setActiveProjectPath) so it's never wrong when the switch effect
@@ -658,6 +659,7 @@ function Shell() {
           survives underneath with its xterms intact. */}
       <div class="flex-1 relative min-w-0 min-h-0">
         <div
+          ref={sidebarRowRef}
           class="absolute inset-0 flex min-w-0 min-h-0 overflow-hidden"
           style={{
             visibility: activeProjectPath() ? "visible" : "hidden",
@@ -681,6 +683,26 @@ function Shell() {
                   />
                 }
                 filesContent={<FileTree projectPath={p()} />}
+              />
+            )}
+          </Show>
+          <Show
+            when={
+              activeProjectPath() && !sidebar.collapsed()
+                ? activeProjectPath()
+                : null
+            }
+          >
+            {(p) => (
+              <SplitDivider
+                edge="left"
+                width={sidebar.widthFor(p())}
+                onResize={(w) => sidebar.setWidth(p(), w)}
+                onResizeEnd={(w) => sidebar.setWidth(p(), w)}
+                getParentRect={() => sidebarRowRef.getBoundingClientRect()}
+                minSelf={200}
+                minOther={360}
+                maxFraction={0.5}
               />
             )}
           </Show>

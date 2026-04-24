@@ -1,24 +1,36 @@
 import { createSignal, onCleanup } from "solid-js";
 
 type Props = {
-  /** Current width of the RIGHT pane in px. Parent owns the signal. */
+  /** Which side of the parent row this divider controls. Determines whether
+   *  the drag distance grows from the left edge (e.g. a left-docked sidebar)
+   *  or from the right edge (e.g. the right-docked diff panel). Defaults to
+   *  "right" for backwards compatibility. */
+  edge?: "left" | "right";
+  /** Current width of the controlled pane in px. Parent owns the signal. */
   width: number;
   /** Called live on pointermove while dragging. Parent should update a
    *  signal, not localStorage. */
   onResize: (nextWidth: number) => void;
   /** Called once on pointerup so parent can persist. */
   onResizeEnd: (finalWidth: number) => void;
-  /** Element whose right edge defines the 100% x-coordinate. Usually the
-   *  SplitPane's parent — we read it on drag to clamp. */
+  /** Element whose edges define the 100% x-coordinate. Usually the row
+   *  that hosts both panes — we read it on drag to clamp. */
   getParentRect: () => DOMRect;
-  minLeft?: number;
-  minRight?: number;
+  /** Minimum width for the pane this divider controls. */
+  minSelf?: number;
+  /** Minimum width reserved for the pane on the OTHER side (typically the
+   *  center/terminal column). */
+  minOther?: number;
+  /** Optional hard ceiling as a fraction of the parent row's width (0–1).
+   *  The effective maxSelf is `min(parent.width * maxFraction,
+   *  parent.width - minOther)`. Leave undefined to only respect `minOther`. */
+  maxFraction?: number;
 };
 
-const DEFAULT_MIN_LEFT = 360;
-const DEFAULT_MIN_RIGHT = 300;
+const DEFAULT_MIN_SELF = 300;
+const DEFAULT_MIN_OTHER = 360;
 
-/** A 4px vertical drag handle for resizing a right-docked panel. Uses
+/** A 4px vertical drag handle for resizing a side-docked panel. Uses
  *  pointer events + setPointerCapture so the drag survives the cursor
  *  leaving the 4px hit area. */
 export function SplitDivider(props: Props) {
@@ -34,11 +46,17 @@ export function SplitDivider(props: Props) {
   function onPointerMove(e: PointerEvent) {
     if (!dragging()) return;
     const rect = props.getParentRect();
-    const minLeft = props.minLeft ?? DEFAULT_MIN_LEFT;
-    const minRight = props.minRight ?? DEFAULT_MIN_RIGHT;
-    const proposed = rect.right - e.clientX;
-    const maxRight = rect.width - minLeft;
-    const clamped = Math.max(minRight, Math.min(proposed, maxRight));
+    const minSelf = props.minSelf ?? DEFAULT_MIN_SELF;
+    const minOther = props.minOther ?? DEFAULT_MIN_OTHER;
+    const edge = props.edge ?? "right";
+    const proposed =
+      edge === "left" ? e.clientX - rect.left : rect.right - e.clientX;
+    const fractionCap =
+      props.maxFraction != null
+        ? rect.width * props.maxFraction
+        : Number.POSITIVE_INFINITY;
+    const maxSelf = Math.min(fractionCap, rect.width - minOther);
+    const clamped = Math.max(minSelf, Math.min(proposed, maxSelf));
     props.onResize(clamped);
   }
 
