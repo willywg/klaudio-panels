@@ -9,7 +9,8 @@ type Props = {
   filesContent: JSX.Element;
 };
 
-/** 280px aside when expanded; renders nothing when collapsed. Toggle lives in
+/** Drag-resizable aside when expanded; renders nothing when collapsed. Width
+ *  is per-project (default 280px, persisted in localStorage). Toggle lives in
  *  the titlebar via <TitlebarToggle>. Cmd+B toggles from anywhere. Active tab
  *  is per-project. */
 export function SidebarPanel(props: Props) {
@@ -17,7 +18,10 @@ export function SidebarPanel(props: Props) {
 
   return (
     <Show when={!sidebar.collapsed()}>
-      <aside class="w-[280px] shrink-0 border-r border-neutral-800 flex flex-col min-h-0 overflow-hidden bg-neutral-950">
+      <aside
+        class="shrink-0 border-r border-neutral-800 flex flex-col min-h-0 overflow-hidden bg-neutral-950"
+        style={{ width: `${sidebar.widthFor(props.projectPath)}px` }}
+      >
         <div class="px-3 py-2 border-b border-neutral-800">
           <div class="text-[10px] uppercase tracking-wider text-neutral-500">
             Project

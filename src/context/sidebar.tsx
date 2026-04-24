@@ -7,10 +7,14 @@ import {
 import {
   getActiveTab,
   getCollapsed,
+  getSidebarWidth,
   setActiveTab as persistActiveTab,
   setCollapsed as persistCollapsed,
+  setSidebarWidth as persistSidebarWidth,
   type SidebarTab,
 } from "@/lib/sidebar-prefs";
+
+const DEFAULT_SIDEBAR_WIDTH = 280;
 
 function makeSidebarContext() {
   const [collapsed, setCollapsedSignal] = createSignal<boolean>(getCollapsed());
@@ -19,6 +23,11 @@ function makeSidebarContext() {
   // or blow away any other project's selection.
   const tabByProject = new Map<string, SidebarTab>();
   const [tabBump, setTabBump] = createSignal(0);
+
+  // Per-project width mirrors the diff-panel pattern: read-through cache
+  // over localStorage, a bump signal to re-run reactive reads on write.
+  const widthByProject = new Map<string, number>();
+  const [widthBump, setWidthBump] = createSignal(0);
 
   function activeTab(projectPath: string): SidebarTab {
     if (!tabByProject.has(projectPath)) {
@@ -32,6 +41,21 @@ function makeSidebarContext() {
     tabByProject.set(projectPath, tab);
     persistActiveTab(projectPath, tab);
     setTabBump((k) => k + 1);
+  }
+
+  function widthFor(projectPath: string): number {
+    if (!widthByProject.has(projectPath)) {
+      const stored = getSidebarWidth(projectPath);
+      widthByProject.set(projectPath, stored ?? DEFAULT_SIDEBAR_WIDTH);
+    }
+    void widthBump();
+    return widthByProject.get(projectPath)!;
+  }
+
+  function setWidth(projectPath: string, px: number) {
+    widthByProject.set(projectPath, px);
+    persistSidebarWidth(projectPath, px);
+    setWidthBump((k) => k + 1);
   }
 
   function toggleCollapsed() {
@@ -53,6 +77,8 @@ function makeSidebarContext() {
     collapsed,
     toggleCollapsed,
     setCollapsed,
+    widthFor,
+    setWidth,
   };
 }
 
