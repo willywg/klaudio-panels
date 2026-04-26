@@ -2,6 +2,7 @@ pub mod binary;
 pub mod cli_args;
 pub mod debug_log;
 pub mod file_read;
+pub mod file_write;
 pub mod fs;
 pub mod git;
 pub mod open_in;
@@ -134,6 +135,7 @@ pub fn run() {
             open_in::open_path_with,
             open_in::get_app_icon,
             file_read::read_file_bytes,
+            file_write::write_file_bytes,
             shell_install::install_cli,
             shell_install::uninstall_cli,
         ])

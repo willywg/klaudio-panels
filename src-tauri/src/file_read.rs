@@ -1,10 +1,11 @@
+use std::fs::Metadata;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
 use crate::git::{is_binary_bytes, BINARY_PROBE_BYTES};
 
-const MAX_PREVIEW_BYTES: u64 = 1024 * 1024;
+pub(crate) const MAX_PREVIEW_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Serialize, Clone)]
 pub struct FilePayload {
@@ -13,9 +14,18 @@ pub struct FilePayload {
     pub is_binary: bool,
     pub too_large: bool,
     pub bytes: u64,
+    pub mtime_ms: i64,
 }
 
-fn resolve_rel(project_path: &str, rel: &str) -> Result<PathBuf, String> {
+pub(crate) fn mtime_ms(meta: &Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+pub(crate) fn resolve_rel(project_path: &str, rel: &str) -> Result<PathBuf, String> {
     let base = Path::new(project_path);
     let candidate = base.join(rel);
     let canon_base = base
@@ -35,6 +45,7 @@ pub fn read_file_bytes(project_path: String, rel_path: String) -> Result<FilePay
     let abs = resolve_rel(&project_path, &rel_path)?;
     let meta = std::fs::metadata(&abs).map_err(|e| format!("stat: {e}"))?;
     let bytes = meta.len();
+    let mtime = mtime_ms(&meta);
 
     if bytes > MAX_PREVIEW_BYTES {
         return Ok(FilePayload {
@@ -43,6 +54,7 @@ pub fn read_file_bytes(project_path: String, rel_path: String) -> Result<FilePay
             is_binary: false,
             too_large: true,
             bytes,
+            mtime_ms: mtime,
         });
     }
 
@@ -56,15 +68,29 @@ pub fn read_file_bytes(project_path: String, rel_path: String) -> Result<FilePay
             is_binary: true,
             too_large: false,
             bytes,
+            mtime_ms: mtime,
         });
     }
 
-    let contents = String::from_utf8_lossy(&data).into_owned();
-    Ok(FilePayload {
-        path: rel_path,
-        contents: Some(contents),
-        is_binary: false,
-        too_large: false,
-        bytes,
-    })
+    // Strict UTF-8: lossy decoding would inject U+FFFD which the editor
+    // would happily save back, corrupting the file. Treat non-UTF-8 like
+    // binary so the menu surfaces the same disabled tooltip.
+    match std::str::from_utf8(&data) {
+        Ok(s) => Ok(FilePayload {
+            path: rel_path,
+            contents: Some(s.to_owned()),
+            is_binary: false,
+            too_large: false,
+            bytes,
+            mtime_ms: mtime,
+        }),
+        Err(_) => Ok(FilePayload {
+            path: rel_path,
+            contents: None,
+            is_binary: true,
+            too_large: false,
+            bytes,
+            mtime_ms: mtime,
+        }),
+    }
 }

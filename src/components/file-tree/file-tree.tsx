@@ -20,9 +20,11 @@ import {
   FilePlus,
   FolderOpen,
   FolderPlus,
+  Pencil,
   RotateCw,
   Trash2,
 } from "lucide-solid";
+import { looksBinaryByExtension } from "@/lib/cm-language";
 import { ContextMenu, type ContextMenuItem } from "@/components/context-menu";
 import { useGit } from "@/context/git";
 import { useDiffPanel } from "@/context/diff-panel";
@@ -379,6 +381,19 @@ export function FileTree(props: Props) {
         label: "Open in preview",
         icon: Eye,
         onClick: () => diffPanel.openFile(props.projectPath, toRel(m.path)),
+      });
+      // "Edit" — opens the file in the inline CodeMirror editor. Disabled
+      // for obvious binaries (extension probe); the Rust read path is the
+      // authoritative gate (it also rejects non-UTF-8 + >1 MiB).
+      const binary = looksBinaryByExtension(m.path);
+      items.push({
+        label: "Edit",
+        icon: Pencil,
+        disabled: binary,
+        onClick: () => {
+          diffPanel.openEdit(props.projectPath, toRel(m.path));
+          diffPanel.openPanel(props.projectPath);
+        },
       });
     }
 

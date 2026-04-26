@@ -38,6 +38,7 @@ import {
 } from "@/context/session-watcher";
 import { GitProvider, useGit } from "@/context/git";
 import { DiffPanelProvider, useDiffPanel } from "@/context/diff-panel";
+import { EditBuffersProvider } from "@/context/edit-buffers";
 import { OpenInProvider } from "@/context/open-in";
 import { EditorPtyProvider, useEditorPty } from "@/context/editor-pty";
 import { ShellPtyProvider, useShellPty } from "@/context/shell-pty";
@@ -52,6 +53,7 @@ import {
   computePanelLayout,
 } from "@/lib/panel-layout";
 import { ShellTerminalPanel } from "@/components/shell-terminal/shell-terminal-panel";
+import { Toaster } from "@/components/toaster";
 import { displayLabel } from "@/lib/session-label";
 
 const AUTO_RESUME_FAIL_WINDOW_MS = 2000;
@@ -255,7 +257,7 @@ function Shell() {
         const key = diffPanel.activeKeyFor(p);
         if (key === "diff") return;
         e.preventDefault();
-        diffPanel.closeActiveTab(p);
+        void diffPanel.closeActiveTab(p);
       }
       // Cmd+J toggles the bottom shell terminal. WebKit uses the same combo
       // for "Jump to Downloads" when nothing is focused — preventDefault
@@ -569,6 +571,11 @@ function Shell() {
   }
 
   async function handleCloseProject(path: string) {
+    // Tear down diff-panel tabs first. Edit tabs may surface a Save/Discard/
+    // Cancel prompt via their close guard; if the user picks Cancel the
+    // returned `kept` count is non-zero and we abort the rest of the close.
+    const { kept } = await diffPanel.clearProject(path);
+    if (kept > 0) return;
     // Kill all PTYs for the project.
     const ids = term.store.tabs
       .filter((t) => t.projectPath === path)
@@ -584,11 +591,9 @@ function Shell() {
     }
     activeByProject.delete(path);
     autoResumed.delete(path);
-    // clearProject fires onBeforeClose for every editor tab, which our
-    // onMount hook uses to kill each PTY. Defensive double-kill via
-    // killAllForProject in case clearProject sees zero tabs (edge case where
-    // the project was never opened in a diff panel).
-    diffPanel.clearProject(path);
+    // Defensive: clearProject already SIGHUP'd editor tabs through the
+    // onBeforeClose hook, but the project may have lived without a diff
+    // panel ever opening — kill anything still alive directly.
     editorPty.killAllForProject(path);
     shellPty.killAllForProject(path);
     // Don't clear lastSessionId — keep it so next time the user re-pins from
@@ -888,6 +893,7 @@ function Shell() {
         </Show>
       </div>
       </main>
+      <Toaster />
     </div>
   );
 }
@@ -918,19 +924,21 @@ export default function App() {
       <SidebarProvider>
         <GitProvider>
           <DiffPanelProvider>
-            <OpenInProvider>
-              <EditorPtyProvider>
-                <ShellPanelProvider>
-                  <ShellPtyProvider>
-                    <TerminalProvider>
-                      <SessionWatcherProvider>
-                        <Shell />
-                      </SessionWatcherProvider>
-                    </TerminalProvider>
-                  </ShellPtyProvider>
-                </ShellPanelProvider>
-              </EditorPtyProvider>
-            </OpenInProvider>
+            <EditBuffersProvider>
+              <OpenInProvider>
+                <EditorPtyProvider>
+                  <ShellPanelProvider>
+                    <ShellPtyProvider>
+                      <TerminalProvider>
+                        <SessionWatcherProvider>
+                          <Shell />
+                        </SessionWatcherProvider>
+                      </TerminalProvider>
+                    </ShellPtyProvider>
+                  </ShellPanelProvider>
+                </EditorPtyProvider>
+              </OpenInProvider>
+            </EditBuffersProvider>
           </DiffPanelProvider>
         </GitProvider>
       </SidebarProvider>
