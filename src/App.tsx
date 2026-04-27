@@ -47,6 +47,7 @@ import {
   useCommandPalette,
 } from "@/context/command-palette";
 import { CommandPalette } from "@/components/command-palette";
+import { RevealProvider, useReveal } from "@/context/reveal";
 import { installGlobalErrorForwarding } from "@/lib/debug-log";
 import { DiffPanel } from "@/components/diff-panel/diff-panel";
 import { SplitDivider } from "@/components/diff-panel/split-pane";
@@ -100,6 +101,7 @@ function Shell() {
   const shellPty = useShellPty();
   const shellPanel = useShellPanel();
   const commandPalette = useCommandPalette();
+  const reveal = useReveal();
   let splitContainerRef!: HTMLDivElement;
   let sidebarRowRef!: HTMLDivElement;
 
@@ -234,6 +236,23 @@ function Shell() {
       }
     });
     onCleanup(dispose);
+  });
+
+  // Reveal-in-tree: when diffPanel.openFile fires (Cmd+K palette, etc.), the
+  // <FileTree> may not be mounted yet because the sidebar is on Sessions.
+  // Switch the sidebar to Files first — that mounts <FileTree>, which then
+  // picks up the same pending reveal via its own effect and runs the walk +
+  // scroll + highlight. This effect lives in Shell (always mounted) so the
+  // tab-switch happens regardless of the current sidebar state.
+  let lastHandledTabSwitchId = 0;
+  createEffect(() => {
+    const r = reveal.pending();
+    if (!r) return;
+    if (r.id <= lastHandledTabSwitchId) return;
+    lastHandledTabSwitchId = r.id;
+    if (sidebar.activeTab(r.projectPath) !== "files") {
+      sidebar.setTab(r.projectPath, "files");
+    }
   });
 
   // Cmd+B toggles the sidebar, Cmd+Shift+D toggles the diff panel. Listening
@@ -935,23 +954,25 @@ export default function App() {
     <ProjectsProvider>
       <SidebarProvider>
         <GitProvider>
-          <DiffPanelProvider>
-            <OpenInProvider>
-              <EditorPtyProvider>
-                <ShellPanelProvider>
-                  <ShellPtyProvider>
-                    <TerminalProvider>
-                      <SessionWatcherProvider>
-                        <CommandPaletteProvider>
-                          <Shell />
-                        </CommandPaletteProvider>
-                      </SessionWatcherProvider>
-                    </TerminalProvider>
-                  </ShellPtyProvider>
-                </ShellPanelProvider>
-              </EditorPtyProvider>
-            </OpenInProvider>
-          </DiffPanelProvider>
+          <RevealProvider>
+            <DiffPanelProvider>
+              <OpenInProvider>
+                <EditorPtyProvider>
+                  <ShellPanelProvider>
+                    <ShellPtyProvider>
+                      <TerminalProvider>
+                        <SessionWatcherProvider>
+                          <CommandPaletteProvider>
+                            <Shell />
+                          </CommandPaletteProvider>
+                        </SessionWatcherProvider>
+                      </TerminalProvider>
+                    </ShellPtyProvider>
+                  </ShellPanelProvider>
+                </EditorPtyProvider>
+              </OpenInProvider>
+            </DiffPanelProvider>
+          </RevealProvider>
         </GitProvider>
       </SidebarProvider>
     </ProjectsProvider>

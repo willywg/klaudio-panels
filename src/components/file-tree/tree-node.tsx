@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { onCleanup, onMount, Show } from "solid-js";
 import { ChevronRight, Folder, FolderOpen } from "lucide-solid";
 import { iconForFile } from "@/lib/file-icon";
 import { BADGE_COLOR, BADGE_LETTER, type FileStatus } from "@/lib/git-status";
@@ -17,6 +17,10 @@ type Props = {
   depth: number;
   selected: boolean;
   status?: FileStatus;
+  /** True while a reveal-in-tree request is highlighting this row. Painted
+   *  as a soft indigo wash that fades out via the existing `transition`
+   *  class; FileTree clears it after ~1.2s. */
+  highlighted?: boolean;
   onToggle: (path: string) => void;
   onSelect: (path: string) => void;
   onOpen: (path: string) => void;
@@ -27,15 +31,27 @@ type Props = {
   /** Delete / Backspace with the row focused triggers deletion (with
    *  confirm dialog on the parent's side). */
   onDelete: (path: string, isDir: boolean) => void;
+  /** FileTree passes a register/unregister pair so it can scroll a
+   *  specific row into view by absolute path (used by reveal-in-tree).
+   *  Optional — drag-only callers don't need it. */
+  registerRef?: (path: string, el: HTMLElement | null) => void;
 };
 
 export function TreeNode(props: Props) {
   const fileIcon = () => iconForFile(props.node.name);
 
+  let buttonRef: HTMLButtonElement | undefined;
   let pressStart: { x: number; y: number } | null = null;
   let dragging = false;
   let didDrag = false;
   let ghost: HTMLDivElement | null = null;
+
+  onMount(() => {
+    if (buttonRef) props.registerRef?.(props.node.path, buttonRef);
+  });
+  onCleanup(() => {
+    props.registerRef?.(props.node.path, null);
+  });
 
   function buildGhost(label: string): HTMLDivElement {
     const el = document.createElement("div");
@@ -167,6 +183,7 @@ export function TreeNode(props: Props) {
 
   return (
     <button
+      ref={buttonRef}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -179,10 +196,12 @@ export function TreeNode(props: Props) {
         props.onContextMenu(e, props.node.path, props.node.isDir);
       }}
       class={
-        "w-full flex items-center gap-1 px-2 py-0.5 text-[12px] text-left transition border-l-2 " +
-        (props.selected
-          ? "bg-neutral-800/60 border-indigo-500 text-neutral-100"
-          : "border-transparent text-neutral-300 hover:bg-neutral-900/60") +
+        "w-full flex items-center gap-1 px-2 py-0.5 text-[12px] text-left transition-colors duration-700 border-l-2 " +
+        (props.highlighted
+          ? "bg-indigo-500/20 border-indigo-400 text-neutral-100"
+          : props.selected
+            ? "bg-neutral-800/60 border-indigo-500 text-neutral-100"
+            : "border-transparent text-neutral-300 hover:bg-neutral-900/60") +
         (props.node.ignored ? " italic opacity-55" : "")
       }
       style={{ "padding-left": `${8 + props.depth * 12}px` }}
