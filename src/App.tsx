@@ -855,7 +855,14 @@ function Shell() {
                     );
                   }}
                 </For>
-                <Show when={activeProjectPath() && projectTabs().length === 0}>
+                <Show
+                  when={
+                    activeProjectPath() &&
+                    (projectTabs().length === 0 ||
+                      !activeTab() ||
+                      activeTab()?.projectPath !== activeProjectPath())
+                  }
+                >
                   <div class="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm">
                     Pick a session or start a new one.
                   </div>

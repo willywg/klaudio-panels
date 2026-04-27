@@ -154,13 +154,24 @@ export function makeTerminalContext() {
       produce((s) => {
         const idx = s.tabs.findIndex((t) => t.id === id);
         if (idx < 0) return;
+        const closed = s.tabs[idx];
         s.tabs.splice(idx, 1);
         if (s.activeTabId === id) {
-          if (s.tabs.length === 0) {
+          // Pick the nearest sibling in the SAME project (prefer left, then
+          // right). Falling back to the global tab list lands on a foreign
+          // project's tab, leaving the active project's pane blank — see #20.
+          const siblings: { tab: TerminalTab; pos: number }[] = [];
+          s.tabs.forEach((t, i) => {
+            if (t.projectPath === closed.projectPath) {
+              siblings.push({ tab: t, pos: i });
+            }
+          });
+          if (siblings.length === 0) {
             s.activeTabId = null;
           } else {
-            const next = Math.max(0, idx - 1);
-            s.activeTabId = s.tabs[Math.min(next, s.tabs.length - 1)].id;
+            const prev = [...siblings].reverse().find((x) => x.pos < idx);
+            const next = siblings.find((x) => x.pos >= idx);
+            s.activeTabId = (prev ?? next ?? siblings[0]).tab.id;
           }
         }
       }),
