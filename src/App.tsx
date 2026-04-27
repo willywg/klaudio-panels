@@ -58,6 +58,7 @@ import {
   computePanelLayout,
 } from "@/lib/panel-layout";
 import { ShellTerminalPanel } from "@/components/shell-terminal/shell-terminal-panel";
+import { requestScrollToBottom } from "@/lib/terminal-scroll-bus";
 import { displayLabel } from "@/lib/session-label";
 
 const AUTO_RESUME_FAIL_WINDOW_MS = 2000;
@@ -315,6 +316,23 @@ function Shell() {
           void shellPty.openTab(p);
         } else {
           void openNewTab();
+        }
+        return;
+      }
+      // Cmd+Down: scroll the terminal under the user's focus to its tail.
+      // Same shell-dock disambiguation as Cmd+T — focus inside the dock hits
+      // the active shell PTY, otherwise the active Claude tab. Companion to
+      // the floating ScrollToBottomButton each terminal renders.
+      if (mod && !e.shiftKey && !e.altKey && e.key === "ArrowDown") {
+        e.preventDefault();
+        const inShellDock =
+          document.activeElement instanceof Element &&
+          document.activeElement.closest("[data-shell-dock]") !== null;
+        if (inShellDock) {
+          const p = activeProjectPath();
+          if (p) requestScrollToBottom(shellPty.activeForProject(p));
+        } else {
+          requestScrollToBottom(term.store.activeTabId);
         }
         return;
       }
