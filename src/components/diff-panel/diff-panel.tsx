@@ -16,6 +16,7 @@ import { useGit } from "@/context/git";
 import { useOpenIn } from "@/context/open-in";
 import { useEditorPty } from "@/context/editor-pty";
 import { ContextMenu, type ContextMenuItem } from "@/components/context-menu";
+import { createInternalDrag } from "@/lib/use-internal-drag";
 import { DiffFileRow } from "./diff-file-row";
 import { FilePreview } from "./file-preview";
 import { EditorPtyView } from "./editor-pty-view";
@@ -338,6 +339,7 @@ function TabStrip(props: { projectPath: string }) {
             return (
               <TabItem
                 tab={t}
+                projectPath={props.projectPath}
                 active={isActive()}
                 onActivate={() => panel.setActiveTab(props.projectPath, key)}
                 onClose={() => panel.closeTab(props.projectPath, key)}
@@ -379,6 +381,10 @@ function TabStrip(props: { projectPath: string }) {
 
 function TabItem(props: {
   tab: PanelTab;
+  /** Project path used to resolve the tab's project-relative `path` to an
+   *  absolute path for the drag publisher (and for downstream @rel
+   *  conversion in `buildDropPayload`). */
+  projectPath: string;
   active: boolean;
   onActivate: () => void;
   onClose: () => void;
@@ -390,15 +396,41 @@ function TabItem(props: {
     return `${props.tab.editorId} ${basename(props.tab.path)}`;
   };
 
+  // Drag publisher: file/editor tabs carry a `rel` path; the diff tab does
+  // not and returns null so the drag never starts on it. Absolute path is
+  // computed inline so we don't bind to a stale projectPath.
+  const drag = createInternalDrag(() => {
+    if (props.tab.kind === "diff") return null;
+    const base = props.projectPath.endsWith("/")
+      ? props.projectPath.slice(0, -1)
+      : props.projectPath;
+    return {
+      path: `${base}/${props.tab.path}`,
+      label: basename(props.tab.path),
+    };
+  });
+
+  function onClick(e: MouseEvent) {
+    if (drag.consumedClick()) {
+      e.preventDefault();
+      return;
+    }
+    props.onActivate();
+  }
+
   return (
     <div
+      onPointerDown={drag.handlers.onPointerDown}
+      onPointerMove={drag.handlers.onPointerMove}
+      onPointerUp={drag.handlers.onPointerUp}
+      onPointerCancel={drag.handlers.onPointerCancel}
       class={
         "group h-full min-w-0 flex items-center gap-1.5 px-3 text-[12px] cursor-default border-r border-neutral-800 transition " +
         (props.active
           ? "bg-neutral-900 text-neutral-100"
           : "text-neutral-400 hover:bg-neutral-900/60 hover:text-neutral-200")
       }
-      onClick={props.onActivate}
+      onClick={onClick}
       onContextMenu={props.onContextMenu}
     >
       <Switch>
