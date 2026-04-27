@@ -137,6 +137,17 @@ function makeGitContext() {
     });
   }
 
+  /** Manual refetch of git_status + git_summary. Skips if a fetch is already
+   *  in flight (the in-flight call already produces fresh data on completion).
+   *  Used by the Git changes panel header refresh button — needed because
+   *  some external commits (`git commit` from another process, `opencommit`,
+   *  etc.) only touch `.git/` internals that our fs-watcher's `is_relevant`
+   *  filter drops on purpose to avoid debouncer spam. */
+  async function refresh(projectPath: string): Promise<void> {
+    if (store[projectPath]?.loading) return;
+    await fetchNow(projectPath);
+  }
+
   onCleanup(() => {
     for (const [, un] of unlisteners) un();
     for (const [, t] of timers) window.clearTimeout(t);
@@ -146,6 +157,7 @@ function makeGitContext() {
 
   return {
     ensureFor,
+    refresh,
     statusFor,
     summaryFor,
     statusByAbsPath,
