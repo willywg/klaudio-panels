@@ -127,6 +127,23 @@ export function makeFileTreeStore(projectPath: string) {
     });
   }
 
+  /** Force a directory expanded (idempotent), loading its children if not
+   *  already loaded. Unlike `toggleDir`, never collapses an already-expanded
+   *  directory — needed by reveal-in-tree to expand a chain of ancestors
+   *  without flipping any that the user had open. Throws if the load fails
+   *  so the caller can stop the walk.
+   */
+  async function expandTo(path: string) {
+    const node = findNodeMut(root, path);
+    if (!node || !node.isDir) return;
+    if (!node.loaded) {
+      await loadChildren(path);
+    }
+    updateNode(path, (n) => {
+      n.expanded = true;
+    });
+  }
+
   /** Re-list every currently-loaded directory, preserving expanded state
    *  for paths that still exist. Used by the header "refresh" button. */
   async function refresh() {
@@ -279,6 +296,7 @@ export function makeFileTreeStore(projectPath: string) {
     root,
     ensureLoaded,
     toggleDir,
+    expandTo,
     applyFsEvent,
     flatten,
     refresh,

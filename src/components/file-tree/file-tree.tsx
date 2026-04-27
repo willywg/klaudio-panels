@@ -28,6 +28,7 @@ import { useGit } from "@/context/git";
 import { useDiffPanel } from "@/context/diff-panel";
 import { useOpenIn } from "@/context/open-in";
 import { useEditorPty } from "@/context/editor-pty";
+import { useReveal } from "@/context/reveal";
 import { TreeNode } from "./tree-node";
 import {
   makeFileTreeStore,
@@ -117,6 +118,39 @@ export function FileTree(props: Props) {
   const diffPanel = useDiffPanel();
   const openIn = useOpenIn();
   const editorPty = useEditorPty();
+  const revealCtx = useReveal();
+
+  // Per-row DOM refs, keyed by absolute path. Populated by TreeNode via the
+  // `registerRef` prop (mount → set, cleanup → null). Used by reveal-in-tree
+  // to scroll a specific row into view without querying the DOM.
+  const nodeRefs = new Map<string, HTMLElement>();
+  function registerNodeRef(path: string, el: HTMLElement | null) {
+    if (el) nodeRefs.set(path, el);
+    else nodeRefs.delete(path);
+  }
+
+  // Transient highlight: set when a reveal lands, cleared after 1.2s. Tracked
+  // by absolute path. The setTimeout handle is held so a *new* reveal can
+  // cancel the prior timer — without that, the first reveal's clear would
+  // wipe the second reveal's highlight as soon as it fires.
+  const [highlightedPath, setHighlightedPath] = createSignal<string | null>(
+    null,
+  );
+  let highlightTimer: number | null = null;
+  function flashHighlight(absPath: string) {
+    if (highlightTimer !== null) {
+      clearTimeout(highlightTimer);
+      highlightTimer = null;
+    }
+    setHighlightedPath(absPath);
+    highlightTimer = window.setTimeout(() => {
+      setHighlightedPath((cur) => (cur === absPath ? null : cur));
+      highlightTimer = null;
+    }, 1200);
+  }
+  onCleanup(() => {
+    if (highlightTimer !== null) clearTimeout(highlightTimer);
+  });
 
   // Memoized store follows the prop — switching projects swaps the store.
   const store = createMemo(() => getStore(props.projectPath));
@@ -227,6 +261,60 @@ export function FileTree(props: Props) {
 
   onCleanup(() => {
     if (unlisten) unlisten();
+  });
+
+  /** Walk the project root → leaf chain expanding each ancestor in turn,
+   *  then wait one frame for the For to re-flatten and render the new rows
+   *  before scrolling the leaf into view + flashing a brief highlight.
+   *
+   *  Bails on the first failed `expandTo` (deleted dir, permission, …) —
+   *  no scroll, no highlight, just a console warn so we don't tear the
+   *  whole tree on transient races.
+   */
+  async function runReveal(rel: string) {
+    const segments = rel.split("/").filter(Boolean);
+    if (segments.length === 0) return;
+    const base = stripTrailingSlash(props.projectPath);
+    let walkPath = base;
+    const s = store();
+    // Expand every ancestor (everything up to the leaf — the leaf itself
+    // is a file, can't be expanded).
+    for (let i = 0; i < segments.length - 1; i++) {
+      walkPath = `${walkPath}/${segments[i]}`;
+      try {
+        await s.expandTo(walkPath);
+      } catch (err) {
+        console.warn("reveal: expandTo failed at", walkPath, err);
+        return;
+      }
+    }
+    const leafAbs = `${base}/${segments.join("/")}`;
+    // Two rAFs: first one settles the store mutation, second one waits for
+    // <For> to materialize the new rows so nodeRefs has the leaf entry.
+    await new Promise<void>((r) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => r())),
+    );
+    const el = nodeRefs.get(leafAbs);
+    if (el) el.scrollIntoView({ block: "nearest" });
+    setSelected(leafAbs);
+    flashHighlight(leafAbs);
+  }
+
+  // React to reveal requests originating in diffPanel.openFile (Cmd+K palette
+  // today; future: file-tree right-click "Reveal", etc.). Track lastHandledId
+  // so handler-driven mutations (sidebar.setTab, setSelected) don't re-fire
+  // the effect on the same payload.
+  let lastHandledRevealId = 0;
+  createEffect(() => {
+    const r = revealCtx.pending();
+    if (!r) return;
+    if (r.projectPath !== props.projectPath) return;
+    if (r.id <= lastHandledRevealId) return;
+    lastHandledRevealId = r.id;
+    // Sidebar tab-switch is handled in App.tsx so it can fire even when this
+    // component isn't mounted (sidebar on Sessions). Once the tab flips to
+    // Files, this component mounts and picks up the same pending reveal.
+    void runReveal(r.rel);
   });
 
   function openContextMenu(e: MouseEvent, path: string, isDir: boolean) {
@@ -552,6 +640,7 @@ export function FileTree(props: Props) {
                 node={r.node}
                 depth={r.depth}
                 selected={selected() === r.node.path}
+                highlighted={highlightedPath() === r.node.path}
                 status={statusMap().get(r.node.path)}
                 onToggle={(path) => void store().toggleDir(path)}
                 onSelect={(path) => setSelected(path)}
@@ -559,6 +648,7 @@ export function FileTree(props: Props) {
                 onContextMenu={openContextMenu}
                 onModClick={handleClickWithMods}
                 onDelete={(path, isDir) => void deleteEntry(path, isDir)}
+                registerRef={registerNodeRef}
               />
             );
           }}
