@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -13,6 +13,11 @@ import { useDiffPanel } from "@/context/diff-panel";
 import { makeFileLinkProvider } from "@/lib/xterm-file-links";
 import { hoverPtyId } from "@/lib/internal-drag";
 import { openUrlInSystemBrowser } from "@/lib/open-url";
+import {
+  registerTerminalScroller,
+  unregisterTerminalScroller,
+} from "@/lib/terminal-scroll-bus";
+import { ScrollToBottomButton } from "@/components/scroll-to-bottom-button";
 
 const THEME = {
   background: "#0b0b0c",
@@ -56,7 +61,16 @@ export function TerminalView(props: Props) {
   let detachData: (() => void) | undefined;
   let detachExit: (() => void) | undefined;
   let linkDisposable: { dispose: () => void } | undefined;
+  let scrollDisposable: { dispose: () => void } | undefined;
   let fitDebounce: number | undefined;
+
+  // Drives the floating scroll-to-bottom button + reflects whether the user
+  // is currently reading scrollback. Updated from xterm's onScroll event.
+  const [isScrolledUp, setIsScrolledUp] = createSignal(false);
+
+  function scrollToBottom() {
+    term?.scrollToBottom();
+  }
 
   const encoder = new TextEncoder();
 
@@ -205,6 +219,17 @@ export function TerminalView(props: Props) {
       return true;
     });
 
+    // Track scroll position so the floating "scroll to bottom" button hides
+     // itself once the user is back at the tail. xterm fires onScroll for both
+     // user scrolling (wheel, drag) and new-data-pushed-baseY-down, so this
+     // signal also catches the "you have new content below" case.
+    scrollDisposable = term.onScroll(() => {
+      if (!term) return;
+      const buf = term.buffer.active;
+      setIsScrolledUp(buf.viewportY < buf.baseY);
+    });
+    registerTerminalScroller(props.id, scrollToBottom);
+
     detachData = ctx.onData(props.id, (bytes) => {
       term?.write(bytes);
     });
@@ -301,6 +326,8 @@ export function TerminalView(props: Props) {
     detachData?.();
     detachExit?.();
     linkDisposable?.dispose();
+    scrollDisposable?.dispose();
+    unregisterTerminalScroller(props.id);
     term?.dispose();
     // NOTE: intentionally NOT calling ctx.closeTab here — unmounting the view
     // (e.g. changing project) is separate from killing the PTY. The shell owns
@@ -323,6 +350,10 @@ export function TerminalView(props: Props) {
       data-pty-id={props.id}
     >
       <div ref={container} class="flex-1 min-h-0 min-w-0 overflow-hidden p-2" />
+      <ScrollToBottomButton
+        visible={isScrolledUp()}
+        onClick={scrollToBottom}
+      />
       <Show when={isDragOver()}>
         <div class="absolute inset-1 border-2 border-dashed border-indigo-400/60 rounded pointer-events-none flex items-center justify-center">
           <div class="px-3 py-1.5 rounded bg-indigo-500/20 text-indigo-200 text-[12px] font-medium">

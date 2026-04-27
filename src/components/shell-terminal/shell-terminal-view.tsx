@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -10,6 +10,11 @@ import {
 } from "@tauri-apps/plugin-clipboard-manager";
 import { useShellPty } from "@/context/shell-pty";
 import { openUrlInSystemBrowser } from "@/lib/open-url";
+import {
+  registerTerminalScroller,
+  unregisterTerminalScroller,
+} from "@/lib/terminal-scroll-bus";
+import { ScrollToBottomButton } from "@/components/scroll-to-bottom-button";
 
 const THEME = {
   background: "#0b0b0c",
@@ -51,8 +56,15 @@ export function ShellTerminalView(props: Props) {
   let resizeObs: ResizeObserver | undefined;
   let detachData: (() => void) | undefined;
   let detachExit: (() => void) | undefined;
+  let scrollDisposable: { dispose: () => void } | undefined;
   let fitDebounce: number | undefined;
   let disposed = false;
+
+  const [isScrolledUp, setIsScrolledUp] = createSignal(false);
+
+  function scrollToBottom() {
+    term?.scrollToBottom();
+  }
 
   const encoder = new TextEncoder();
 
@@ -158,6 +170,13 @@ export function ShellTerminalView(props: Props) {
       return true;
     });
 
+    scrollDisposable = term.onScroll(() => {
+      if (!term || disposed) return;
+      const buf = term.buffer.active;
+      setIsScrolledUp(buf.viewportY < buf.baseY);
+    });
+    registerTerminalScroller(props.ptyId, scrollToBottom);
+
     detachData = ctx.onData(props.ptyId, (bytes) => {
       if (disposed) return;
       try {
@@ -221,6 +240,8 @@ export function ShellTerminalView(props: Props) {
     if (fitDebounce) window.clearTimeout(fitDebounce);
     detachData?.();
     detachExit?.();
+    scrollDisposable?.dispose();
+    unregisterTerminalScroller(props.ptyId);
     try {
       term?.dispose();
     } catch (err) {
@@ -240,6 +261,10 @@ export function ShellTerminalView(props: Props) {
         ref={container}
         onContextMenu={(e) => e.preventDefault()}
         class="flex-1 min-h-0 min-w-0 overflow-hidden p-2"
+      />
+      <ScrollToBottomButton
+        visible={isScrolledUp()}
+        onClick={scrollToBottom}
       />
       <Show when={tab()?.error}>
         <div class="border-t border-red-900/50 bg-red-950/40 px-3 py-1.5 text-[11px] text-red-300 font-mono">
