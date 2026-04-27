@@ -4,6 +4,68 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.3.0] — 2026-04-27
+
+### Added
+- **Cmd+K command palette.** Centered modal that fuzzy-searches the
+  active project's sessions and files in one sectioned list (Sessions
+  on top, Files below). Selecting a session activates an existing tab
+  or spawns `claude --resume <id>`; selecting a file opens it in the
+  diff-panel preview. A search pill in the titlebar center
+  (`Search <project> ⌘K`) opens the same palette by mouse. New Rust
+  command `list_files_recursive` walks the project gitignore-aware
+  (mirroring `list_dir`'s filters, hard-skips `.git/`), capped at
+  5000 entries with a `truncated` flag. Glob (`*`, `?`) and substring
+  queries are resolved client-side as a single regex. Closes
+  [#9](https://github.com/willywg/klaudio-panels/issues/9).
+- **Reveal in tree on file open.** When a file lands in the diff panel
+  (today via the Cmd+K palette, tomorrow from any future surface
+  calling `diffPanel.openFile`), the Files sidebar switches to the
+  Files tab, expands every ancestor directory of the file, scrolls
+  the row into view, and flashes a brief indigo highlight that fades
+  over ~1.2s. New `RevealProvider` exposes a single `pending()` signal
+  carrying `{ projectPath, rel, id }`; consumers track `lastHandledId`
+  to avoid self-trigger loops. The sidebar tab-switch lives in the
+  always-mounted Shell so it fires even when the FileTree component
+  isn't on the DOM (sidebar on Sessions). Behavior under collapsed
+  sidebar (Cmd+B): no-op — explicit user choice not auto-overridden.
+  Closes [#13](https://github.com/willywg/klaudio-panels/issues/13).
+- **Draggable diff-panel preview tabs.** File and editor tabs can now
+  be dragged onto a Claude or shell PTY to publish their `@rel`
+  reference, the same way file-tree rows already worked. Closes the
+  workflow loop opened by Cmd+K: ⌘K → file lands in preview → drag
+  tab into Claude → continue typing. The "Git changes" pseudo-tab is
+  intentionally not draggable. Refactor: extracted the ~110-line
+  pointer drag block from `tree-node.tsx` into a shared
+  `createInternalDrag(source)` hook in
+  `src/lib/use-internal-drag.ts`; tree-node now calls into the same
+  hook the new TabItem usage does. Closes
+  [#12](https://github.com/willywg/klaudio-panels/issues/12).
+- **Refresh button in the Git changes panel header.** A `RotateCw`
+  icon next to the Unified|Split toggle re-runs `git_status` +
+  `git_summary` for the active project. Mirrors the Files sidebar's
+  refresh affordance — needed because external commits
+  (`git commit` from another shell, `opencommit`, GUI clients) often
+  only touch `.git/` internals that our fs-watcher's `is_relevant`
+  filter drops on purpose to keep debouncer spam down, leaving the
+  panel frozen on the pre-commit state until something else
+  triggered a refetch. New `useGit().refresh(projectPath)` is a thin
+  public wrapper around the previously-private `fetchNow`, idempotent
+  via the existing `loading` flag. Closes
+  [#16](https://github.com/willywg/klaudio-panels/issues/16).
+- **Scroll-to-bottom button + ⌘↓ shortcut.** Each xterm-hosting view
+  (Claude PTY, shell PTY) now renders a small floating `ChevronDown`
+  button in its bottom-right corner whenever the viewport is scrolled
+  up from the tail. Click → scrollToBottom; auto-hides once the
+  viewport catches back up to baseY (xterm's own `onScroll` drives
+  the state). ⌘↓ globally hits the same action with the same
+  shell-dock disambiguation as ⌘T. Plumbing: a tiny module-level
+  registry in `src/lib/terminal-scroll-bus.ts` keyed by PTY id, no
+  Solid context. The button doubles as a "you have new content
+  below" indicator when new PTY data lands while the user is
+  scrolled up. Closes
+  [#17](https://github.com/willywg/klaudio-panels/issues/17).
+
 ## [1.2.0] — 2026-04-24
 
 ### Added
