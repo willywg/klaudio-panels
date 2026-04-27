@@ -2,12 +2,20 @@ import { Show } from "solid-js";
 import {
   PanelLeftClose,
   PanelLeftOpen,
+  Search,
   SquareTerminal,
 } from "lucide-solid";
 import { useSidebar } from "@/context/sidebar";
 import { useShellPanel } from "@/context/shell-panel";
+import { useCommandPalette } from "@/context/command-palette";
 import { GitSummaryPill } from "@/components/git-summary-pill";
 import { OpenInDropdown } from "@/components/open-in-dropdown";
+
+function basename(path: string): string {
+  const trimmed = path.endsWith("/") ? path.slice(0, -1) : path;
+  const i = trimmed.lastIndexOf("/");
+  return i >= 0 ? trimmed.slice(i + 1) : trimmed;
+}
 
 type Props = {
   hasActiveProject: boolean;
@@ -21,6 +29,7 @@ type Props = {
 export function Titlebar(props: Props) {
   const sidebar = useSidebar();
   const shellPanel = useShellPanel();
+  const palette = useCommandPalette();
 
   return (
     <header
@@ -48,8 +57,28 @@ export function Titlebar(props: Props) {
         </button>
       </Show>
 
-      {/* Remaining space stays draggable. */}
-      <div class="flex-1 h-full" data-tauri-drag-region />
+      {/* Remaining space stays draggable; the search pill in the middle
+          breaks drag at the button itself. */}
+      <div
+        class="flex-1 h-full flex items-center justify-center"
+        data-tauri-drag-region
+      >
+        <Show when={props.activeProjectPath}>
+          {(p) => (
+            <button
+              class="h-7 w-[280px] max-w-[40vw] px-2.5 rounded-md bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 transition flex items-center gap-2 text-[12px] text-neutral-500 hover:text-neutral-300"
+              onClick={() => palette.open()}
+              title="Search sessions and files (⌘K)"
+            >
+              <Search size={12} strokeWidth={2} class="shrink-0" />
+              <span class="truncate flex-1 text-left">
+                Search {basename(p())}
+              </span>
+              <span class="shrink-0 text-neutral-600 text-[11px]">⌘K</span>
+            </button>
+          )}
+        </Show>
+      </div>
 
       <Show when={props.activeProjectPath}>
         {(p) => (

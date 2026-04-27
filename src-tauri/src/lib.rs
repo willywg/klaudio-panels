@@ -122,6 +122,7 @@ pub fn run() {
             debug_log::debug_log,
             debug_log::get_log_path,
             fs::list_dir,
+            fs::list_files_recursive,
             fs::watch_project,
             fs::unwatch_project,
             fs::fs_create_file,

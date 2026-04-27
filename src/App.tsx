@@ -42,6 +42,11 @@ import { OpenInProvider } from "@/context/open-in";
 import { EditorPtyProvider, useEditorPty } from "@/context/editor-pty";
 import { ShellPtyProvider, useShellPty } from "@/context/shell-pty";
 import { ShellPanelProvider, useShellPanel } from "@/context/shell-panel";
+import {
+  CommandPaletteProvider,
+  useCommandPalette,
+} from "@/context/command-palette";
+import { CommandPalette } from "@/components/command-palette";
 import { installGlobalErrorForwarding } from "@/lib/debug-log";
 import { DiffPanel } from "@/components/diff-panel/diff-panel";
 import { SplitDivider } from "@/components/diff-panel/split-pane";
@@ -94,6 +99,7 @@ function Shell() {
   const editorPty = useEditorPty();
   const shellPty = useShellPty();
   const shellPanel = useShellPanel();
+  const commandPalette = useCommandPalette();
   let splitContainerRef!: HTMLDivElement;
   let sidebarRowRef!: HTMLDivElement;
 
@@ -239,6 +245,14 @@ function Shell() {
       if (mod && !e.shiftKey && !e.altKey && e.key === "b") {
         e.preventDefault();
         sidebar.toggleCollapsed();
+        return;
+      }
+      // Cmd+K opens the command palette (Sessions + Files quick search).
+      // Toggle so a second press from inside the palette also closes it,
+      // mirroring how Cmd+B and Cmd+J behave.
+      if (mod && !e.shiftKey && !e.altKey && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        commandPalette.toggle();
         return;
       }
       if (mod && e.shiftKey && !e.altKey && (e.key === "d" || e.key === "D")) {
@@ -680,6 +694,10 @@ function Shell() {
 
   return (
     <div class="h-screen w-screen flex flex-col bg-neutral-950 text-neutral-200 overflow-hidden">
+      <CommandPalette
+        projectPath={activeProjectPath()}
+        onSelectSession={handleSelectSession}
+      />
       <Titlebar
         hasActiveProject={activeProjectPath() !== null}
         activeProjectPath={activeProjectPath()}
@@ -924,7 +942,9 @@ export default function App() {
                   <ShellPtyProvider>
                     <TerminalProvider>
                       <SessionWatcherProvider>
-                        <Shell />
+                        <CommandPaletteProvider>
+                          <Shell />
+                        </CommandPaletteProvider>
                       </SessionWatcherProvider>
                     </TerminalProvider>
                   </ShellPtyProvider>
