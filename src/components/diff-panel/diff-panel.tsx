@@ -5,6 +5,7 @@ import {
   FileText,
   FolderOpen,
   GitBranch,
+  RotateCw,
   Terminal as TerminalIcon,
   X,
   XCircle,
@@ -123,6 +124,22 @@ export function DiffPanel(props: Props) {
                     Split
                   </button>
                 </div>
+                <button
+                  onClick={() => void git.refresh(props.projectPath)}
+                  disabled={!!git.store[props.projectPath]?.loading}
+                  class="w-6 h-6 rounded flex items-center justify-center text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/80 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Refresh"
+                >
+                  <RotateCw
+                    size={13}
+                    strokeWidth={2}
+                    class={
+                      git.store[props.projectPath]?.loading
+                        ? "animate-spin"
+                        : ""
+                    }
+                  />
+                </button>
                 <button
                   onClick={toggleAll}
                   class="w-6 h-6 rounded flex items-center justify-center text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/80 transition"
