@@ -171,18 +171,20 @@ function Shell() {
     }
   });
 
-  // Hook the notifications context up to the live store so it can decide
-  // whether the user is already aware that Claude is working in this
-  // project. We treat "any open Claude tab in the same project" as
-  // proof of awareness — the user explicitly opened that tab, they're
-  // tracking it, no need to interrupt with chime + OS notification.
-  // Original heuristic was "active project AND active tab AND session
-  // id match," but that was too narrow: switching between tabs of the
-  // same project would re-trigger notifications mid-conversation
-  // (observed when chatting in claude-desktop while testing in T).
-  // Sound still plays as a gentle audio cue regardless.
-  notifications.setActiveSessionResolver((projectPath, _sessionId) => {
-    return term.store.tabs.some((t) => t.projectPath === projectPath);
+  // Hook the notifications context up to the live store. Two callbacks
+  // so the context can apply different suppression to the visual marker
+  // and the OS notification:
+  // - `isActiveProject` → user is on this project right now. Suppresses
+  //   the amber ring on its avatar (you don't need to be told about
+  //   work happening in front of you).
+  // - `hasTabInProject` → at least one Claude tab exists. Suppresses
+  //   the OS notification banner (you've opened the project, you're
+  //   tracking it from somewhere — the avatar's amber ring is enough).
+  // Sound always plays as a gentle audio cue.
+  notifications.setProjectResolver({
+    isActiveProject: (projectPath) => projectPath === activeProjectPath(),
+    hasTabInProject: (projectPath) =>
+      term.store.tabs.some((t) => t.projectPath === projectPath),
   });
 
   // On active project change, pick the right tab to show (remembered > first

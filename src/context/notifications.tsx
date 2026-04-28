@@ -2,7 +2,6 @@ import {
   createContext,
   createEffect,
   createSignal,
-  on,
   onCleanup,
   onMount,
   useContext,
@@ -20,10 +19,26 @@ type SessionCompletePayload = {
   preview: string | null;
 };
 
-type IsActiveSessionFn = (
-  projectPath: string,
-  sessionId: string,
-) => boolean;
+/// Two callbacks the App provides so the notification context can decide
+/// what to suppress:
+///
+/// - `isActiveProject(path)`: true when `path` is the project the user is
+///   currently looking at in Klaudio. Combined with `focused()` it means
+///   "the user is literally here right now" — used to suppress the visual
+///   marker (markUnread) so we don't paint an amber ring on the project
+///   they're already staring at.
+///
+/// - `hasTabInProject(path)`: true when at least one Claude tab exists
+///   for that project. Used (combined with `focused()`) to suppress the
+///   OS notification: if you've explicitly opened a tab in this project
+///   you're tracking it, no need to be pestered with a banner. Sound
+///   still plays as a gentle audio cue, and the avatar still gets the
+///   amber ring so a quick glance at the sidebar tells you what
+///   happened.
+type ProjectResolver = {
+  isActiveProject: (projectPath: string) => boolean;
+  hasTabInProject: (projectPath: string) => boolean;
+};
 
 function projectName(projectPath: string): string {
   const trimmed = projectPath.replace(/\/+$/, "");
@@ -31,117 +46,30 @@ function projectName(projectPath: string): string {
   return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
 }
 
-// Pulse the avatar ring for ~3 cycles (~4.5s @ 1.5s per cycle) of
-// **focused** time. The timer only counts down while the window is in
-// the foreground — if the user is in another app when the completion
-// fires, the pulse stays animated until they alt-tab back, then runs
-// the full 4.5s while they're looking. Otherwise the pulse would expire
-// silently behind their back and they'd land on a steady ring with no
-// memory of it ever animating.
-const PULSE_DURATION_MS = 4500;
-
 function makeNotificationsContext() {
-  // Three-tier visual state:
-  // - `unread`: steady amber ring, cleared only on markRead.
-  // - `activelyPulsing`: animate-pulse class, cleared by the timer or
-  //   markRead. Survives blur (timer pauses); resumes when focus returns.
-  // - `pulseTimers`: live timeouts. Cleared on blur, re-scheduled on focus.
+  // `unread` carries the steady amber ring on each project's avatar.
+  // Cleared only when the user activates the project (markRead). No
+  // pulse animation, no time-bounded transition — feedback was that the
+  // 4.5s pulse-then-settle UX was easy to miss on background projects.
+  // A persistent amber ring is the simplest "still pending" affordance.
   const [unread, setUnread] = createSignal<ReadonlySet<string>>(new Set());
-  const [activelyPulsing, setActivelyPulsing] = createSignal<ReadonlySet<string>>(new Set());
-  const pulseTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   // Tracked synchronously so handleComplete can decide suppression
   // without an async round-trip. Defaults to true; if onMount races a
-  // completion we'd rather over-pulse briefly than silently swallow.
+  // completion we'd rather over-notify briefly than silently swallow.
   const [focused, setFocused] = createSignal<boolean>(true);
 
-  function clearPulseTimer(projectPath: string) {
-    const t = pulseTimers.get(projectPath);
-    if (t !== undefined) {
-      clearTimeout(t);
-      pulseTimers.delete(projectPath);
-    }
-  }
+  // Default no-op resolver until App.tsx wires the real one. Keeping
+  // both callbacks separate (vs. a single boolean resolver) lets
+  // handleComplete apply different suppression to the visual indicator
+  // and the OS notification — see ProjectResolver doc.
+  let resolver: ProjectResolver = {
+    isActiveProject: () => false,
+    hasTabInProject: () => false,
+  };
 
-  function schedulePulseTimer(projectPath: string) {
-    clearPulseTimer(projectPath);
-    const handle = setTimeout(() => {
-      pulseTimers.delete(projectPath);
-      setActivelyPulsing((prev) => {
-        if (!prev.has(projectPath)) return prev;
-        const next = new Set(prev);
-        next.delete(projectPath);
-        return next;
-      });
-    }, PULSE_DURATION_MS);
-    pulseTimers.set(projectPath, handle);
-  }
-
-  function startPulse(projectPath: string) {
-    setActivelyPulsing((prev) => {
-      if (prev.has(projectPath)) return prev;
-      const next = new Set(prev);
-      next.add(projectPath);
-      return next;
-    });
-    // Only count down while the user can see it. Blur cancels timers;
-    // the focus-watcher effect below re-schedules them on focus return.
-    if (focused()) schedulePulseTimer(projectPath);
-  }
-
-  function stopPulse(projectPath: string) {
-    clearPulseTimer(projectPath);
-    setActivelyPulsing((prev) => {
-      if (!prev.has(projectPath)) return prev;
-      const next = new Set(prev);
-      next.delete(projectPath);
-      return next;
-    });
-  }
-
-  // When focus changes, sync the timer state with the visual state:
-  // - blur: pause every running timer (keep projects in activelyPulsing).
-  // - focus: schedule a fresh timer for every project still pulsing.
-  // Re-scheduling gives the user the full PULSE_DURATION_MS of "looking
-  // at it" time on every focus return, which matches the UX intent
-  // ("the eye-catch should run while you're actually looking").
-  createEffect(
-    on(focused, (now, prev) => {
-      if (prev === undefined) return; // skip initial run
-      if (!now) {
-        for (const path of pulseTimers.keys()) {
-          clearTimeout(pulseTimers.get(path)!);
-        }
-        pulseTimers.clear();
-      } else {
-        for (const path of activelyPulsing()) {
-          schedulePulseTimer(path);
-        }
-      }
-    }),
-  );
-
-  // Push the count of unread projects into the macOS Dock badge so the
-  // user gets at-a-glance "you have N projects waiting" awareness even
-  // when Klaudio is buried behind other windows. Cleared (badge hidden)
-  // when the count drops to zero.
-  createEffect(() => {
-    const count = unread().size;
-    void invoke("set_dock_badge", { count }).catch(() => {
-      // Non-macOS or API unavailable — silent fallback, the in-app
-      // ring/pulse already cover the indicator on the same machine.
-    });
-  });
-
-  // Provided by App.tsx so we can ask "is this completion for the tab
-  // the user is staring at right now?". When it is, we suppress the
-  // system notification (sound still plays — the audio cue is friendly
-  // even when looking at the screen). When it isn't, we both notify
-  // and mark the project unread.
-  let isActiveSession: IsActiveSessionFn = () => false;
-
-  function setActiveSessionResolver(fn: IsActiveSessionFn) {
-    isActiveSession = fn;
+  function setProjectResolver(next: ProjectResolver) {
+    resolver = next;
   }
 
   function markUnread(projectPath: string) {
@@ -151,7 +79,6 @@ function makeNotificationsContext() {
       next.add(projectPath);
       return next;
     });
-    startPulse(projectPath);
   }
 
   function markRead(projectPath: string) {
@@ -161,16 +88,23 @@ function makeNotificationsContext() {
       next.delete(projectPath);
       return next;
     });
-    stopPulse(projectPath);
   }
 
   function isUnread(projectPath: string): boolean {
     return unread().has(projectPath);
   }
 
-  function isPulsing(projectPath: string): boolean {
-    return activelyPulsing().has(projectPath);
-  }
+  // Push the count of unread projects into the macOS Dock badge so the
+  // user gets at-a-glance "you have N projects waiting" awareness even
+  // when Klaudio is buried behind other windows. Cleared (badge hidden)
+  // when the count drops to zero.
+  createEffect(() => {
+    const count = unread().size;
+    void invoke("set_dock_badge", { count }).catch(() => {
+      // Non-macOS or API unavailable — silent fallback, the in-app
+      // amber ring already covers the indicator on the same machine.
+    });
+  });
 
   let unlistenComplete: UnlistenFn | null = null;
   let unlistenFocus: UnlistenFn | null = null;
@@ -187,9 +121,7 @@ function makeNotificationsContext() {
       setFocused(true);
     }
     // onFocusChanged is the documented v2 API. Raw `tauri://focus` /
-    // `tauri://blur` events are not guaranteed across platforms; if
-    // they don't fire, suppression breaks and we OS-notify for every
-    // completion — including ones the user is staring at.
+    // `tauri://blur` events are not guaranteed across platforms.
     unlistenFocus = await win.onFocusChanged(({ payload }) => {
       setFocused(payload);
     });
@@ -206,38 +138,39 @@ function makeNotificationsContext() {
   });
 
   function handleComplete(payload: SessionCompletePayload) {
-    const stareAtIt = focused() && isActiveSession(
-      payload.project_path,
-      payload.session_id,
-    );
+    // Three signals, three independent suppression rules. Sound always
+    // fires (gentle audio cue). Visual marker fires unless the user is
+    // literally on this project right now. OS notification fires unless
+    // the user has any tab open for it (broader awareness — they're
+    // tracking it from somewhere).
+    const here =
+      focused() && resolver.isActiveProject(payload.project_path);
+    const hasTab = resolver.hasTabInProject(payload.project_path);
 
-    // Sound always plays — gentle audio cue independent of focus state.
     playTaskComplete();
 
-    if (!stareAtIt) {
-      // Mark the project as unread so its avatar pulses regardless of
-      // whether the OS notification renders. Pure visual signal that
-      // can't be blocked by Focus mode or DND.
+    if (!here) {
       markUnread(payload.project_path);
+    }
 
+    if (!(focused() && hasTab)) {
       const title = `${projectName(payload.project_path)} · Claude is done`;
       const body =
         payload.preview && payload.preview.length > 0
           ? payload.preview
           : "Your turn — open Klaudio Panels.";
       void invoke("notify_native", { title, body }).catch(() => {
-        // osascript missing or sandbox-blocked — project pulse already
-        // covers the visual signal, no need to surface this to the user.
+        // osascript missing or sandbox-blocked — amber ring already
+        // covers the visual signal, no need to surface this.
       });
     }
   }
 
   return {
     isUnread,
-    isPulsing,
     markRead,
     markUnread,
-    setActiveSessionResolver,
+    setProjectResolver,
   };
 }
 

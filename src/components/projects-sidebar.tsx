@@ -159,12 +159,12 @@ export function ProjectsSidebar(props: Props) {
           const isDragging = () => draggingPath() === proj.path;
           const isDragOver = () =>
             dragOverPath() === proj.path && draggingPath() !== proj.path;
-          // Two-tier visual: `pulsing` adds an animated ring for the
-          // first few seconds after completion (eye-grabbing); `unread`
-          // keeps a steady ring until the user activates the project
-          // (passive "you have unread work" affordance).
+          // Steady amber ring whenever the project has an unseen Claude
+          // completion. Cleared when the user activates the project.
+          // No pulse animation — it was easy to miss on background
+          // projects and ended up adding visual noise once multiple
+          // projects went amber.
           const unread = () => notifications.isUnread(proj.path);
-          const pulsing = () => notifications.isPulsing(proj.path);
           return (
             <div class="relative group">
               <Show when={isDragOver()}>
@@ -187,10 +187,7 @@ export function ProjectsSidebar(props: Props) {
                   (isActive()
                     ? "ring-2 ring-indigo-500 ring-offset-2 ring-offset-neutral-950"
                     : unread()
-                      ? "ring-2 ring-offset-2 ring-offset-neutral-950 opacity-100 " +
-                        (pulsing()
-                          ? "ring-indigo-400 animate-pulse"
-                          : "ring-amber-400")
+                      ? "ring-2 ring-amber-400 ring-offset-2 ring-offset-neutral-950 opacity-100"
                       : "opacity-85 hover:opacity-100 hover:scale-[1.03]")
                 }
                 style={{
@@ -209,12 +206,7 @@ export function ProjectsSidebar(props: Props) {
               </Show>
               <Show when={unread() && !isActive()}>
                 <span
-                  class={
-                    "absolute -top-0.5 -left-0.5 w-2.5 h-2.5 rounded-full border-2 border-neutral-950 pointer-events-none " +
-                    (pulsing()
-                      ? "bg-indigo-400 animate-pulse"
-                      : "bg-amber-400")
-                  }
+                  class="absolute -top-0.5 -left-0.5 w-2.5 h-2.5 rounded-full bg-amber-400 border-2 border-neutral-950 pointer-events-none"
                   aria-label="Claude finished a task in this project"
                 />
               </Show>
