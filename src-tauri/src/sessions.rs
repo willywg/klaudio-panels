@@ -150,6 +150,63 @@ pub(crate) fn scan_session_file(file: &Path) -> SessionScan {
     scan
 }
 
+/// Result of scanning the tail of a JSONL for the most recent assistant
+/// message that ended the turn. `None` means either no such message exists
+/// yet or the file is unreadable. Used by `session_watcher` to fire
+/// `session:complete` notifications.
+#[derive(Clone, Debug)]
+pub(crate) struct AssistantComplete {
+    pub uuid: String,
+    pub stop_reason: String,
+    pub preview: Option<String>,
+}
+
+/// Walks the JSONL **from the end** looking for the most recent
+/// `type: "assistant"` entry. Skips trailing `system`, `last-prompt`,
+/// `permission-mode`, etc. — those are appended after the assistant
+/// message and would mask the completion if we only looked at the very
+/// last line. Returns the assistant entry's uuid + stop_reason + first
+/// text block (truncated for notification display).
+///
+/// Only treats `end_turn`, `max_tokens`, `stop_sequence`, and `refusal`
+/// as terminal — `tool_use` means the assistant wants to keep going
+/// once the tool result comes back.
+pub(crate) fn last_assistant_complete(file: &Path) -> Option<AssistantComplete> {
+    const TERMINAL: &[&str] = &["end_turn", "max_tokens", "stop_sequence", "refusal"];
+
+    let f = fs::File::open(file).ok()?;
+    let lines: Vec<String> = BufReader::new(f).lines().map_while(Result::ok).collect();
+
+    for line in lines.iter().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+            continue;
+        }
+        let stop_reason = v
+            .pointer("/message/stop_reason")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        if !TERMINAL.contains(&stop_reason) {
+            // Most recent assistant entry is mid-tool-use; treat session
+            // as still working and bail without firing.
+            return None;
+        }
+        let uuid = v.get("uuid").and_then(|u| u.as_str())?.to_string();
+        let preview = v
+            .pointer("/message/content")
+            .and_then(extract_text_from_content)
+            .map(|s| truncate(&s));
+        return Some(AssistantComplete {
+            uuid,
+            stop_reason: stop_reason.to_string(),
+            preview,
+        });
+    }
+    None
+}
+
 #[tauri::command]
 pub fn list_sessions_for_project(project_path: String) -> Result<Vec<SessionMeta>, String> {
     let projects_dir = claude_projects_dir().ok_or("cannot resolve ~/.claude/projects")?;

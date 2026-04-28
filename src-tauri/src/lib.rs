@@ -4,6 +4,7 @@ pub mod debug_log;
 pub mod file_read;
 pub mod fs;
 pub mod git;
+pub mod notify;
 pub mod open_in;
 pub mod pty;
 pub mod session_watcher;
@@ -137,6 +138,8 @@ pub fn run() {
             file_read::read_file_bytes,
             shell_install::install_cli,
             shell_install::uninstall_cli,
+            notify::notify_native,
+            notify::set_dock_badge,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

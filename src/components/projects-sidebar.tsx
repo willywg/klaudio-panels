@@ -7,6 +7,7 @@ import {
   projectLabel,
 } from "@/lib/recent-projects";
 import { useProjects } from "@/context/projects";
+import { useNotifications } from "@/context/notifications";
 
 type Props = {
   activePath: string | null;
@@ -22,6 +23,7 @@ const DRAG_THRESHOLD_PX = 4; // pointer movement that promotes early to drag
 
 export function ProjectsSidebar(props: Props) {
   const projects = useProjects();
+  const notifications = useNotifications();
   const [draggingPath, setDraggingPath] = createSignal<string | null>(null);
   const [dragOverPath, setDragOverPath] = createSignal<string | null>(null);
 
@@ -157,6 +159,12 @@ export function ProjectsSidebar(props: Props) {
           const isDragging = () => draggingPath() === proj.path;
           const isDragOver = () =>
             dragOverPath() === proj.path && draggingPath() !== proj.path;
+          // Two-tier visual: `pulsing` adds an animated ring for the
+          // first few seconds after completion (eye-grabbing); `unread`
+          // keeps a steady ring until the user activates the project
+          // (passive "you have unread work" affordance).
+          const unread = () => notifications.isUnread(proj.path);
+          const pulsing = () => notifications.isPulsing(proj.path);
           return (
             <div class="relative group">
               <Show when={isDragOver()}>
@@ -178,7 +186,12 @@ export function ProjectsSidebar(props: Props) {
                   "w-10 h-10 rounded-lg flex items-center justify-center text-[15px] font-semibold text-white transition shadow-sm select-none " +
                   (isActive()
                     ? "ring-2 ring-indigo-500 ring-offset-2 ring-offset-neutral-950"
-                    : "opacity-85 hover:opacity-100 hover:scale-[1.03]")
+                    : unread()
+                      ? "ring-2 ring-offset-2 ring-offset-neutral-950 opacity-100 " +
+                        (pulsing()
+                          ? "ring-indigo-400 animate-pulse"
+                          : "ring-amber-400")
+                      : "opacity-85 hover:opacity-100 hover:scale-[1.03]")
                 }
                 style={{
                   "background-color": color(),
@@ -193,6 +206,17 @@ export function ProjectsSidebar(props: Props) {
                 <span class="absolute -bottom-0.5 -right-0.5 min-w-[16px] h-[16px] rounded-full bg-green-500 text-[10px] font-bold text-neutral-950 flex items-center justify-center px-1 border-2 border-neutral-950 pointer-events-none">
                   {openCount()}
                 </span>
+              </Show>
+              <Show when={unread() && !isActive()}>
+                <span
+                  class={
+                    "absolute -top-0.5 -left-0.5 w-2.5 h-2.5 rounded-full border-2 border-neutral-950 pointer-events-none " +
+                    (pulsing()
+                      ? "bg-indigo-400 animate-pulse"
+                      : "bg-amber-400")
+                  }
+                  aria-label="Claude finished a task in this project"
+                />
               </Show>
               <button
                 class="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-neutral-800 text-neutral-300 hover:bg-red-600 hover:text-white border border-neutral-950 flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
