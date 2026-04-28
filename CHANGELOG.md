@@ -4,6 +4,44 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.4.0] — 2026-04-28
+
+### Added
+- **Task-complete notifications.** When a Claude session finishes a
+  turn (`stop_reason ∈ {end_turn, max_tokens, stop_sequence, refusal}`),
+  Klaudio fires three layered signals:
+  - A soft chime (`pulse-a.wav` from anomalyco/opencode, MIT) through
+    the renderer.
+  - A native macOS notification (currently routed via
+    `osascript display notification` — see [#25](https://github.com/willywg/klaudio-panels/issues/25)
+    for the path back to a native UNUserNotificationCenter banner once
+    upstream `mac-notification-sys` migrates off the deprecated
+    NSUserNotificationCenter API).
+  - A pulsing indigo ring on the project's avatar that settles to a
+    steady **amber** ring after ~4.5s of *focused* time, plus a
+    matching dot indicator. The pulse timer pauses while the window
+    is unfocused so completions that land while you're alt-tabbed
+    aren't silently missed.
+  - A red badge with the count of unread projects over the Klaudio
+    Panels icon in the Dock — visible from anywhere even with the app
+    fully buried.
+  Suppressed when the completing project already has any open Claude
+  tab in your sidebar AND the window is focused (you're already
+  tracking it). Sound always plays as a gentle audio cue. Detection
+  is read-only against the existing global JSONL watcher; no new
+  permissions, no settings file. Closes
+  [#22](https://github.com/willywg/klaudio-panels/issues/22).
+
+### Fixed
+- **Closing the active Claude tab no longer leaves a black screen
+  when sibling tabs from another project precede it in the global
+  list.** `closeTab` now picks the next active tab from siblings
+  sharing the closing tab's `projectPath` (prefer left, fall back to
+  right), matching the shell-dock behavior that was already correct.
+  Defense-in-depth in `App.tsx` extends the central column's empty
+  state to fire when the active tab id points at a foreign-project
+  tab. Closes [#20](https://github.com/willywg/klaudio-panels/issues/20).
+
 ## [1.3.0] — 2026-04-27
 
 ### Added
