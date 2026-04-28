@@ -1,6 +1,8 @@
 import {
   createContext,
+  createEffect,
   createSignal,
+  on,
   onCleanup,
   onMount,
   useContext,
@@ -29,21 +31,29 @@ function projectName(projectPath: string): string {
   return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
 }
 
-// Pulse the avatar ring for ~3 cycles (~4.5s @ 1.5s per cycle) when a
-// completion lands, then settle into a steady ring until the user
-// activates the project. The animation grabs the eye; the steady ring
-// keeps the "you have unread work here" affordance without becoming
-// visual noise across multiple unread projects.
+// Pulse the avatar ring for ~3 cycles (~4.5s @ 1.5s per cycle) of
+// **focused** time. The timer only counts down while the window is in
+// the foreground — if the user is in another app when the completion
+// fires, the pulse stays animated until they alt-tab back, then runs
+// the full 4.5s while they're looking. Otherwise the pulse would expire
+// silently behind their back and they'd land on a steady ring with no
+// memory of it ever animating.
 const PULSE_DURATION_MS = 4500;
 
 function makeNotificationsContext() {
-  // Two-tier state: `unread` carries the steady ring (cleared only on
-  // markRead); `activelyPulsing` carries the animate-pulse class for
-  // ~PULSE_DURATION_MS after the completion fires. Both are cleared
-  // when markRead runs.
+  // Three-tier visual state:
+  // - `unread`: steady amber ring, cleared only on markRead.
+  // - `activelyPulsing`: animate-pulse class, cleared by the timer or
+  //   markRead. Survives blur (timer pauses); resumes when focus returns.
+  // - `pulseTimers`: live timeouts. Cleared on blur, re-scheduled on focus.
   const [unread, setUnread] = createSignal<ReadonlySet<string>>(new Set());
   const [activelyPulsing, setActivelyPulsing] = createSignal<ReadonlySet<string>>(new Set());
   const pulseTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  // Tracked synchronously so handleComplete can decide suppression
+  // without an async round-trip. Defaults to true; if onMount races a
+  // completion we'd rather over-pulse briefly than silently swallow.
+  const [focused, setFocused] = createSignal<boolean>(true);
 
   function clearPulseTimer(projectPath: string) {
     const t = pulseTimers.get(projectPath);
@@ -53,14 +63,8 @@ function makeNotificationsContext() {
     }
   }
 
-  function startPulse(projectPath: string) {
+  function schedulePulseTimer(projectPath: string) {
     clearPulseTimer(projectPath);
-    setActivelyPulsing((prev) => {
-      if (prev.has(projectPath)) return prev;
-      const next = new Set(prev);
-      next.add(projectPath);
-      return next;
-    });
     const handle = setTimeout(() => {
       pulseTimers.delete(projectPath);
       setActivelyPulsing((prev) => {
@@ -73,6 +77,18 @@ function makeNotificationsContext() {
     pulseTimers.set(projectPath, handle);
   }
 
+  function startPulse(projectPath: string) {
+    setActivelyPulsing((prev) => {
+      if (prev.has(projectPath)) return prev;
+      const next = new Set(prev);
+      next.add(projectPath);
+      return next;
+    });
+    // Only count down while the user can see it. Blur cancels timers;
+    // the focus-watcher effect below re-schedules them on focus return.
+    if (focused()) schedulePulseTimer(projectPath);
+  }
+
   function stopPulse(projectPath: string) {
     clearPulseTimer(projectPath);
     setActivelyPulsing((prev) => {
@@ -83,10 +99,39 @@ function makeNotificationsContext() {
     });
   }
 
-  // Track the focus state ourselves — Tauri's `getCurrentWindow().isFocused()`
-  // is async, and we need a synchronous read inside the event handler to
-  // decide whether to suppress the OS notification.
-  const [focused, setFocused] = createSignal<boolean>(true);
+  // When focus changes, sync the timer state with the visual state:
+  // - blur: pause every running timer (keep projects in activelyPulsing).
+  // - focus: schedule a fresh timer for every project still pulsing.
+  // Re-scheduling gives the user the full PULSE_DURATION_MS of "looking
+  // at it" time on every focus return, which matches the UX intent
+  // ("the eye-catch should run while you're actually looking").
+  createEffect(
+    on(focused, (now, prev) => {
+      if (prev === undefined) return; // skip initial run
+      if (!now) {
+        for (const path of pulseTimers.keys()) {
+          clearTimeout(pulseTimers.get(path)!);
+        }
+        pulseTimers.clear();
+      } else {
+        for (const path of activelyPulsing()) {
+          schedulePulseTimer(path);
+        }
+      }
+    }),
+  );
+
+  // Push the count of unread projects into the macOS Dock badge so the
+  // user gets at-a-glance "you have N projects waiting" awareness even
+  // when Klaudio is buried behind other windows. Cleared (badge hidden)
+  // when the count drops to zero.
+  createEffect(() => {
+    const count = unread().size;
+    void invoke("set_dock_badge", { count }).catch(() => {
+      // Non-macOS or API unavailable — silent fallback, the in-app
+      // ring/pulse already cover the indicator on the same machine.
+    });
+  });
 
   // Provided by App.tsx so we can ask "is this completion for the tab
   // the user is staring at right now?". When it is, we suppress the
@@ -139,8 +184,6 @@ function makeNotificationsContext() {
     try {
       setFocused(await win.isFocused());
     } catch {
-      // Default to focused; on error we'll over-notify slightly rather
-      // than silently swallow.
       setFocused(true);
     }
     // onFocusChanged is the documented v2 API. Raw `tauri://focus` /

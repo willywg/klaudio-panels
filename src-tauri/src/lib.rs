@@ -139,6 +139,7 @@ pub fn run() {
             shell_install::install_cli,
             shell_install::uninstall_cli,
             notify::notify_native,
+            notify::set_dock_badge,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -187,8 +187,10 @@ export function ProjectsSidebar(props: Props) {
                   (isActive()
                     ? "ring-2 ring-indigo-500 ring-offset-2 ring-offset-neutral-950"
                     : unread()
-                      ? "ring-2 ring-indigo-400 ring-offset-2 ring-offset-neutral-950 opacity-100 " +
-                        (pulsing() ? "animate-pulse" : "")
+                      ? "ring-2 ring-offset-2 ring-offset-neutral-950 opacity-100 " +
+                        (pulsing()
+                          ? "ring-indigo-400 animate-pulse"
+                          : "ring-amber-400")
                       : "opacity-85 hover:opacity-100 hover:scale-[1.03]")
                 }
                 style={{
@@ -208,8 +210,10 @@ export function ProjectsSidebar(props: Props) {
               <Show when={unread() && !isActive()}>
                 <span
                   class={
-                    "absolute -top-0.5 -left-0.5 w-2.5 h-2.5 rounded-full bg-indigo-400 border-2 border-neutral-950 pointer-events-none " +
-                    (pulsing() ? "animate-pulse" : "")
+                    "absolute -top-0.5 -left-0.5 w-2.5 h-2.5 rounded-full border-2 border-neutral-950 pointer-events-none " +
+                    (pulsing()
+                      ? "bg-indigo-400 animate-pulse"
+                      : "bg-amber-400")
                   }
                   aria-label="Claude finished a task in this project"
                 />

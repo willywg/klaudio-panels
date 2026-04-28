@@ -1,5 +1,7 @@
 use std::process::Command;
 
+use tauri::{AppHandle, Manager};
+
 /// Fire a native macOS notification from the renderer.
 ///
 /// We can't use `tauri-plugin-notification` because its underlying
@@ -28,6 +30,25 @@ pub fn notify_native(title: String, body: String) -> Result<(), String> {
         .map_err(|e| format!("osascript failed: {e}"))
 }
 
+/// Set (or clear) the macOS Dock badge count over the app icon.
+///
+/// Passing `0` clears the badge so the icon goes back to the bare app
+/// glyph; any positive value renders the standard red bubble with the
+/// number inside. We use this to show "you have N projects with Claude
+/// turns waiting" awareness even when the Klaudio window is buried.
+///
+/// On non-macOS platforms `set_badge_count` is a no-op or unsupported;
+/// we swallow the error so the renderer's fire-and-forget invoke
+/// doesn't surface a misleading failure.
+#[tauri::command]
+pub fn set_dock_badge(app: AppHandle, count: u32) -> Result<(), String> {
+    let value = if count == 0 { None } else { Some(count as i64) };
+    let win = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not available".to_string())?;
+    win.set_badge_count(value).map_err(|e| e.to_string())
+}
+
 /// AppleScript string literal escaping. The argument arrives via `-e`
 /// as a single argv entry, so shell quoting is not a concern — only the
 /// string-literal syntax inside the script. Escape order matters:
@@ -37,6 +58,5 @@ pub fn notify_native(title: String, body: String) -> Result<(), String> {
 fn escape_applescript(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")
-        .replace('\n', " ")
-        .replace('\r', " ")
+        .replace(['\n', '\r'], " ")
 }
