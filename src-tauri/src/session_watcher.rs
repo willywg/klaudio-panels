@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
@@ -8,7 +8,7 @@ use notify_debouncer_full::{new_debouncer, DebounceEventResult};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::sessions::{read_cwd, scan_session_file, SessionMeta};
+use crate::sessions::{last_assistant_complete, read_cwd, scan_session_file, SessionMeta};
 
 const DEBOUNCE_MS: u64 = 200;
 
@@ -20,7 +20,22 @@ pub struct SessionNewPayload {
     pub preview: Option<String>,
 }
 
+#[derive(Serialize, Clone)]
+pub struct SessionCompletePayload {
+    pub project_path: String,
+    pub session_id: String,
+    pub stop_reason: String,
+    pub preview: Option<String>,
+}
+
 static SEEN: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+/// Last-seen completed assistant uuid per session. Used to dedupe
+/// `session:complete` events — the JSONL gets multiple write ticks per
+/// turn (streaming), so without this we'd fire the notification many
+/// times for the same end_turn message.
+static LAST_COMPLETED: LazyLock<Mutex<HashMap<String, String>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn claude_projects_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".claude/projects"))
@@ -85,22 +100,58 @@ fn emit_for_jsonl(app: &AppHandle, path: &Path) {
     }
 
     let meta = SessionMeta {
-        id: session_id,
+        id: session_id.clone(),
         timestamp: scan.first_timestamp,
         first_message_preview: scan.first_preview,
         custom_title: scan.custom_title,
         summary: scan.summary,
-        project_path: cwd,
+        project_path: cwd.clone(),
     };
     let _ = app.emit("session:meta", meta);
+
+    // Fire session:complete the first time we see a new terminal-stopped
+    // assistant uuid for this session. Dedup by (session_id, uuid) so
+    // multiple debouncer ticks against the same end_turn don't repeat
+    // the chime + notification.
+    if let Some(complete) = last_assistant_complete(path) {
+        let should_emit = {
+            let mut last = match LAST_COMPLETED.lock() {
+                Ok(g) => g,
+                Err(_) => return,
+            };
+            match last.get(&session_id) {
+                Some(prev) if *prev == complete.uuid => false,
+                _ => {
+                    last.insert(session_id.clone(), complete.uuid.clone());
+                    true
+                }
+            }
+        };
+        if should_emit {
+            let payload = SessionCompletePayload {
+                project_path: cwd,
+                session_id,
+                stop_reason: complete.stop_reason,
+                preview: complete.preview,
+            };
+            let _ = app.emit("session:complete", payload);
+        }
+    }
 }
 
-/// Scan existing JSONLs at boot so the `seen` set is populated — otherwise
-/// every file already on disk would fire a session:new on the first
-/// modification, flooding the FE with spurious promotions.
+/// Scan existing JSONLs at boot so the `seen` and `last_completed` sets
+/// are populated — otherwise every file already on disk would fire a
+/// `session:new` on the first modification (spurious promotions) and
+/// every already-finished session would fire a `session:complete`
+/// notification (chime + native notif on launch for sessions that
+/// completed yesterday).
 fn seed_seen(root: &Path) {
     let Ok(dirs) = std::fs::read_dir(root) else { return };
     let mut seen = match SEEN.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    let mut last_completed = match LAST_COMPLETED.lock() {
         Ok(g) => g,
         Err(_) => return,
     };
@@ -112,8 +163,14 @@ fn seed_seen(root: &Path) {
         let Ok(files) = std::fs::read_dir(&p) else { continue };
         for f in files.flatten() {
             let fp = f.path();
-            if is_jsonl(&fp) {
-                seen.insert(fp);
+            if !is_jsonl(&fp) {
+                continue;
+            }
+            seen.insert(fp.clone());
+            if let Some(sid) = session_id_of(&fp) {
+                if let Some(complete) = last_assistant_complete(&fp) {
+                    last_completed.insert(sid, complete.uuid);
+                }
             }
         }
     }

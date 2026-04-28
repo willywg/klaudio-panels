@@ -48,6 +48,10 @@ import {
 } from "@/context/command-palette";
 import { CommandPalette } from "@/components/command-palette";
 import { RevealProvider, useReveal } from "@/context/reveal";
+import {
+  NotificationsProvider,
+  useNotifications,
+} from "@/context/notifications";
 import { installGlobalErrorForwarding } from "@/lib/debug-log";
 import { DiffPanel } from "@/components/diff-panel/diff-panel";
 import { SplitDivider } from "@/components/diff-panel/split-pane";
@@ -103,6 +107,7 @@ function Shell() {
   const shellPanel = useShellPanel();
   const commandPalette = useCommandPalette();
   const reveal = useReveal();
+  const notifications = useNotifications();
   let splitContainerRef!: HTMLDivElement;
   let sidebarRowRef!: HTMLDivElement;
 
@@ -152,15 +157,30 @@ function Shell() {
     setActiveProjectPathSignal(next);
   }
 
-  // Persist + touch on active project change.
+  // Persist + touch on active project change. Also clear the unread
+  // pulse — landing on a project is the user's "I'm here now" signal,
+  // even if the active tab inside it isn't the one Claude finished in.
   createEffect(() => {
     const p = activeProjectPath();
     if (p) {
       localStorage.setItem("projectPath", p);
       projects.touch(p);
+      notifications.markRead(p);
     } else {
       localStorage.removeItem("projectPath");
     }
+  });
+
+  // Hook the notifications context up to the live store so it can decide
+  // whether the user is staring at the tab that just completed (in which
+  // case the OS notification is suppressed — sound still plays). Only
+  // returns true when the project AND tab AND session id all match.
+  notifications.setActiveSessionResolver((projectPath, sessionId) => {
+    if (projectPath !== activeProjectPath()) return false;
+    const id = term.store.activeTabId;
+    if (!id) return false;
+    const tab = term.store.tabs.find((t) => t.id === id);
+    return !!tab && tab.projectPath === projectPath && tab.sessionId === sessionId;
   });
 
   // On active project change, pick the right tab to show (remembered > first
@@ -987,9 +1007,11 @@ export default function App() {
                     <ShellPtyProvider>
                       <TerminalProvider>
                         <SessionWatcherProvider>
-                          <CommandPaletteProvider>
-                            <Shell />
-                          </CommandPaletteProvider>
+                          <NotificationsProvider>
+                            <CommandPaletteProvider>
+                              <Shell />
+                            </CommandPaletteProvider>
+                          </NotificationsProvider>
                         </SessionWatcherProvider>
                       </TerminalProvider>
                     </ShellPtyProvider>
