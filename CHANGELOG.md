@@ -4,6 +4,33 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.4.1] — 2026-04-28
+
+### Fixed
+- **Avatar amber ring now paints for background-project completions.**
+  In v1.4.0 the chime fired correctly when a Claude turn ended in any
+  pinned project, but the avatar ring stayed grey for projects the
+  user wasn't currently active on — exactly the case where the visual
+  cue matters most. The same-project suppression introduced together
+  with the OS-notification gating was being applied to the visual
+  marker too, so any pinned project with an open Claude tab swallowed
+  its own ring update. Split apart now: the **amber ring** suppresses
+  only when the user is literally on the completing project (focused
+  + active project); the **OS notification** keeps the broader "any
+  tab in this project" suppression so opened-but-not-active projects
+  don't push a banner; **sound** is unconditional. Closes
+  [#26](https://github.com/willywg/klaudio-panels/issues/26).
+
+### Changed
+- **Dropped the 4.5s pulse-then-amber animation.** Permanent amber
+  from the moment a completion lands. Feedback was that the animated
+  phase was easy to miss on background projects (the focus-pause
+  bought one extra cycle on alt-tab-back, but on a busy day with
+  multiple projects the animation often expired before the user
+  glanced over). Steady amber is the simpler "still pending" mental
+  model and removes a chunk of timer + focus-watcher plumbing from
+  `notifications.tsx` (~70 lines net).
+
 ## [1.4.0] — 2026-04-28
 
 ### Added
