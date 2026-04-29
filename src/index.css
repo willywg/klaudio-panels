@@ -74,3 +74,14 @@ body {
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
+
+@keyframes klaudio-toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}

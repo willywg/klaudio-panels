@@ -40,8 +40,18 @@ type CliAgentEvent = {
   plugin_version: string | null;
 };
 
+export type ToastKind = "complete" | "permission" | "idle";
+
+export type Toast = {
+  id: number;
+  kind: ToastKind;
+  projectPath: string;
+  title: string;
+  body: string;
+};
+
 /// Three callbacks the App provides so the notification context can
-/// decide what to suppress and where to attach the alert:
+/// decide what to suppress and where to route an alert:
 ///
 /// - `isActiveProject(path)`: true when `path` is the project the user
 ///   is currently looking at in Klaudio. Combined with `focused()` it
@@ -49,23 +59,23 @@ type CliAgentEvent = {
 ///   the visual marker (markUnread) so we don't paint an amber ring
 ///   on the project they're already staring at.
 ///
-/// - `hasTabInProject(path)`: true when at least one Claude tab exists
-///   for that project. Used (combined with `focused()`) to suppress
-///   the OS notification: if you've explicitly opened a tab in this
-///   project you're tracking it, no need to be pestered with a banner.
-///
 /// - `resolveOpenProject(cwd)`: maps an arbitrary cwd reported by the
 ///   plugin to one of the open project paths in our store. Claude can
 ///   be invoked from a subdir of the project root, so the match is
-///   prefix-based. Returns null if no open project contains the cwd —
-///   the OSC event is then silently dropped (likely from a Claude
-///   instance not spawned by Klaudio, which shouldn't happen in
-///   practice but defends us against future flows).
+///   prefix-based.
+///
+/// - `activateProject(path)`: switches the active project, used by the
+///   toast click handler. The host's project-switch effect already
+///   runs `markRead(path)` so the amber ring clears as a side effect.
 type ProjectResolver = {
   isActiveProject: (projectPath: string) => boolean;
-  hasTabInProject: (projectPath: string) => boolean;
   resolveOpenProject: (cwd: string | null) => string | null;
+  activateProject: (projectPath: string) => void;
 };
+
+const MAX_VISIBLE_TOASTS = 5;
+const AUTODISMISS_NEUTRAL_MS = 5000;
+const AUTODISMISS_PERMISSION_MS = 10000;
 
 function projectName(projectPath: string): string {
   const trimmed = projectPath.replace(/\/+$/, "");
@@ -73,12 +83,13 @@ function projectName(projectPath: string): string {
   return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
 }
 
+function autoDismissMs(kind: ToastKind): number {
+  return kind === "permission" ? AUTODISMISS_PERMISSION_MS : AUTODISMISS_NEUTRAL_MS;
+}
+
 function makeNotificationsContext() {
   // `unread` carries the steady amber ring on each project's avatar.
-  // Cleared only when the user activates the project (markRead). No
-  // pulse animation, no time-bounded transition — feedback was that the
-  // 4.5s pulse-then-settle UX was easy to miss on background projects.
-  // A persistent amber ring is the simplest "still pending" affordance.
+  // Cleared only when the user activates the project (markRead).
   const [unread, setUnread] = createSignal<ReadonlySet<string>>(new Set());
 
   // Tracked synchronously so handleComplete can decide suppression
@@ -86,11 +97,15 @@ function makeNotificationsContext() {
   // completion we'd rather over-notify briefly than silently swallow.
   const [focused, setFocused] = createSignal<boolean>(true);
 
+  const [toasts, setToasts] = createSignal<readonly Toast[]>([]);
+  const dismissTimers = new Map<number, ReturnType<typeof setTimeout>>();
+  let nextToastId = 1;
+
   // Default no-op resolver until App.tsx wires the real one.
   let resolver: ProjectResolver = {
     isActiveProject: () => false,
-    hasTabInProject: () => false,
     resolveOpenProject: () => null,
+    activateProject: () => {},
   };
 
   function setProjectResolver(next: ProjectResolver) {
@@ -117,6 +132,44 @@ function makeNotificationsContext() {
 
   function isUnread(projectPath: string): boolean {
     return unread().has(projectPath);
+  }
+
+  function dismissToast(id: number) {
+    const t = dismissTimers.get(id);
+    if (t) {
+      clearTimeout(t);
+      dismissTimers.delete(id);
+    }
+    setToasts((prev) => prev.filter((x) => x.id !== id));
+  }
+
+  function enqueueToast(t: Omit<Toast, "id">) {
+    const id = nextToastId++;
+    const toast: Toast = { ...t, id };
+    setToasts((prev) => {
+      // Newest first, cap at MAX_VISIBLE — drop the oldest (last) if
+      // we'd exceed the cap. Do it inside the setter so we can also
+      // tear down the dropped toast's auto-dismiss timer.
+      const next = [toast, ...prev];
+      while (next.length > MAX_VISIBLE_TOASTS) {
+        const dropped = next.pop();
+        if (dropped) {
+          const handle = dismissTimers.get(dropped.id);
+          if (handle) {
+            clearTimeout(handle);
+            dismissTimers.delete(dropped.id);
+          }
+        }
+      }
+      return next;
+    });
+    const timer = setTimeout(() => dismissToast(id), autoDismissMs(t.kind));
+    dismissTimers.set(id, timer);
+  }
+
+  function activateAndDismiss(toast: Toast) {
+    resolver.activateProject(toast.projectPath);
+    dismissToast(toast.id);
   }
 
   // Push the count of unread projects into the macOS Dock badge so the
@@ -155,20 +208,30 @@ function makeNotificationsContext() {
     unlistenComplete?.();
     unlistenAgent?.();
     unlistenFocus?.();
+    for (const t of dismissTimers.values()) clearTimeout(t);
+    dismissTimers.clear();
   });
 
   /// Common alert path: paint the amber ring (unless user is here),
-  /// fire the OS notification (unless user has any tab for the project
-  /// AND the window is focused). Sound is the caller's responsibility
-  /// since each event type uses a different chime.
-  function alertProject(projectPath: string, title: string, body: string) {
+  /// then route the alert based on focus state — in-app toast when
+  /// the window is focused, OS native banner when it isn't. Sound is
+  /// the caller's responsibility since each event uses a different
+  /// chime.
+  function alertProject(
+    projectPath: string,
+    title: string,
+    body: string,
+    kind: ToastKind,
+  ) {
     const here = focused() && resolver.isActiveProject(projectPath);
-    const hasTab = resolver.hasTabInProject(projectPath);
 
     if (!here) {
       markUnread(projectPath);
     }
-    if (!(focused() && hasTab)) {
+
+    if (focused()) {
+      enqueueToast({ kind, projectPath, title, body });
+    } else {
       void invoke("notify_native", { title, body }).catch(() => {});
     }
   }
@@ -180,13 +243,10 @@ function makeNotificationsContext() {
       payload.preview && payload.preview.length > 0
         ? payload.preview
         : "Your turn — open Klaudio Panels.";
-    alertProject(payload.project_path, title, body);
+    alertProject(payload.project_path, title, body, "complete");
   }
 
   function handleAgentEvent(payload: CliAgentEvent) {
-    // Only events warp's plugin emits that JSONL doesn't already cover.
-    // `stop` is dropped server-side (cli_agent.rs); ignore everything
-    // else we don't have a handler for.
     if (
       payload.event !== "permission_request" &&
       payload.event !== "idle_prompt"
@@ -202,7 +262,7 @@ function makeNotificationsContext() {
       const preview = payload.tool_input_preview;
       const body = preview && preview.length > 0 ? `${tool}: ${preview}` : tool;
       const title = `${projectName(projectPath)} · Claude needs permission`;
-      alertProject(projectPath, title, body);
+      alertProject(projectPath, title, body, "permission");
       return;
     }
 
@@ -213,7 +273,7 @@ function makeNotificationsContext() {
       payload.query && payload.query.length > 0
         ? payload.query
         : "Open Klaudio Panels.";
-    alertProject(projectPath, title, body);
+    alertProject(projectPath, title, body, "idle");
   }
 
   return {
@@ -221,6 +281,9 @@ function makeNotificationsContext() {
     markRead,
     markUnread,
     setProjectResolver,
+    toasts,
+    dismissToast,
+    activateAndDismiss,
   };
 }
 

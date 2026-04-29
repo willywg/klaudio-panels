@@ -24,6 +24,7 @@ import { TerminalView } from "@/components/terminal-view";
 import { TabStrip } from "@/components/tab-strip";
 import { SidebarPanel } from "@/components/sidebar-panel";
 import { Titlebar } from "@/components/titlebar";
+import { NotificationToastStack } from "@/components/notification-toast";
 import { FileTree } from "@/components/file-tree/file-tree";
 import {
   getLastSessionId,
@@ -171,25 +172,15 @@ function Shell() {
     }
   });
 
-  // Hook the notifications context up to the live store. Two callbacks
-  // so the context can apply different suppression to the visual marker
-  // and the OS notification:
-  // - `isActiveProject` → user is on this project right now. Suppresses
-  //   the amber ring on its avatar (you don't need to be told about
-  //   work happening in front of you).
-  // - `hasTabInProject` → at least one Claude tab exists. Suppresses
-  //   the OS notification banner (you've opened the project, you're
-  //   tracking it from somewhere — the avatar's amber ring is enough).
-  // Sound always plays as a gentle audio cue.
+  // Hook the notifications context up to the live store. The resolver
+  // bridges three concerns the context can't see on its own: which
+  // project the user is currently looking at (suppresses the amber
+  // ring when alerts come from where they already are), how to map a
+  // cwd reported by the warp plugin to one of our open projects (the
+  // plugin's cwd can be a subdir of the root), and how to switch
+  // projects when a toast is clicked.
   notifications.setProjectResolver({
     isActiveProject: (projectPath) => projectPath === activeProjectPath(),
-    hasTabInProject: (projectPath) =>
-      term.store.tabs.some((t) => t.projectPath === projectPath),
-    // OSC 777 events from Claude carry the cwd of the running process,
-    // which can be a subdir of the project root (Claude can `cd`
-    // internally, the user might launch from a subdir, etc.). Match by
-    // longest open project path that is a prefix of cwd, so a request
-    // from `<root>/packages/foo` still gets routed to `<root>`.
     resolveOpenProject: (cwd) => {
       if (!cwd) return null;
       const norm = cwd.replace(/\/+$/, "");
@@ -202,6 +193,7 @@ function Shell() {
       }
       return best;
     },
+    activateProject: (projectPath) => setActiveProjectPath(projectPath),
   });
 
   // On active project change, pick the right tab to show (remembered > first
@@ -780,6 +772,7 @@ function Shell() {
         hasActiveProject={activeProjectPath() !== null}
         activeProjectPath={activeProjectPath()}
       />
+      <NotificationToastStack />
       <main class="flex-1 flex min-h-0 overflow-hidden">
       <ProjectsSidebar
         activePath={activeProjectPath()}
