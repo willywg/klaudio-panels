@@ -4,6 +4,20 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.5.1] — 2026-04-29
+
+### Fixed
+- **Spurious "Claude is waiting for you" toasts.** The warp plugin
+  emits `idle_prompt` every 60s while Claude's prompt sits empty,
+  including while the user is *reading* Claude's transcript output.
+  In v1.5.0 this fired toast notifications during normal session
+  reading (a 12-minute task wraps up, you start scrolling through
+  the diff, 60s later a toast appears claiming Claude is waiting on
+  you). Dropped server-side in `cli_agent.rs` alongside the existing
+  `stop` filter — `permission_request` remains as the only OSC event
+  surfaced to the frontend, and that one is the actually-blocked
+  case the warp `Notification` hook is most useful for.
+
 ## [1.5.0] — 2026-04-29
 
 ### Added
