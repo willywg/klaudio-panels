@@ -10,6 +10,7 @@ import { useShellPanel } from "@/context/shell-panel";
 import { useCommandPalette } from "@/context/command-palette";
 import { GitSummaryPill } from "@/components/git-summary-pill";
 import { OpenInDropdown } from "@/components/open-in-dropdown";
+import { NotificationBell } from "@/components/notification-bell";
 
 function basename(path: string): string {
   const trimmed = path.endsWith("/") ? path.slice(0, -1) : path;
@@ -80,28 +81,33 @@ export function Titlebar(props: Props) {
         </Show>
       </div>
 
-      <Show when={props.activeProjectPath}>
-        {(p) => (
-          <div class="shrink-0 pr-2 flex items-center gap-2">
-            <GitSummaryPill projectPath={p()} />
-            <button
-              class="w-8 h-7 rounded flex items-center justify-center text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/80 transition"
-              onClick={() => shellPanel.toggleFor(p())}
-              title={
-                shellPanel.openedFor(p())
-                  ? "Hide terminal (⌘J)"
-                  : "Show terminal (⌘J)"
-              }
-              classList={{
-                "text-neutral-100 bg-neutral-800/60": shellPanel.openedFor(p()),
-              }}
-            >
-              <SquareTerminal size={15} strokeWidth={1.75} />
-            </button>
-            <OpenInDropdown path={p()} />
-          </div>
-        )}
-      </Show>
+      <div class="shrink-0 pr-2 flex items-center gap-2">
+        <Show when={props.activeProjectPath}>
+          {(p) => (
+            <>
+              <GitSummaryPill projectPath={p()} />
+              <button
+                class="w-8 h-7 rounded flex items-center justify-center text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/80 transition"
+                onClick={() => shellPanel.toggleFor(p())}
+                title={
+                  shellPanel.openedFor(p())
+                    ? "Hide terminal (⌘J)"
+                    : "Show terminal (⌘J)"
+                }
+                classList={{
+                  "text-neutral-100 bg-neutral-800/60": shellPanel.openedFor(
+                    p(),
+                  ),
+                }}
+              >
+                <SquareTerminal size={15} strokeWidth={1.75} />
+              </button>
+              <OpenInDropdown path={p()} />
+            </>
+          )}
+        </Show>
+        <NotificationBell />
+      </div>
     </header>
   );
 }
