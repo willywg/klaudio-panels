@@ -147,7 +147,11 @@ fn spawn_pty(
     let app_data = app.clone();
     let id_data = id.clone();
     tokio::spawn(async move {
+        let mut sniffer = crate::cli_agent::Osc777Sniffer::new();
         while let Some(chunk) = rx.recv().await {
+            for event in sniffer.feed(&chunk) {
+                let _ = app_data.emit("claude:event", &event);
+            }
             let b64 = STANDARD.encode(&chunk);
             let _ = app_data.emit(&format!("pty:data:{id_data}"), b64);
         }

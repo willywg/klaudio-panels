@@ -185,6 +185,23 @@ function Shell() {
     isActiveProject: (projectPath) => projectPath === activeProjectPath(),
     hasTabInProject: (projectPath) =>
       term.store.tabs.some((t) => t.projectPath === projectPath),
+    // OSC 777 events from Claude carry the cwd of the running process,
+    // which can be a subdir of the project root (Claude can `cd`
+    // internally, the user might launch from a subdir, etc.). Match by
+    // longest open project path that is a prefix of cwd, so a request
+    // from `<root>/packages/foo` still gets routed to `<root>`.
+    resolveOpenProject: (cwd) => {
+      if (!cwd) return null;
+      const norm = cwd.replace(/\/+$/, "");
+      let best: string | null = null;
+      for (const t of term.store.tabs) {
+        const p = t.projectPath.replace(/\/+$/, "");
+        if (norm === p || norm.startsWith(p + "/")) {
+          if (!best || p.length > best.length) best = p;
+        }
+      }
+      return best;
+    },
   });
 
   // On active project change, pick the right tab to show (remembered > first

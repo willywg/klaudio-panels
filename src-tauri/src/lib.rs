@@ -1,4 +1,5 @@
 pub mod binary;
+pub mod cli_agent;
 pub mod cli_args;
 pub mod debug_log;
 pub mod file_read;

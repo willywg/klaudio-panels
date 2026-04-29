@@ -30,6 +30,8 @@ Settled after the Sprint 00 pivot. Don't re-propose rejected alternatives withou
 
 2. **Don't parse the PTY output.** Ever. Only render bytes into xterm.js. If a feature seems to need "what did Claude just do?", solve it by watching the **filesystem + git**, not the PTY.
 
+   **Exception — OSC 777 CLI-agent sidechannel (Sprint 04+):** the byte stream may contain `\x1b]777;notify;warp://cli-agent;<json>\x07` frames emitted by the [`warp@claude-code-warp`](https://github.com/warpdotdev/claude-code-warp) Claude Code plugin. This is a stable, public wire contract (warp's open-source CLI-agent protocol — `app/src/terminal/cli_agent_sessions/event/v1.rs`), not semantic terminal output. The sniffer in `src-tauri/src/cli_agent.rs` may inspect those frames and emit a `claude:event` Tauri event. It is **observe-only**: bytes still flow to xterm.js unchanged (xterm.js silently drops unknown OSC numbers). Anything else in the stream — model output, ANSI styling, slash-command echo — remains off-limits.
+
 3. **Shell env hydration is mandatory.** macOS GUI apps inherit a stripped PATH. Spawning `claude` without merging the login shell's env breaks `node`/`nvm`/`git`/`rg` inside Claude's Bash tool. Copy `probe_shell_env` + `load_shell_env` + `merge_shell_env` from OpenCode's `packages/desktop/src-tauri/src/cli.rs` (lines ~220-365). Always set `TERM=xterm-256color`.
 
 4. **`current_dir` on every spawn** must be the project path. Claude uses cwd to choose the encoded directory under `~/.claude/projects/`; getting this wrong means the new session never shows up in our sidebar.
