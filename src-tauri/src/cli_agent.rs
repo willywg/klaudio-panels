@@ -153,7 +153,7 @@ impl Osc777Sniffer {
 
     /// Consume `self.body` (already collected between OSC start and
     /// terminator) and return the parsed event if it carries our
-    /// sentinel and is not a `stop` (JSONL is canonical for `stop`).
+    /// sentinel and survives the server-side drop list.
     fn finalize(&mut self) -> Option<CliAgentEvent> {
         let body = std::mem::take(&mut self.body);
         let raw = std::str::from_utf8(&body).ok()?;
@@ -163,9 +163,14 @@ impl Osc777Sniffer {
         }
         let parsed: RawEvent = serde_json::from_str(json_body).ok()?;
 
-        // JSONL watcher is the canonical source for turn-completion;
-        // dropping `stop` here keeps the frontend from having to dedup.
-        if parsed.event == "stop" {
+        // Dropped server-side so the frontend never has to filter:
+        // - `stop`: JSONL watcher is the canonical source.
+        // - `idle_prompt`: Claude fires it every 60s when the prompt
+        //   sits empty, including while the user is *reading* the
+        //   transcript. In practice this is noise, not signal — the
+        //   actual blocked-on-user case is already covered by
+        //   `permission_request`.
+        if matches!(parsed.event.as_str(), "stop" | "idle_prompt") {
             return None;
         }
 
@@ -232,13 +237,13 @@ mod tests {
     }
 
     #[test]
-    fn parses_idle_prompt_st_terminator() {
-        let json = r#"{"v":1,"agent":"claude","event":"idle_prompt","query":"are you there?"}"#;
+    fn parses_permission_request_st_terminator() {
+        let json = r#"{"v":1,"agent":"claude","event":"permission_request","tool_name":"Bash"}"#;
         let mut s = Osc777Sniffer::new();
         let events = s.feed(&frame_st(json));
         assert_eq!(events.len(), 1);
-        assert_eq!(events[0].event, "idle_prompt");
-        assert_eq!(events[0].query.as_deref(), Some("are you there?"));
+        assert_eq!(events[0].event, "permission_request");
+        assert_eq!(events[0].tool_name.as_deref(), Some("Bash"));
     }
 
     #[test]
@@ -276,6 +281,17 @@ mod tests {
     }
 
     #[test]
+    fn drops_idle_prompt_event() {
+        // Claude fires this every 60s while the prompt is empty —
+        // including while the user is reading transcript output.
+        // Drop server-side to keep the frontend quiet.
+        let json = r#"{"v":1,"agent":"claude","event":"idle_prompt","query":"still there?"}"#;
+        let mut s = Osc777Sniffer::new();
+        let events = s.feed(&frame_bel(json));
+        assert_eq!(events.len(), 0);
+    }
+
+    #[test]
     fn ignores_wrong_sentinel() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"\x1b]777;notify;klaudio-panels;");
@@ -303,7 +319,7 @@ mod tests {
         let mut s = Osc777Sniffer::new();
         assert!(s.feed(&bytes).is_empty());
         // sniffer recovers and parses a subsequent valid frame
-        let json = r#"{"v":1,"agent":"claude","event":"idle_prompt"}"#;
+        let json = r#"{"v":1,"agent":"claude","event":"permission_request"}"#;
         let events = s.feed(&frame_bel(json));
         assert_eq!(events.len(), 1);
     }
@@ -320,7 +336,7 @@ mod tests {
         let events = s.feed(&bytes);
         assert!(events.is_empty());
         // sniffer is back to Normal and can parse a fresh frame
-        let json = r#"{"v":1,"agent":"claude","event":"idle_prompt"}"#;
+        let json = r#"{"v":1,"agent":"claude","event":"permission_request"}"#;
         let after = s.feed(&frame_bel(json));
         assert_eq!(after.len(), 1);
     }
@@ -341,7 +357,7 @@ mod tests {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"\x1b]777;X");
         bytes.extend_from_slice(&frame_bel(
-            r#"{"v":1,"agent":"claude","event":"idle_prompt"}"#,
+            r#"{"v":1,"agent":"claude","event":"permission_request"}"#,
         ));
         let mut s = Osc777Sniffer::new();
         let events = s.feed(&bytes);
@@ -362,7 +378,7 @@ mod tests {
         // schema bump changes the shape, serde will fail and the event
         // is dropped. Document by demonstrating: a v2 with same fields
         // still parses today.
-        let json = r#"{"v":2,"agent":"claude","event":"idle_prompt"}"#;
+        let json = r#"{"v":2,"agent":"claude","event":"permission_request"}"#;
         let mut s = Osc777Sniffer::new();
         let events = s.feed(&frame_bel(json));
         assert_eq!(events.len(), 1);

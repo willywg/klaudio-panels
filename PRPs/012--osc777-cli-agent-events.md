@@ -123,8 +123,16 @@ const SENTINEL: &str = "warp://cli-agent";
 `feed(&mut self, chunk: &[u8]) -> Vec<CliAgentEvent>` — does not
 consume `chunk`; the caller still forwards it to xterm.js.
 
-Rust-side filter: drop `event == "stop"` before returning, so the
-frontend never has to know JSONL is the canonical source.
+Rust-side filter drops two event types before returning, so the
+frontend never has to know about them:
+
+- `stop` — JSONL watcher is the canonical source for turn-completion.
+- `idle_prompt` — Claude fires this every 60s while the prompt sits
+  empty, *including while the user is reading transcript output*.
+  In practice this is noise; the actually-blocked case is already
+  covered by `permission_request`. Dropped post-v1.5.0 after live
+  feedback that the toast was firing while the user was reading
+  Claude's diff output.
 
 `tool_input_preview` extraction mirrors warp's logic
 ([`v1.rs:29-34`](https://github.com/warpdotdev/warp/blob/main/app/src/terminal/cli_agent_sessions/event/v1.rs#L29-L34)):
