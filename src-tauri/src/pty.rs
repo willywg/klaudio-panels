@@ -147,7 +147,11 @@ fn spawn_pty(
     let app_data = app.clone();
     let id_data = id.clone();
     tokio::spawn(async move {
+        let mut sniffer = crate::cli_agent::Osc777Sniffer::new();
         while let Some(chunk) = rx.recv().await {
+            for event in sniffer.feed(&chunk) {
+                let _ = app_data.emit("claude:event", &event);
+            }
             let b64 = STANDARD.encode(&chunk);
             let _ = app_data.emit(&format!("pty:data:{id_data}"), b64);
         }
@@ -196,12 +200,22 @@ pub async fn pty_open(
     let bin = crate::binary::find_claude_binary()?;
     let shell = crate::shell_env::get_user_shell();
     let shell_env = crate::shell_env::load_shell_env(&shell);
+    // Advertise warp's CLI-agent protocol so the warp@claude-code-warp
+    // plugin emits structured OSC 777 events instead of falling back to
+    // its "install Warp" legacy message. The plugin's gate is in
+    // `should-use-structured.sh`: it requires both env vars to be set,
+    // and rejects WARP_CLIENT_VERSION strings matching their broken
+    // *stable*/*preview*/*dev* releases. Our value avoids those
+    // substrings entirely, so the gate is bypassed and we get events.
+    let client_version = format!("klaudio-panels-{}", env!("CARGO_PKG_VERSION"));
     let env = crate::shell_env::merge_shell_env(
         shell_env,
         vec![
             ("TERM".into(), "xterm-256color".into()),
             ("COLORTERM".into(), "truecolor".into()),
             ("CLAUDE_DESKTOP".into(), "1".into()),
+            ("WARP_CLI_AGENT_PROTOCOL_VERSION".into(), "1".into()),
+            ("WARP_CLIENT_VERSION".into(), client_version),
         ],
     );
     let bin_str = bin
