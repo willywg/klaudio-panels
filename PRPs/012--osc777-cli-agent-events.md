@@ -130,6 +130,30 @@ frontend never has to know JSONL is the canonical source.
 ([`v1.rs:29-34`](https://github.com/warpdotdev/warp/blob/main/app/src/terminal/cli_agent_sessions/event/v1.rs#L29-L34)):
 `tool_input.command || tool_input.file_path` → string.
 
+### Plugin handshake — env vars on Claude spawn
+
+The warp plugin gates structured OSC emission on `should-use-structured.sh`:
+both `WARP_CLI_AGENT_PROTOCOL_VERSION` (advertises the highest protocol
+version we understand) AND `WARP_CLIENT_VERSION` must be set, and the
+client-version string must not match any of the broken warp releases
+(channels `*stable*` / `*preview*` / `*dev*` with versions ≤ a hard-coded
+threshold). Without both, the plugin fires its **legacy fallback** which
+emits a `SessionStart` system message ("Warp plugin installed but you're
+not running in Warp terminal — install warp.dev …") and never produces
+OSC 777 frames.
+
+We set both env vars in `pty_open` only (not `pty_open_editor` or
+`pty_open_shell` — the plugin only runs as a Claude hook):
+
+```rust
+("WARP_CLI_AGENT_PROTOCOL_VERSION".into(), "1".into()),
+("WARP_CLIENT_VERSION".into(), format!("klaudio-panels-{}", env!("CARGO_PKG_VERSION"))),
+```
+
+Our `WARP_CLIENT_VERSION` value (e.g. `klaudio-panels-1.4.1`) doesn't
+contain `dev`/`stable`/`preview` substrings, so the channel-specific
+threshold is never matched and the gate passes unconditionally.
+
 ### Backend — `src-tauri/src/pty.rs`
 
 In the existing forwarder task (`tokio::spawn(async move { while let Some(chunk) = rx.recv() ... })`):
