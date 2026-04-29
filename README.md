@@ -98,19 +98,13 @@ under `~/.claude/projects/` and notifies you whenever a session ends
 its turn. This works for every Claude session you run inside Klaudio,
 no extra setup needed.
 
-### Richer events (optional warp plugin)
+### Permission requests (optional warp plugin)
 
-The transcript watcher is blind to two events that never get written
-to disk:
-
-- **`permission_request`** — Claude wants to run a tool (Bash, Edit,
-  etc.) that requires your approval.
-- **`idle_prompt`** — Claude has been waiting on you and is nudging
-  for input.
-
-To catch these, install the [warp Claude Code
-plugin](https://github.com/warpdotdev/claude-code-warp). It emits
-[OSC 777 sidechannel events](https://github.com/warpdotdev/warp/blob/main/app/src/terminal/cli_agent_sessions/event/v1.rs)
+The transcript watcher cannot see when Claude wants to run a tool
+(`Bash`, `Edit`, etc.) that requires your approval — that signal
+never gets written to disk. To catch those, install the [warp Claude
+Code plugin](https://github.com/warpdotdev/claude-code-warp). It
+emits [OSC 777 sidechannel events](https://github.com/warpdotdev/warp/blob/main/app/src/terminal/cli_agent_sessions/event/v1.rs)
 that Klaudio Panels parses out of the PTY stream. The same plugin
 also works in [warp.app](https://www.warp.dev/) and any other terminal
 that speaks the `warp://cli-agent` protocol — install once, get
@@ -123,9 +117,14 @@ claude plugin install warp@claude-code-warp
 ```
 
 Restart your Claude session afterwards so the plugin loads. From then
-on, Klaudio Panels will surface a more attention-grabbing chime + a
-banner for permission requests and idle prompts on top of the
-built-in turn-completion notifications.
+on, permission requests get a more attention-grabbing chime + a
+banner on top of the built-in turn-completion notifications.
+
+> The plugin also emits an `idle_prompt` event every 60s while the
+> Claude prompt sits empty (which fires while you're *reading*
+> output too). Klaudio drops it server-side because it's noise, not
+> signal — `permission_request` already covers the actually-blocked
+> case.
 
 > Why this approach? Klaudio's [non-negotiable
 > rule #2](./CLAUDE.md) is to never parse Claude's terminal

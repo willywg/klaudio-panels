@@ -40,7 +40,7 @@ type CliAgentEvent = {
   plugin_version: string | null;
 };
 
-export type ToastKind = "complete" | "permission" | "idle";
+export type ToastKind = "complete" | "permission";
 
 export type Toast = {
   id: number;
@@ -247,33 +247,18 @@ function makeNotificationsContext() {
   }
 
   function handleAgentEvent(payload: CliAgentEvent) {
-    if (
-      payload.event !== "permission_request" &&
-      payload.event !== "idle_prompt"
-    ) {
-      return;
-    }
+    // Only `permission_request` reaches the frontend — `stop` and
+    // `idle_prompt` are dropped server-side in cli_agent.rs.
+    if (payload.event !== "permission_request") return;
     const projectPath = resolver.resolveOpenProject(payload.cwd);
     if (!projectPath) return;
 
-    if (payload.event === "permission_request") {
-      playPermissionRequest();
-      const tool = payload.tool_name ?? "a tool";
-      const preview = payload.tool_input_preview;
-      const body = preview && preview.length > 0 ? `${tool}: ${preview}` : tool;
-      const title = `${projectName(projectPath)} · Claude needs permission`;
-      alertProject(projectPath, title, body, "permission");
-      return;
-    }
-
-    // idle_prompt
-    playTaskComplete();
-    const title = `${projectName(projectPath)} · Claude is waiting for you`;
-    const body =
-      payload.query && payload.query.length > 0
-        ? payload.query
-        : "Open Klaudio Panels.";
-    alertProject(projectPath, title, body, "idle");
+    playPermissionRequest();
+    const tool = payload.tool_name ?? "a tool";
+    const preview = payload.tool_input_preview;
+    const body = preview && preview.length > 0 ? `${tool}: ${preview}` : tool;
+    const title = `${projectName(projectPath)} · Claude needs permission`;
+    alertProject(projectPath, title, body, "permission");
   }
 
   return {
