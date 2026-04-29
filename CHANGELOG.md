@@ -4,6 +4,59 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.5.0] — 2026-04-29
+
+### Added
+- **`permission_request` and `idle_prompt` notifications via OSC 777.**
+  Klaudio Panels now picks up the two Claude events the JSONL
+  transcript watcher can't see — when Claude wants to run a tool that
+  needs your approval, and when Claude has been waiting on you for a
+  while — by adopting [warp's open-source CLI-agent
+  protocol](https://github.com/warpdotdev/warp/blob/main/app/src/terminal/cli_agent_sessions/event/v1.rs)
+  verbatim. Install warp's official plugin once and it works in both
+  warp.app and Klaudio:
+
+  ```bash
+  claude plugin marketplace add warpdotdev/claude-code-warp
+  claude plugin install warp@claude-code-warp
+  ```
+
+  An observe-only sniffer in `src-tauri/src/cli_agent.rs` peels OSC
+  777 frames out of the PTY byte stream without mutating it (xterm.js
+  silently drops unknown OSC numbers). A documented exception under
+  CLAUDE.md non-negotiable #2 covers the carve-out — a stable, public,
+  versioned wire contract isn't the same as the "don't parse the
+  terminal" prohibition that rule was put in place to prevent.
+  Permission requests get their own more-attention-grabbing chime
+  (`pulse-c.wav` from anomalyco/opencode, MIT) and a longer banner
+  hold; idle prompts reuse the existing soft chime. Closes
+  [#23](https://github.com/willywg/klaudio-panels/issues/23).
+
+- **In-app toast stack when the Klaudio window is focused.** The
+  same notifications that previously routed to a macOS Notification
+  Center banner regardless of focus now surface as a stack of cards
+  anchored top-right under the titlebar:
+  - `stop` and `idle_prompt` → neutral toast, 5s auto-dismiss.
+  - `permission_request` → amber-accent toast, 10s (longer because
+    Claude is actually blocked).
+  - Click toast body → activates the originating project (the existing
+    project-switch effect already clears the amber ring as a side
+    effect). The X button dismisses without activating.
+  - Stack capped at 5 visible; older toasts displaced when a 6th
+    arrives.
+
+  When the window is **blurred** the existing osascript native banner
+  fires unchanged. Closes
+  [#29](https://github.com/willywg/klaudio-panels/issues/29).
+
+### Changed
+- **Notification suppression simplified to a strict two-state policy.**
+  Window focused → toast. Window blurred → OS banner. The v1.4.1
+  `hasTabInProject` rule (which suppressed the banner when a tab was
+  open even with the window blurred) is dropped; the chime + amber
+  ring + Dock badge already cover the "I'm coming back, don't yell at
+  me" case the suppression existed for.
+
 ## [1.4.1] — 2026-04-28
 
 ### Fixed
