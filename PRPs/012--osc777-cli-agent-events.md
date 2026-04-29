@@ -238,6 +238,21 @@ Manual smoke (post-build):
   `VERSIONED_PARSERS[version - 1]` and logs an error on unsupported
   versions. We mirror that — drop unknown versions, log once.
 
+## Known limitations
+
+- **Closed-tabs resolver gap**: `resolveOpenProject` walks
+  `term.store.tabs`, not `recentProjects`. If a user closes every
+  Claude tab for a project but still has it pinned in the sidebar,
+  an OSC event for that project is silently dropped. Intentional for
+  v1 — "no open tab" is a reasonable proxy for "not actively
+  tracking" — but flag here so future-you doesn't treat it as a bug.
+- **No `v`-field dispatch**: the slim Rust parser deserializes any
+  version that happens to share v1's field names (the
+  `version_2_still_parses` test demonstrates). If warp ships v2 with
+  a renamed/required field, those events drop silently. Acceptable
+  while `v=1` is the only published version; track a follow-up issue
+  if/when v2 lands.
+
 ## Out of scope (track separately)
 
 - Action-button notifications (#25-dependent).
