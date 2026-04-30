@@ -50,6 +50,18 @@ export type Toast = {
   body: string;
 };
 
+/// Backing items for the notification bell — every alert is recorded
+/// here regardless of focus state, so the bell becomes the catch-all
+/// for "things you missed." Cleared per-project on activation.
+export type UnreadItem = {
+  id: number;
+  kind: ToastKind;
+  projectPath: string;
+  title: string;
+  body: string;
+  createdAt: number;
+};
+
 /// Three callbacks the App provides so the notification context can
 /// decide what to suppress and where to route an alert:
 ///
@@ -74,6 +86,7 @@ type ProjectResolver = {
 };
 
 const MAX_VISIBLE_TOASTS = 5;
+const MAX_UNREAD_ITEMS = 50;
 const AUTODISMISS_NEUTRAL_MS = 5000;
 const AUTODISMISS_PERMISSION_MS = 10000;
 
@@ -100,6 +113,12 @@ function makeNotificationsContext() {
   const [toasts, setToasts] = createSignal<readonly Toast[]>([]);
   const dismissTimers = new Map<number, ReturnType<typeof setTimeout>>();
   let nextToastId = 1;
+
+  // Bell-backed list of items the user hasn't acknowledged yet.
+  // Capped at MAX_UNREAD_ITEMS in memory; not persisted to localStorage
+  // (a Klaudio restart starts the bell empty by design).
+  const [unreadItems, setUnreadItems] = createSignal<readonly UnreadItem[]>([]);
+  let nextItemId = 1;
 
   // Default no-op resolver until App.tsx wires the real one.
   let resolver: ProjectResolver = {
@@ -128,6 +147,33 @@ function makeNotificationsContext() {
       next.delete(projectPath);
       return next;
     });
+    clearProjectItems(projectPath);
+  }
+
+  function enqueueUnreadItem(seed: Omit<UnreadItem, "id" | "createdAt">) {
+    const item: UnreadItem = {
+      ...seed,
+      id: nextItemId++,
+      createdAt: Date.now(),
+    };
+    setUnreadItems((prev) => {
+      const next = [item, ...prev];
+      return next.length > MAX_UNREAD_ITEMS
+        ? next.slice(0, MAX_UNREAD_ITEMS)
+        : next;
+    });
+  }
+
+  function clearProjectItems(projectPath: string) {
+    setUnreadItems((prev) =>
+      prev.some((x) => x.projectPath === projectPath)
+        ? prev.filter((x) => x.projectPath !== projectPath)
+        : prev,
+    );
+  }
+
+  function clearAllItems() {
+    setUnreadItems([]);
   }
 
   function isUnread(projectPath: string): boolean {
@@ -168,8 +214,39 @@ function makeNotificationsContext() {
   }
 
   function activateAndDismiss(toast: Toast) {
+    // Activating routes through the App's project-switch effect, which
+    // calls markRead → clearProjectItems. We still clear here defensively
+    // in case the resolver is ever wired to a no-op (early-mount).
     resolver.activateProject(toast.projectPath);
+    clearProjectItems(toast.projectPath);
     dismissToast(toast.id);
+  }
+
+  function activateProjectFromBell(projectPath: string) {
+    resolver.activateProject(projectPath);
+    clearProjectItems(projectPath);
+  }
+
+  /// Toast lifecycle helpers used by the toast component to pause the
+  /// auto-dismiss while the cursor is over the card. On mouse-leave we
+  /// schedule a fresh full-duration timer rather than tracking remaining
+  /// time — matches Slack/Discord behavior and keeps the implementation
+  /// simple ("pause means the user wants to read; restart cleanly when
+  /// they're done").
+  function pauseToastDismiss(id: number) {
+    const t = dismissTimers.get(id);
+    if (t) {
+      clearTimeout(t);
+      dismissTimers.delete(id);
+    }
+  }
+
+  function resumeToastDismiss(id: number) {
+    if (dismissTimers.has(id)) return;
+    const toast = toasts().find((x) => x.id === id);
+    if (!toast) return;
+    const handle = setTimeout(() => dismissToast(id), autoDismissMs(toast.kind));
+    dismissTimers.set(id, handle);
   }
 
   // Push the count of unread projects into the macOS Dock badge so the
@@ -213,10 +290,11 @@ function makeNotificationsContext() {
   });
 
   /// Common alert path: paint the amber ring (unless user is here),
-  /// then route the alert based on focus state — in-app toast when
-  /// the window is focused, OS native banner when it isn't. Sound is
-  /// the caller's responsibility since each event uses a different
-  /// chime.
+  /// record the event in the bell list (always — it's the catch-all
+  /// for "what happened while I was elsewhere"), then route the
+  /// active surface based on focus state — in-app toast when focused,
+  /// OS native banner when blurred. Sound is the caller's
+  /// responsibility since each event uses a different chime.
   function alertProject(
     projectPath: string,
     title: string,
@@ -227,6 +305,7 @@ function makeNotificationsContext() {
 
     if (!here) {
       markUnread(projectPath);
+      enqueueUnreadItem({ kind, projectPath, title, body });
     }
 
     if (focused()) {
@@ -269,6 +348,11 @@ function makeNotificationsContext() {
     toasts,
     dismissToast,
     activateAndDismiss,
+    pauseToastDismiss,
+    resumeToastDismiss,
+    unreadItems,
+    activateProjectFromBell,
+    clearAllItems,
   };
 }
 

@@ -30,6 +30,8 @@ function NotificationToast(props: { toast: Toast }) {
           : "border-neutral-700/70"
       }`}
       style="animation: klaudio-toast-in 180ms ease-out both"
+      onMouseEnter={() => notifications.pauseToastDismiss(props.toast.id)}
+      onMouseLeave={() => notifications.resumeToastDismiss(props.toast.id)}
     >
       <button
         type="button"
