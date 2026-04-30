@@ -1,6 +1,6 @@
 [package]
 name = "klaudio-panels"
-version = "1.5.1"
+version = "1.6.0"
 description = "Klaudio Panels — native window embedding the Claude Code CLI"
 authors = ["willywg"]
 edition = "2021"

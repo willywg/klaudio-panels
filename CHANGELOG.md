@@ -4,6 +4,40 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.6.0] — 2026-04-30
+
+### Added
+- **Notification bell in the titlebar.** A `Bell` icon with a red
+  unread counter (capped at "9+") sits in the titlebar's right
+  cluster, always visible — including on the home screen. Click
+  opens a 360px popover listing the recent unread events
+  most-recent-first, each row showing the project name, event title,
+  body, and a relative timestamp ("now", "2m ago", "1h ago"). The
+  bell is the **catch-all** for "what happened while I was
+  elsewhere" — every alert (toast or OS banner) populates the list,
+  not just the ones that surfaced visually. Cap of 50 items in
+  memory; no localStorage persistence (a Klaudio restart starts the
+  bell clean by design).
+
+  Item interactions:
+  - **Click an item** → activates the originating project AND clears
+    all items for that project from the bell. The amber ring on the
+    avatar clears as part of the existing project-activation flow.
+  - **"Mark all read"** at the bottom of the popover empties the
+    list without switching project.
+  - **X-dismissed toasts stay in the bell.** "X" means "hide the
+    visual," not "I read this" — the user can still recover the
+    body from the bell afterwards.
+  - **Activating a project via the sidebar avatar** also clears its
+    items, so the three indicators stay in sync.
+
+- **Hover-pause on toasts.** Mouse-enter on a toast clears its
+  auto-dismiss timer; mouse-leave schedules a fresh full-duration
+  timer. The Slack/Discord pattern — simpler than tracking remaining
+  time and matches the user intent of "I want to keep reading this."
+  Click-to-activate and X-dismiss still short-circuit through the
+  existing handlers.
+
 ## [1.5.1] — 2026-04-29
 
 ### Fixed
