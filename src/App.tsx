@@ -1021,23 +1021,25 @@ export default function App() {
         <GitProvider>
           <RevealProvider>
             <DiffPanelProvider>
-              <OpenInProvider>
-                <EditorPtyProvider>
-                  <ShellPanelProvider>
-                    <ShellPtyProvider>
-                      <TerminalProvider>
-                        <SessionWatcherProvider>
-                          <NotificationsProvider>
-                            <CommandPaletteProvider>
-                              <Shell />
-                            </CommandPaletteProvider>
-                          </NotificationsProvider>
-                        </SessionWatcherProvider>
-                      </TerminalProvider>
-                    </ShellPtyProvider>
-                  </ShellPanelProvider>
-                </EditorPtyProvider>
-              </OpenInProvider>
+              <EditBuffersProvider>
+                <OpenInProvider>
+                  <EditorPtyProvider>
+                    <ShellPanelProvider>
+                      <ShellPtyProvider>
+                        <TerminalProvider>
+                          <SessionWatcherProvider>
+                            <NotificationsProvider>
+                              <CommandPaletteProvider>
+                                <Shell />
+                              </CommandPaletteProvider>
+                            </NotificationsProvider>
+                          </SessionWatcherProvider>
+                        </TerminalProvider>
+                      </ShellPtyProvider>
+                    </ShellPanelProvider>
+                  </EditorPtyProvider>
+                </OpenInProvider>
+              </EditBuffersProvider>
             </DiffPanelProvider>
           </RevealProvider>
         </GitProvider>

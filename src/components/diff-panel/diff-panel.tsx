@@ -396,7 +396,6 @@ function TabStrip(props: { projectPath: string }) {
                 tab={t}
                 projectPath={props.projectPath}
                 active={isActive()}
-                projectPath={props.projectPath}
                 onActivate={() => panel.setActiveTab(props.projectPath, key)}
                 onClose={() => void panel.closeTab(props.projectPath, key)}
                 onContextMenu={(e) => {
@@ -441,10 +440,10 @@ function TabItem(props: {
   tab: PanelTab;
   /** Project path used to resolve the tab's project-relative `path` to an
    *  absolute path for the drag publisher (and for downstream @rel
-   *  conversion in `buildDropPayload`). */
+   *  conversion in `buildDropPayload`). Also lets us look up the edit
+   *  buffer's dirty state for the unsaved-changes badge. */
   projectPath: string;
   active: boolean;
-  projectPath: string;
   onActivate: () => void;
   onClose: () => void;
   onContextMenu?: (e: MouseEvent) => void;
