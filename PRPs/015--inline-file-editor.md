@@ -3,6 +3,7 @@
 > **Version:** 1.1
 > **Created:** 2026-04-24
 > **Status:** Draft
+> **Tracks:** [#34](https://github.com/willywg/klaudio-panels/issues/34)
 
 ---
 
