@@ -522,6 +522,7 @@ function TabItem(props: {
       <Show when={props.tab.kind !== "diff"}>
         <button
           class="w-4 h-4 rounded-sm flex items-center justify-center text-neutral-500 hover:bg-neutral-700 hover:text-neutral-100 transition opacity-0 group-hover:opacity-100"
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             props.onClose();
