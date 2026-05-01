@@ -11,6 +11,7 @@ import {
   setDiffPanelOpen,
   setDiffPanelWidth,
 } from "@/lib/diff-panel-prefs";
+import { useReveal } from "@/context/reveal";
 
 const DEFAULT_WIDTH = 640;
 
@@ -51,6 +52,8 @@ function freshState(): ProjectPanelState {
 }
 
 function makeDiffPanelContext() {
+  const reveal = useReveal();
+
   // Open/closed state is per-project. Stored as a reactive Record so any read
   // of `isOpen(path)` subscribes to changes for that path, and persisted
   // under `diffPanelOpen:<path>`. Solves the "close in A also closes B"
@@ -130,6 +133,11 @@ function makeDiffPanelContext() {
       }
     }
     if (!isOpen(projectPath)) writeOpen(projectPath, true);
+    // Tell the file tree to walk to this file (expand ancestors + scroll +
+    // brief highlight). One-way: openFile knows nothing about the tree's
+    // mounted state — if the Files tab isn't visible, the request goes
+    // unanswered, which is the documented v1 behavior under collapsed sidebar.
+    reveal.request(projectPath, rel);
   }
 
   /** Fire-and-forget hook (e.g. editor-pty SIGHUP). Runs AFTER the close

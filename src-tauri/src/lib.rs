@@ -1,10 +1,12 @@
 pub mod binary;
+pub mod cli_agent;
 pub mod cli_args;
 pub mod debug_log;
 pub mod file_read;
 pub mod file_write;
 pub mod fs;
 pub mod git;
+pub mod notify;
 pub mod open_in;
 pub mod pty;
 pub mod session_watcher;
@@ -123,6 +125,7 @@ pub fn run() {
             debug_log::debug_log,
             debug_log::get_log_path,
             fs::list_dir,
+            fs::list_files_recursive,
             fs::watch_project,
             fs::unwatch_project,
             fs::fs_create_file,
@@ -138,6 +141,8 @@ pub fn run() {
             file_write::write_file_bytes,
             shell_install::install_cli,
             shell_install::uninstall_cli,
+            notify::notify_native,
+            notify::set_dock_badge,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

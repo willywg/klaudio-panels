@@ -4,6 +4,234 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.6.0] — 2026-04-30
+
+### Added
+- **Notification bell in the titlebar.** A `Bell` icon with a red
+  unread counter (capped at "9+") sits in the titlebar's right
+  cluster, always visible — including on the home screen. Click
+  opens a 360px popover listing the recent unread events
+  most-recent-first, each row showing the project name, event title,
+  body, and a relative timestamp ("now", "2m ago", "1h ago"). The
+  bell is the **catch-all** for "what happened while I was
+  elsewhere" — every alert (toast or OS banner) populates the list,
+  not just the ones that surfaced visually. Cap of 50 items in
+  memory; no localStorage persistence (a Klaudio restart starts the
+  bell clean by design).
+
+  Item interactions:
+  - **Click an item** → activates the originating project AND clears
+    all items for that project from the bell. The amber ring on the
+    avatar clears as part of the existing project-activation flow.
+  - **"Mark all read"** at the bottom of the popover empties the
+    list without switching project.
+  - **X-dismissed toasts stay in the bell.** "X" means "hide the
+    visual," not "I read this" — the user can still recover the
+    body from the bell afterwards.
+  - **Activating a project via the sidebar avatar** also clears its
+    items, so the three indicators stay in sync.
+
+- **Hover-pause on toasts.** Mouse-enter on a toast clears its
+  auto-dismiss timer; mouse-leave schedules a fresh full-duration
+  timer. The Slack/Discord pattern — simpler than tracking remaining
+  time and matches the user intent of "I want to keep reading this."
+  Click-to-activate and X-dismiss still short-circuit through the
+  existing handlers.
+
+## [1.5.1] — 2026-04-29
+
+### Fixed
+- **Spurious "Claude is waiting for you" toasts.** The warp plugin
+  emits `idle_prompt` every 60s while Claude's prompt sits empty,
+  including while the user is *reading* Claude's transcript output.
+  In v1.5.0 this fired toast notifications during normal session
+  reading (a 12-minute task wraps up, you start scrolling through
+  the diff, 60s later a toast appears claiming Claude is waiting on
+  you). Dropped server-side in `cli_agent.rs` alongside the existing
+  `stop` filter — `permission_request` remains as the only OSC event
+  surfaced to the frontend, and that one is the actually-blocked
+  case the warp `Notification` hook is most useful for.
+
+## [1.5.0] — 2026-04-29
+
+### Added
+- **`permission_request` and `idle_prompt` notifications via OSC 777.**
+  Klaudio Panels now picks up the two Claude events the JSONL
+  transcript watcher can't see — when Claude wants to run a tool that
+  needs your approval, and when Claude has been waiting on you for a
+  while — by adopting [warp's open-source CLI-agent
+  protocol](https://github.com/warpdotdev/warp/blob/main/app/src/terminal/cli_agent_sessions/event/v1.rs)
+  verbatim. Install warp's official plugin once and it works in both
+  warp.app and Klaudio:
+
+  ```bash
+  claude plugin marketplace add warpdotdev/claude-code-warp
+  claude plugin install warp@claude-code-warp
+  ```
+
+  An observe-only sniffer in `src-tauri/src/cli_agent.rs` peels OSC
+  777 frames out of the PTY byte stream without mutating it (xterm.js
+  silently drops unknown OSC numbers). A documented exception under
+  CLAUDE.md non-negotiable #2 covers the carve-out — a stable, public,
+  versioned wire contract isn't the same as the "don't parse the
+  terminal" prohibition that rule was put in place to prevent.
+  Permission requests get their own more-attention-grabbing chime
+  (`pulse-c.wav` from anomalyco/opencode, MIT) and a longer banner
+  hold; idle prompts reuse the existing soft chime. Closes
+  [#23](https://github.com/willywg/klaudio-panels/issues/23).
+
+- **In-app toast stack when the Klaudio window is focused.** The
+  same notifications that previously routed to a macOS Notification
+  Center banner regardless of focus now surface as a stack of cards
+  anchored top-right under the titlebar:
+  - `stop` and `idle_prompt` → neutral toast, 5s auto-dismiss.
+  - `permission_request` → amber-accent toast, 10s (longer because
+    Claude is actually blocked).
+  - Click toast body → activates the originating project (the existing
+    project-switch effect already clears the amber ring as a side
+    effect). The X button dismisses without activating.
+  - Stack capped at 5 visible; older toasts displaced when a 6th
+    arrives.
+
+  When the window is **blurred** the existing osascript native banner
+  fires unchanged. Closes
+  [#29](https://github.com/willywg/klaudio-panels/issues/29).
+
+### Changed
+- **Notification suppression simplified to a strict two-state policy.**
+  Window focused → toast. Window blurred → OS banner. The v1.4.1
+  `hasTabInProject` rule (which suppressed the banner when a tab was
+  open even with the window blurred) is dropped; the chime + amber
+  ring + Dock badge already cover the "I'm coming back, don't yell at
+  me" case the suppression existed for.
+
+## [1.4.1] — 2026-04-28
+
+### Fixed
+- **Avatar amber ring now paints for background-project completions.**
+  In v1.4.0 the chime fired correctly when a Claude turn ended in any
+  pinned project, but the avatar ring stayed grey for projects the
+  user wasn't currently active on — exactly the case where the visual
+  cue matters most. The same-project suppression introduced together
+  with the OS-notification gating was being applied to the visual
+  marker too, so any pinned project with an open Claude tab swallowed
+  its own ring update. Split apart now: the **amber ring** suppresses
+  only when the user is literally on the completing project (focused
+  + active project); the **OS notification** keeps the broader "any
+  tab in this project" suppression so opened-but-not-active projects
+  don't push a banner; **sound** is unconditional. Closes
+  [#26](https://github.com/willywg/klaudio-panels/issues/26).
+
+### Changed
+- **Dropped the 4.5s pulse-then-amber animation.** Permanent amber
+  from the moment a completion lands. Feedback was that the animated
+  phase was easy to miss on background projects (the focus-pause
+  bought one extra cycle on alt-tab-back, but on a busy day with
+  multiple projects the animation often expired before the user
+  glanced over). Steady amber is the simpler "still pending" mental
+  model and removes a chunk of timer + focus-watcher plumbing from
+  `notifications.tsx` (~70 lines net).
+
+## [1.4.0] — 2026-04-28
+
+### Added
+- **Task-complete notifications.** When a Claude session finishes a
+  turn (`stop_reason ∈ {end_turn, max_tokens, stop_sequence, refusal}`),
+  Klaudio fires three layered signals:
+  - A soft chime (`pulse-a.wav` from anomalyco/opencode, MIT) through
+    the renderer.
+  - A native macOS notification (currently routed via
+    `osascript display notification` — see [#25](https://github.com/willywg/klaudio-panels/issues/25)
+    for the path back to a native UNUserNotificationCenter banner once
+    upstream `mac-notification-sys` migrates off the deprecated
+    NSUserNotificationCenter API).
+  - A pulsing indigo ring on the project's avatar that settles to a
+    steady **amber** ring after ~4.5s of *focused* time, plus a
+    matching dot indicator. The pulse timer pauses while the window
+    is unfocused so completions that land while you're alt-tabbed
+    aren't silently missed.
+  - A red badge with the count of unread projects over the Klaudio
+    Panels icon in the Dock — visible from anywhere even with the app
+    fully buried.
+  Suppressed when the completing project already has any open Claude
+  tab in your sidebar AND the window is focused (you're already
+  tracking it). Sound always plays as a gentle audio cue. Detection
+  is read-only against the existing global JSONL watcher; no new
+  permissions, no settings file. Closes
+  [#22](https://github.com/willywg/klaudio-panels/issues/22).
+
+### Fixed
+- **Closing the active Claude tab no longer leaves a black screen
+  when sibling tabs from another project precede it in the global
+  list.** `closeTab` now picks the next active tab from siblings
+  sharing the closing tab's `projectPath` (prefer left, fall back to
+  right), matching the shell-dock behavior that was already correct.
+  Defense-in-depth in `App.tsx` extends the central column's empty
+  state to fire when the active tab id points at a foreign-project
+  tab. Closes [#20](https://github.com/willywg/klaudio-panels/issues/20).
+
+## [1.3.0] — 2026-04-27
+
+### Added
+- **Cmd+K command palette.** Centered modal that fuzzy-searches the
+  active project's sessions and files in one sectioned list (Sessions
+  on top, Files below). Selecting a session activates an existing tab
+  or spawns `claude --resume <id>`; selecting a file opens it in the
+  diff-panel preview. A search pill in the titlebar center
+  (`Search <project> ⌘K`) opens the same palette by mouse. New Rust
+  command `list_files_recursive` walks the project gitignore-aware
+  (mirroring `list_dir`'s filters, hard-skips `.git/`), capped at
+  5000 entries with a `truncated` flag. Glob (`*`, `?`) and substring
+  queries are resolved client-side as a single regex. Closes
+  [#9](https://github.com/willywg/klaudio-panels/issues/9).
+- **Reveal in tree on file open.** When a file lands in the diff panel
+  (today via the Cmd+K palette, tomorrow from any future surface
+  calling `diffPanel.openFile`), the Files sidebar switches to the
+  Files tab, expands every ancestor directory of the file, scrolls
+  the row into view, and flashes a brief indigo highlight that fades
+  over ~1.2s. New `RevealProvider` exposes a single `pending()` signal
+  carrying `{ projectPath, rel, id }`; consumers track `lastHandledId`
+  to avoid self-trigger loops. The sidebar tab-switch lives in the
+  always-mounted Shell so it fires even when the FileTree component
+  isn't on the DOM (sidebar on Sessions). Behavior under collapsed
+  sidebar (Cmd+B): no-op — explicit user choice not auto-overridden.
+  Closes [#13](https://github.com/willywg/klaudio-panels/issues/13).
+- **Draggable diff-panel preview tabs.** File and editor tabs can now
+  be dragged onto a Claude or shell PTY to publish their `@rel`
+  reference, the same way file-tree rows already worked. Closes the
+  workflow loop opened by Cmd+K: ⌘K → file lands in preview → drag
+  tab into Claude → continue typing. The "Git changes" pseudo-tab is
+  intentionally not draggable. Refactor: extracted the ~110-line
+  pointer drag block from `tree-node.tsx` into a shared
+  `createInternalDrag(source)` hook in
+  `src/lib/use-internal-drag.ts`; tree-node now calls into the same
+  hook the new TabItem usage does. Closes
+  [#12](https://github.com/willywg/klaudio-panels/issues/12).
+- **Refresh button in the Git changes panel header.** A `RotateCw`
+  icon next to the Unified|Split toggle re-runs `git_status` +
+  `git_summary` for the active project. Mirrors the Files sidebar's
+  refresh affordance — needed because external commits
+  (`git commit` from another shell, `opencommit`, GUI clients) often
+  only touch `.git/` internals that our fs-watcher's `is_relevant`
+  filter drops on purpose to keep debouncer spam down, leaving the
+  panel frozen on the pre-commit state until something else
+  triggered a refetch. New `useGit().refresh(projectPath)` is a thin
+  public wrapper around the previously-private `fetchNow`, idempotent
+  via the existing `loading` flag. Closes
+  [#16](https://github.com/willywg/klaudio-panels/issues/16).
+- **Scroll-to-bottom button + ⌘↓ shortcut.** Each xterm-hosting view
+  (Claude PTY, shell PTY) now renders a small floating `ChevronDown`
+  button in its bottom-right corner whenever the viewport is scrolled
+  up from the tail. Click → scrollToBottom; auto-hides once the
+  viewport catches back up to baseY (xterm's own `onScroll` drives
+  the state). ⌘↓ globally hits the same action with the same
+  shell-dock disambiguation as ⌘T. Plumbing: a tiny module-level
+  registry in `src/lib/terminal-scroll-bus.ts` keyed by PTY id, no
+  Solid context. The button doubles as a "you have new content
+  below" indicator when new PTY data lands while the user is
+  scrolled up. Closes
+  [#17](https://github.com/willywg/klaudio-panels/issues/17).
+
 ## [1.2.0] — 2026-04-24
 
 ### Added

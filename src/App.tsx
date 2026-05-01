@@ -24,6 +24,7 @@ import { TerminalView } from "@/components/terminal-view";
 import { TabStrip } from "@/components/tab-strip";
 import { SidebarPanel } from "@/components/sidebar-panel";
 import { Titlebar } from "@/components/titlebar";
+import { NotificationToastStack } from "@/components/notification-toast";
 import { FileTree } from "@/components/file-tree/file-tree";
 import {
   getLastSessionId,
@@ -43,6 +44,16 @@ import { OpenInProvider } from "@/context/open-in";
 import { EditorPtyProvider, useEditorPty } from "@/context/editor-pty";
 import { ShellPtyProvider, useShellPty } from "@/context/shell-pty";
 import { ShellPanelProvider, useShellPanel } from "@/context/shell-panel";
+import {
+  CommandPaletteProvider,
+  useCommandPalette,
+} from "@/context/command-palette";
+import { CommandPalette } from "@/components/command-palette";
+import { RevealProvider, useReveal } from "@/context/reveal";
+import {
+  NotificationsProvider,
+  useNotifications,
+} from "@/context/notifications";
 import { installGlobalErrorForwarding } from "@/lib/debug-log";
 import { DiffPanel } from "@/components/diff-panel/diff-panel";
 import { SplitDivider } from "@/components/diff-panel/split-pane";
@@ -54,6 +65,7 @@ import {
 } from "@/lib/panel-layout";
 import { ShellTerminalPanel } from "@/components/shell-terminal/shell-terminal-panel";
 import { Toaster } from "@/components/toaster";
+import { requestScrollToBottom } from "@/lib/terminal-scroll-bus";
 import { displayLabel } from "@/lib/session-label";
 
 const AUTO_RESUME_FAIL_WINDOW_MS = 2000;
@@ -96,6 +108,9 @@ function Shell() {
   const editorPty = useEditorPty();
   const shellPty = useShellPty();
   const shellPanel = useShellPanel();
+  const commandPalette = useCommandPalette();
+  const reveal = useReveal();
+  const notifications = useNotifications();
   let splitContainerRef!: HTMLDivElement;
   let sidebarRowRef!: HTMLDivElement;
 
@@ -145,15 +160,42 @@ function Shell() {
     setActiveProjectPathSignal(next);
   }
 
-  // Persist + touch on active project change.
+  // Persist + touch on active project change. Also clear the unread
+  // pulse — landing on a project is the user's "I'm here now" signal,
+  // even if the active tab inside it isn't the one Claude finished in.
   createEffect(() => {
     const p = activeProjectPath();
     if (p) {
       localStorage.setItem("projectPath", p);
       projects.touch(p);
+      notifications.markRead(p);
     } else {
       localStorage.removeItem("projectPath");
     }
+  });
+
+  // Hook the notifications context up to the live store. The resolver
+  // bridges three concerns the context can't see on its own: which
+  // project the user is currently looking at (suppresses the amber
+  // ring when alerts come from where they already are), how to map a
+  // cwd reported by the warp plugin to one of our open projects (the
+  // plugin's cwd can be a subdir of the root), and how to switch
+  // projects when a toast is clicked.
+  notifications.setProjectResolver({
+    isActiveProject: (projectPath) => projectPath === activeProjectPath(),
+    resolveOpenProject: (cwd) => {
+      if (!cwd) return null;
+      const norm = cwd.replace(/\/+$/, "");
+      let best: string | null = null;
+      for (const t of term.store.tabs) {
+        const p = t.projectPath.replace(/\/+$/, "");
+        if (norm === p || norm.startsWith(p + "/")) {
+          if (!best || p.length > best.length) best = p;
+        }
+      }
+      return best;
+    },
+    activateProject: (projectPath) => setActiveProjectPath(projectPath),
   });
 
   // On active project change, pick the right tab to show (remembered > first
@@ -232,6 +274,23 @@ function Shell() {
     onCleanup(dispose);
   });
 
+  // Reveal-in-tree: when diffPanel.openFile fires (Cmd+K palette, etc.), the
+  // <FileTree> may not be mounted yet because the sidebar is on Sessions.
+  // Switch the sidebar to Files first — that mounts <FileTree>, which then
+  // picks up the same pending reveal via its own effect and runs the walk +
+  // scroll + highlight. This effect lives in Shell (always mounted) so the
+  // tab-switch happens regardless of the current sidebar state.
+  let lastHandledTabSwitchId = 0;
+  createEffect(() => {
+    const r = reveal.pending();
+    if (!r) return;
+    if (r.id <= lastHandledTabSwitchId) return;
+    lastHandledTabSwitchId = r.id;
+    if (sidebar.activeTab(r.projectPath) !== "files") {
+      sidebar.setTab(r.projectPath, "files");
+    }
+  });
+
   // Cmd+B toggles the sidebar, Cmd+Shift+D toggles the diff panel. Listening
   // on window (bubble phase) so xterm.js forwarding the keystroke to the PTY
   // doesn't stop us from acting too.
@@ -241,6 +300,14 @@ function Shell() {
       if (mod && !e.shiftKey && !e.altKey && e.key === "b") {
         e.preventDefault();
         sidebar.toggleCollapsed();
+        return;
+      }
+      // Cmd+K opens the command palette (Sessions + Files quick search).
+      // Toggle so a second press from inside the palette also closes it,
+      // mirroring how Cmd+B and Cmd+J behave.
+      if (mod && !e.shiftKey && !e.altKey && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        commandPalette.toggle();
         return;
       }
       if (mod && e.shiftKey && !e.altKey && (e.key === "d" || e.key === "D")) {
@@ -284,6 +351,23 @@ function Shell() {
           void shellPty.openTab(p);
         } else {
           void openNewTab();
+        }
+        return;
+      }
+      // Cmd+Down: scroll the terminal under the user's focus to its tail.
+      // Same shell-dock disambiguation as Cmd+T — focus inside the dock hits
+      // the active shell PTY, otherwise the active Claude tab. Companion to
+      // the floating ScrollToBottomButton each terminal renders.
+      if (mod && !e.shiftKey && !e.altKey && e.key === "ArrowDown") {
+        e.preventDefault();
+        const inShellDock =
+          document.activeElement instanceof Element &&
+          document.activeElement.closest("[data-shell-dock]") !== null;
+        if (inShellDock) {
+          const p = activeProjectPath();
+          if (p) requestScrollToBottom(shellPty.activeForProject(p));
+        } else {
+          requestScrollToBottom(term.store.activeTabId);
         }
         return;
       }
@@ -685,10 +769,15 @@ function Shell() {
 
   return (
     <div class="h-screen w-screen flex flex-col bg-neutral-950 text-neutral-200 overflow-hidden">
+      <CommandPalette
+        projectPath={activeProjectPath()}
+        onSelectSession={handleSelectSession}
+      />
       <Titlebar
         hasActiveProject={activeProjectPath() !== null}
         activeProjectPath={activeProjectPath()}
       />
+      <NotificationToastStack />
       <main class="flex-1 flex min-h-0 overflow-hidden">
       <ProjectsSidebar
         activePath={activeProjectPath()}
@@ -805,7 +894,14 @@ function Shell() {
                     );
                   }}
                 </For>
-                <Show when={activeProjectPath() && projectTabs().length === 0}>
+                <Show
+                  when={
+                    activeProjectPath() &&
+                    (projectTabs().length === 0 ||
+                      !activeTab() ||
+                      activeTab()?.projectPath !== activeProjectPath())
+                  }
+                >
                   <div class="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm">
                     Pick a session or start a new one.
                   </div>
@@ -923,23 +1019,27 @@ export default function App() {
     <ProjectsProvider>
       <SidebarProvider>
         <GitProvider>
-          <DiffPanelProvider>
-            <EditBuffersProvider>
+          <RevealProvider>
+            <DiffPanelProvider>
               <OpenInProvider>
                 <EditorPtyProvider>
                   <ShellPanelProvider>
                     <ShellPtyProvider>
                       <TerminalProvider>
                         <SessionWatcherProvider>
-                          <Shell />
+                          <NotificationsProvider>
+                            <CommandPaletteProvider>
+                              <Shell />
+                            </CommandPaletteProvider>
+                          </NotificationsProvider>
                         </SessionWatcherProvider>
                       </TerminalProvider>
                     </ShellPtyProvider>
                   </ShellPanelProvider>
                 </EditorPtyProvider>
               </OpenInProvider>
-            </EditBuffersProvider>
-          </DiffPanelProvider>
+            </DiffPanelProvider>
+          </RevealProvider>
         </GitProvider>
       </SidebarProvider>
     </ProjectsProvider>

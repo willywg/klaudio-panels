@@ -79,6 +79,62 @@ Both warnings are Gatekeeper defaults for unsigned apps, not signs that anything
 
 ![File tree with Neovim editor embedded](./docs/screenshots/file-tree-and-terminal-editor.png)
 
+## Notifications
+
+Klaudio Panels surfaces three kinds of signals when a Claude session
+needs your attention: a chime, a native macOS notification banner,
+and an amber ring on the project's avatar in the sidebar (plus a Dock
+badge counting how many projects are waiting). All three are
+suppressed when you're already focused on the project the event came
+from — they only fire for **background** activity.
+
+There are two tiers, depending on whether you install the optional
+plugin:
+
+### Built-in (zero-config)
+
+Out of the box, Klaudio Panels watches the Claude transcript files
+under `~/.claude/projects/` and notifies you whenever a session ends
+its turn. This works for every Claude session you run inside Klaudio,
+no extra setup needed.
+
+### Permission requests (optional warp plugin)
+
+The transcript watcher cannot see when Claude wants to run a tool
+(`Bash`, `Edit`, etc.) that requires your approval — that signal
+never gets written to disk. To catch those, install the [warp Claude
+Code plugin](https://github.com/warpdotdev/claude-code-warp). It
+emits [OSC 777 sidechannel events](https://github.com/warpdotdev/warp/blob/main/app/src/terminal/cli_agent_sessions/event/v1.rs)
+that Klaudio Panels parses out of the PTY stream. The same plugin
+also works in [warp.app](https://www.warp.dev/) and any other terminal
+that speaks the `warp://cli-agent` protocol — install once, get
+notifications everywhere.
+
+```bash
+# Requires `jq` on PATH (brew install jq if missing)
+claude plugin marketplace add warpdotdev/claude-code-warp
+claude plugin install warp@claude-code-warp
+```
+
+Restart your Claude session afterwards so the plugin loads. From then
+on, permission requests get a more attention-grabbing chime + a
+banner on top of the built-in turn-completion notifications.
+
+> The plugin also emits an `idle_prompt` event every 60s while the
+> Claude prompt sits empty (which fires while you're *reading*
+> output too). Klaudio drops it server-side because it's noise, not
+> signal — `permission_request` already covers the actually-blocked
+> case.
+
+> Why this approach? Klaudio's [non-negotiable
+> rule #2](./CLAUDE.md) is to never parse Claude's terminal
+> output — it's brittle across Claude versions. OSC 777 with the
+> `warp://cli-agent` sentinel is a different beast: a stable, public,
+> versioned wire contract. Klaudio's sniffer in
+> `src-tauri/src/cli_agent.rs` observes those frames without mutating
+> the byte stream (xterm.js still renders the terminal exactly as
+> Claude sent it).
+
 ## Architecture at a glance
 
 ```

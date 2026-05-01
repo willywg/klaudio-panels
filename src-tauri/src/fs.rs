@@ -128,6 +128,74 @@ pub fn list_dir(path: String) -> Result<Vec<FsEntry>, String> {
     Ok(out)
 }
 
+#[derive(Serialize, Clone)]
+pub struct FileListResult {
+    pub files: Vec<String>,
+    pub truncated: bool,
+}
+
+/// Recursively list files under `project_path`, returning **relative** paths
+/// (forward-slash separated) sorted lexicographically. Honors gitignore and
+/// hides dotfiles + `.git/` — same filters as `list_dir`. Capped at 5000
+/// entries to keep both the IPC payload and the client-side filter bounded;
+/// caller gets `truncated: true` when the cap kicks in. Used by the Cmd+K
+/// command palette's Files source.
+#[tauri::command]
+pub fn list_files_recursive(project_path: String) -> Result<FileListResult, String> {
+    const CAP: usize = 5000;
+    let root = PathBuf::from(&project_path);
+    if !root.is_dir() {
+        return Err(format!("not a directory: {project_path}"));
+    }
+
+    let mut files = Vec::new();
+    let mut truncated = false;
+    // WalkBuilder defaults: hidden=true, git_ignore=true, parents=true. That
+    // gives us dotfile + gitignore filtering for free. We still hard-skip
+    // `.git/` via filter_entry because some repos don't have .gitignore
+    // entries for it.
+    let walker = WalkBuilder::new(&root)
+        .filter_entry(|entry| entry.file_name() != ".git")
+        .build();
+    for entry in walker.flatten() {
+        if files.len() >= CAP {
+            truncated = true;
+            break;
+        }
+        let path = entry.path();
+        if path == root {
+            continue;
+        }
+        let is_file = entry
+            .file_type()
+            .map(|t| t.is_file())
+            .unwrap_or(false);
+        if !is_file {
+            continue;
+        }
+        let rel = match path.strip_prefix(&root) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        // Forward-slash for consistent matching across platforms; the frontend
+        // displays them this way too.
+        let rel_str = rel
+            .components()
+            .filter_map(|c| match c {
+                std::path::Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        if rel_str.is_empty() {
+            continue;
+        }
+        files.push(rel_str);
+    }
+    files.sort();
+    Ok(FileListResult { files, truncated })
+}
+
 /// Walk upwards looking for a `.git` sibling — that's the project root.
 /// Falls back to the input if nothing is found (e.g. non-repo directories).
 fn find_project_root(start: &Path) -> PathBuf {
