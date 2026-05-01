@@ -1,9 +1,8 @@
-# PRP: Inline file editor — quick "Edit" from the file tree
+# PRP 015: Inline file editor — quick "Edit" from the file tree
 
 > **Version:** 1.1
 > **Created:** 2026-04-24
 > **Status:** Draft
-> **Phase:** Sprint 12
 
 ---
 
