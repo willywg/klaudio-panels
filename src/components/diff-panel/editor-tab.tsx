@@ -54,6 +54,13 @@ export function EditorTab(props: Props) {
   let unregisterGuard: (() => void) | null = null;
   let disposed = false;
 
+  // Tracks the currently-running save IPC. Lets the close-guard wait for an
+  // in-flight save before deciding "dirty?" — without this, ⌘S followed
+  // immediately by a tab-close click races the IPC: the buffer is still
+  // dirty when the guard checks, the confirm dialog pops, and the user is
+  // left wondering why a saved file is asking to be saved.
+  let savingPromise: Promise<void> | null = null;
+
   function projectAndRel(): { p: string; r: string } {
     return { p: props.projectPath, r: props.relPath };
   }
@@ -122,63 +129,82 @@ export function EditorTab(props: Props) {
     }
   }
 
-  async function save() {
+  async function save(): Promise<void> {
+    // Coalesce concurrent saves — if one is in flight, just await it.
+    if (savingPromise) return savingPromise;
     const { p, r } = projectAndRel();
     const buf = buffers.get(p, r);
-    if (!buf || buf.saving) return;
+    if (!buf) return;
     const doc = currentDoc();
     if (doc === baseline) return; // not dirty, no-op
     buffers.setSaving(p, r, true);
-    try {
-      const result = await invoke<WriteResult>("write_file_bytes", {
-        projectPath: p,
-        relPath: r,
-        contents: doc,
-        expectedMtimeMs: baselineMtime,
-      });
-      baseline = doc;
-      baselineMtime = result.mtime_ms;
-      buffers.updateBaseline(p, r, doc, result.mtime_ms);
-      setExternalChanged(false);
-    } catch (err) {
-      const msg = String(err);
-      if (msg.includes("stale")) {
-        setExternalChanged(true);
-        toast(
-          "File changed on disk. Reload first or use 'Keep mine' to overwrite.",
-          "error",
-        );
-      } else {
-        toast(`Save failed: ${msg}`, "error");
+    const promise = (async () => {
+      try {
+        const result = await invoke<WriteResult>("write_file_bytes", {
+          projectPath: p,
+          relPath: r,
+          contents: doc,
+          expectedMtimeMs: baselineMtime,
+        });
+        baseline = doc;
+        baselineMtime = result.mtime_ms;
+        buffers.updateBaseline(p, r, doc, result.mtime_ms);
+        setExternalChanged(false);
+      } catch (err) {
+        const msg = String(err);
+        if (msg.includes("stale")) {
+          setExternalChanged(true);
+          toast(
+            "File changed on disk. Reload first or use 'Keep mine' to overwrite.",
+            "error",
+          );
+        } else {
+          toast(`Save failed: ${msg}`, "error");
+        }
+      } finally {
+        buffers.setSaving(p, r, false);
       }
+    })();
+    savingPromise = promise;
+    try {
+      await promise;
     } finally {
-      buffers.setSaving(p, r, false);
+      if (savingPromise === promise) savingPromise = null;
     }
   }
 
   /** Force-write the current buffer ignoring the on-disk mtime. Wired up
    *  to the "Keep mine" button on the external-change banner. */
-  async function saveOverwrite() {
+  async function saveOverwrite(): Promise<void> {
+    if (savingPromise) return savingPromise;
     const { p, r } = projectAndRel();
     const buf = buffers.get(p, r);
-    if (!buf || buf.saving) return;
+    if (!buf) return;
     const doc = currentDoc();
     buffers.setSaving(p, r, true);
+    const promise = (async () => {
+      try {
+        const result = await invoke<WriteResult>("write_file_bytes", {
+          projectPath: p,
+          relPath: r,
+          contents: doc,
+          // No expectedMtimeMs — explicit clobber.
+        });
+        baseline = doc;
+        baselineMtime = result.mtime_ms;
+        buffers.updateBaseline(p, r, doc, result.mtime_ms);
+        setExternalChanged(false);
+      } catch (err) {
+        toast(`Save failed: ${String(err)}`, "error");
+      } finally {
+        buffers.setSaving(p, r, false);
+      }
+    })();
+    savingPromise = promise;
     try {
-      const result = await invoke<WriteResult>("write_file_bytes", {
-        projectPath: p,
-        relPath: r,
-        contents: doc,
-        // No expectedMtimeMs — explicit clobber.
-      });
-      baseline = doc;
-      baselineMtime = result.mtime_ms;
-      buffers.updateBaseline(p, r, doc, result.mtime_ms);
-      setExternalChanged(false);
-    } catch (err) {
-      toast(`Save failed: ${String(err)}`, "error");
+      await promise;
     } finally {
-      buffers.setSaving(p, r, false);
+      if (savingPromise === promise) savingPromise = null;
     }
   }
 
@@ -280,6 +306,16 @@ export function EditorTab(props: Props) {
    *  When dirty, prompts Save / Discard / Cancel. */
   async function closeGuard(): Promise<"close" | "keep"> {
     const { p, r } = projectAndRel();
+    // Wait for any in-flight save to settle before deciding. Errors already
+    // surfaced through save()'s toast — we only care about reading the
+    // final dirty state.
+    if (savingPromise) {
+      try {
+        await savingPromise;
+      } catch {
+        /* ignored — surfaced via toast */
+      }
+    }
     if (!buffers.dirty(p, r)) return "close";
     const choice = await confirmDialog<"save" | "discard" | "cancel">({
       title: "Unsaved changes",

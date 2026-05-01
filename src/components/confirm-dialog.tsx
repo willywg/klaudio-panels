@@ -110,12 +110,23 @@ export async function confirmDialog<R extends string>(opts: {
             buttons={opts.buttons}
             onResolve={(id) => {
               setOpen(false);
+              // Belt-and-suspenders: drop pointer-events on the host the
+              // moment we start tearing down. Even if the Show inside takes
+              // a frame to unmount, or a downstream cleanup throws and
+              // host.remove() never runs, the overlay can no longer
+              // intercept clicks and freeze the whole UI.
+              host.style.pointerEvents = "none";
               // Defer disposal a frame so the click event finishes
               // bubbling on the disappearing button.
               requestAnimationFrame(() => {
-                dispose();
-                host.remove();
-                resolve(id);
+                try {
+                  dispose();
+                } catch (err) {
+                  console.warn("ConfirmDialog dispose failed", err);
+                } finally {
+                  host.remove();
+                  resolve(id);
+                }
               });
             }}
           />
