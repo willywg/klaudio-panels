@@ -135,6 +135,22 @@ function makeNotificationsContext() {
     setPrefsSignal(getPrefs());
   }
 
+  // Warp plugin install state. The Permission row in settings is gated
+  // on this — without the plugin no `permission_request` events fire,
+  // so showing an enabled toggle would be misleading. Seeded async on
+  // mount; refresh-on-demand from the settings view covers users who
+  // install the plugin without restarting Klaudio.
+  const [warpInstalled, setWarpInstalled] = createSignal<boolean>(false);
+
+  async function refreshWarpInstalled() {
+    try {
+      const v = await invoke<boolean>("is_warp_plugin_installed");
+      setWarpInstalled(v);
+    } catch {
+      setWarpInstalled(false);
+    }
+  }
+
   // Default no-op resolver until App.tsx wires the real one.
   let resolver: ProjectResolver = {
     isActiveProject: () => false,
@@ -294,6 +310,8 @@ function makeNotificationsContext() {
     unlistenAgent = await listen<CliAgentEvent>("claude:event", (e) =>
       handleAgentEvent(e.payload),
     );
+
+    void refreshWarpInstalled();
   });
 
   onCleanup(() => {
@@ -372,6 +390,8 @@ function makeNotificationsContext() {
     clearAllItems,
     prefs,
     updatePrefs,
+    warpInstalled,
+    refreshWarpInstalled,
   };
 }
 

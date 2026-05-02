@@ -7,6 +7,7 @@ pub mod fs;
 pub mod git;
 pub mod notify;
 pub mod open_in;
+pub mod plugins;
 pub mod pty;
 pub mod session_watcher;
 pub mod sessions;
@@ -141,6 +142,7 @@ pub fn run() {
             shell_install::uninstall_cli,
             notify::notify_native,
             notify::set_dock_badge,
+            plugins::is_warp_plugin_installed,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

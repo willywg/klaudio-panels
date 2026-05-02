@@ -6,11 +6,16 @@ import {
   createSignal,
   onCleanup,
   onMount,
+  type JSX,
 } from "solid-js";
 import { ArrowLeft, Bell, BellOff, Settings } from "lucide-solid";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useNotifications, type UnreadItem } from "@/context/notifications";
 import type { NotificationPrefs } from "@/lib/notifications-prefs";
 import { relativeTime } from "@/lib/relative-time";
+
+const WARP_PLUGIN_INSTALL_URL =
+  "https://github.com/willywg/klaudio-panels#permission-requests-recommended-warp-plugin";
 
 type View = "list" | "settings";
 
@@ -190,9 +195,41 @@ function BellItem(props: { item: UnreadItem; onClick: () => void }) {
 function SettingsView(props: { onBack: () => void }) {
   const notifications = useNotifications();
 
+  // Re-check on mount of the settings view so users who installed the
+  // warp plugin without restarting Klaudio see the row enable itself
+  // when they reopen ⚙️.
+  onMount(() => {
+    void notifications.refreshWarpInstalled();
+  });
+
   function toggle(key: keyof NotificationPrefs) {
     notifications.updatePrefs({ [key]: !notifications.prefs()[key] });
   }
+
+  function openInstallDocs() {
+    void openUrl(WARP_PLUGIN_INSTALL_URL).catch(() => {});
+  }
+
+  // Permission row is gated on the plugin: without it, no events ever
+  // arrive and an enabled toggle would lie to the user. Render disabled
+  // + visually-off, with a link to the install docs in the helper text.
+  const permissionEnabled = () => notifications.warpInstalled();
+
+  const permissionHelp = (): JSX.Element =>
+    permissionEnabled() ? (
+      <>Notify when Claude needs permission to use a tool (Bash, Edit, …).</>
+    ) : (
+      <>
+        Requires the warp/claude-code-warp plugin.{" "}
+        <button
+          type="button"
+          class="text-indigo-400 hover:text-indigo-300 underline underline-offset-2 transition"
+          onClick={openInstallDocs}
+        >
+          Install →
+        </button>
+      </>
+    );
 
   return (
     <>
@@ -219,9 +256,12 @@ function SettingsView(props: { onBack: () => void }) {
         />
         <ToggleRow
           label="Permission requests"
-          help="Notify when Claude needs permission. Requires the warp/claude-code-warp plugin."
-          checked={notifications.prefs().notifyPermission}
+          help={permissionHelp()}
+          checked={
+            permissionEnabled() && notifications.prefs().notifyPermission
+          }
           onToggle={() => toggle("notifyPermission")}
+          disabled={!permissionEnabled()}
         />
         <ToggleRow
           label="Sounds"
@@ -236,12 +276,16 @@ function SettingsView(props: { onBack: () => void }) {
 
 function ToggleRow(props: {
   label: string;
-  help: string;
+  help: JSX.Element;
   checked: boolean;
   onToggle: () => void;
+  disabled?: boolean;
 }) {
   return (
-    <div class="px-3 py-2 flex items-start justify-between gap-3">
+    <div
+      class="px-3 py-2 flex items-start justify-between gap-3"
+      classList={{ "opacity-60": props.disabled }}
+    >
       <div class="flex-1 min-w-0">
         <div class="text-[12px] text-neutral-100 font-medium">{props.label}</div>
         <div class="text-[11px] text-neutral-400 mt-0.5">{props.help}</div>
@@ -250,12 +294,18 @@ function ToggleRow(props: {
         type="button"
         role="switch"
         aria-checked={props.checked}
+        aria-disabled={props.disabled || undefined}
         aria-label={props.label}
-        onClick={props.onToggle}
+        onClick={() => {
+          if (props.disabled) return;
+          props.onToggle();
+        }}
+        disabled={props.disabled}
         class="shrink-0 mt-0.5 w-9 h-5 rounded-full transition relative"
         classList={{
-          "bg-emerald-500/80": props.checked,
-          "bg-neutral-700": !props.checked,
+          "bg-emerald-500/80": props.checked && !props.disabled,
+          "bg-neutral-700": !props.checked || props.disabled,
+          "cursor-not-allowed": props.disabled,
         }}
       >
         <span

@@ -87,6 +87,25 @@ The popover gains a two-mode shell:
   Header label switches to "Settings" with a left-arrow back to
   list mode.
 
+**Plugin-aware gating for Permission requests.** Without the warp
+plugin no `permission_request` events ever reach the frontend, so an
+enabled toggle would lie. Detection runs through a new Tauri command
+`is_warp_plugin_installed` (reads
+`~/.claude/plugins/installed_plugins.json`, checks for the
+`warp@claude-code-warp` key). State is seeded async on context
+mount and refreshed every time the settings view opens — covering
+the "I just installed the plugin" flow without forcing a Klaudio
+restart.
+
+When the plugin is missing:
+- The Permission row renders **disabled + visually OFF** regardless
+  of the persisted pref. The persisted pref is preserved so it
+  takes effect once the plugin is installed.
+- The helper text becomes "Requires the warp/claude-code-warp
+  plugin. **Install →**" — the link opens the README anchor
+  `#permission-requests-recommended-warp-plugin` in the system
+  browser via `tauri-plugin-opener`.
+
 Toggle row layout (compact, ~32px tall):
 
 ```
@@ -265,17 +284,20 @@ the first thing the reader sees in that section, with a one-line
 
 ## Known limitations
 
-- No "off because of plugin missing" hint in the Permission row.
-  Could detect plugin install state and show a soft warning, but
-  doing it well needs a backend command (see #36 out-of-scope).
 - Restoring defaults requires flipping each toggle individually.
   Cheap to add a "Reset" link if it comes up.
+- Plugin detection is filesystem-based — uninstalls done via
+  `claude plugin remove` are picked up the next time the settings
+  view opens, but a custom marketplace that installs the plugin
+  outside `~/.claude/plugins/installed_plugins.json` would falsely
+  show as missing.
 
 ## Out of scope (track separately)
 
-- Detecting warp plugin presence and surfacing a guided install
-  step inline (#36 follow-up).
 - Tighter focus-based suppression: when the project's tab is
   active in a focused window, don't emit `session:complete` even
   if the toggle is on (#36 follow-up).
 - Per-project mute / per-event severity.
+- A live `notify` watch on `installed_plugins.json` (right now we
+  re-check on settings-view open, which is enough for the
+  install-without-restart UX).
