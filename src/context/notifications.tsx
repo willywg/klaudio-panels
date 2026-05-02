@@ -11,6 +11,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { playPermissionRequest, playTaskComplete } from "@/lib/sound";
+import {
+  getPrefs,
+  setPrefs,
+  type NotificationPrefs,
+} from "@/lib/notifications-prefs";
 
 type SessionCompletePayload = {
   project_path: string;
@@ -119,6 +124,16 @@ function makeNotificationsContext() {
   // (a Klaudio restart starts the bell empty by design).
   const [unreadItems, setUnreadItems] = createSignal<readonly UnreadItem[]>([]);
   let nextItemId = 1;
+
+  // Per-channel kill switches surfaced from the bell ⚙️ panel. Read at
+  // every event entry point — disabling a channel produces zero side
+  // effects (no ring, no bell, no toast, no banner, no chime).
+  const [prefs, setPrefsSignal] = createSignal<NotificationPrefs>(getPrefs());
+
+  function updatePrefs(patch: Partial<NotificationPrefs>) {
+    setPrefs(patch);
+    setPrefsSignal(getPrefs());
+  }
 
   // Default no-op resolver until App.tsx wires the real one.
   let resolver: ProjectResolver = {
@@ -316,7 +331,8 @@ function makeNotificationsContext() {
   }
 
   function handleComplete(payload: SessionCompletePayload) {
-    playTaskComplete();
+    if (!prefs().notifySessionComplete) return;
+    if (prefs().playSounds) playTaskComplete();
     const title = `${projectName(payload.project_path)} · Claude is done`;
     const body =
       payload.preview && payload.preview.length > 0
@@ -329,10 +345,11 @@ function makeNotificationsContext() {
     // Only `permission_request` reaches the frontend — `stop` and
     // `idle_prompt` are dropped server-side in cli_agent.rs.
     if (payload.event !== "permission_request") return;
+    if (!prefs().notifyPermission) return;
     const projectPath = resolver.resolveOpenProject(payload.cwd);
     if (!projectPath) return;
 
-    playPermissionRequest();
+    if (prefs().playSounds) playPermissionRequest();
     const tool = payload.tool_name ?? "a tool";
     const preview = payload.tool_input_preview;
     const body = preview && preview.length > 0 ? `${tool}: ${preview}` : tool;
@@ -353,6 +370,8 @@ function makeNotificationsContext() {
     unreadItems,
     activateProjectFromBell,
     clearAllItems,
+    prefs,
+    updatePrefs,
   };
 }
 

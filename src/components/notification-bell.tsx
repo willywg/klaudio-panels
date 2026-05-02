@@ -1,14 +1,18 @@
 import {
   For,
   Show,
+  createEffect,
   createMemo,
   createSignal,
   onCleanup,
   onMount,
 } from "solid-js";
-import { Bell, BellOff } from "lucide-solid";
+import { ArrowLeft, Bell, BellOff, Settings } from "lucide-solid";
 import { useNotifications, type UnreadItem } from "@/context/notifications";
+import type { NotificationPrefs } from "@/lib/notifications-prefs";
 import { relativeTime } from "@/lib/relative-time";
+
+type View = "list" | "settings";
 
 function projectName(projectPath: string): string {
   const trimmed = projectPath.replace(/\/+$/, "");
@@ -19,10 +23,16 @@ function projectName(projectPath: string): string {
 export function NotificationBell() {
   const notifications = useNotifications();
   const [open, setOpen] = createSignal(false);
+  const [view, setView] = createSignal<View>("list");
   let wrapRef: HTMLDivElement | undefined;
 
   const items = createMemo(() => notifications.unreadItems());
   const count = createMemo(() => items().length);
+
+  // Every reopen lands on the list — settings is opt-in per session.
+  createEffect(() => {
+    if (open()) setView("list");
+  });
 
   onMount(() => {
     const onDown = (e: PointerEvent) => {
@@ -67,41 +77,79 @@ export function NotificationBell() {
 
       <Show when={open()}>
         <div class="absolute right-0 top-full mt-1 z-50 w-[360px] max-h-[480px] rounded-md border border-neutral-800 bg-neutral-900 shadow-xl text-[12px] flex flex-col">
-          <div class="px-3 py-2 border-b border-neutral-800 flex items-center justify-between">
-            <span class="text-[10px] uppercase tracking-wide text-neutral-500 font-medium">
-              Notifications
-            </span>
-            <Show when={count() > 0}>
-              <button
-                type="button"
-                class="text-[11px] text-neutral-400 hover:text-neutral-100 transition"
-                onClick={() => notifications.clearAllItems()}
-              >
-                Mark all read
-              </button>
-            </Show>
-          </div>
-
           <Show
-            when={count() > 0}
+            when={view() === "settings"}
             fallback={
-              <div class="px-3 py-8 flex flex-col items-center gap-2 text-neutral-500">
-                <BellOff size={20} strokeWidth={1.5} />
-                <span class="text-[12px]">No notifications</span>
-              </div>
+              <ListView
+                items={items()}
+                count={count()}
+                onItemClick={handleItemClick}
+                onMarkAllRead={() => notifications.clearAllItems()}
+                onOpenSettings={() => setView("settings")}
+              />
             }
           >
-            <div class="overflow-y-auto flex-1 py-1">
-              <For each={items()}>
-                {(item) => (
-                  <BellItem item={item} onClick={() => handleItemClick(item)} />
-                )}
-              </For>
-            </div>
+            <SettingsView onBack={() => setView("list")} />
           </Show>
         </div>
       </Show>
     </div>
+  );
+}
+
+function ListView(props: {
+  items: readonly UnreadItem[];
+  count: number;
+  onItemClick: (item: UnreadItem) => void;
+  onMarkAllRead: () => void;
+  onOpenSettings: () => void;
+}) {
+  return (
+    <>
+      <div class="px-3 py-2 border-b border-neutral-800 flex items-center justify-between gap-2">
+        <span class="text-[10px] uppercase tracking-wide text-neutral-500 font-medium">
+          Notifications
+        </span>
+        <div class="flex items-center gap-1">
+          <Show when={props.count > 0}>
+            <button
+              type="button"
+              class="text-[11px] text-neutral-400 hover:text-neutral-100 transition px-1"
+              onClick={props.onMarkAllRead}
+            >
+              Mark all read
+            </button>
+          </Show>
+          <button
+            type="button"
+            class="w-6 h-6 rounded flex items-center justify-center text-neutral-500 hover:text-neutral-100 hover:bg-neutral-800/80 transition"
+            onClick={props.onOpenSettings}
+            aria-label="Notification settings"
+            title="Notification settings"
+          >
+            <Settings size={13} strokeWidth={1.75} />
+          </button>
+        </div>
+      </div>
+
+      <Show
+        when={props.count > 0}
+        fallback={
+          <div class="px-3 py-8 flex flex-col items-center gap-2 text-neutral-500">
+            <BellOff size={20} strokeWidth={1.5} />
+            <span class="text-[12px]">No notifications</span>
+          </div>
+        }
+      >
+        <div class="overflow-y-auto flex-1 py-1">
+          <For each={props.items}>
+            {(item) => (
+              <BellItem item={item} onClick={() => props.onItemClick(item)} />
+            )}
+          </For>
+        </div>
+      </Show>
+    </>
   );
 }
 
@@ -136,5 +184,88 @@ function BellItem(props: { item: UnreadItem; onClick: () => void }) {
         </span>
       </span>
     </button>
+  );
+}
+
+function SettingsView(props: { onBack: () => void }) {
+  const notifications = useNotifications();
+
+  function toggle(key: keyof NotificationPrefs) {
+    notifications.updatePrefs({ [key]: !notifications.prefs()[key] });
+  }
+
+  return (
+    <>
+      <div class="px-2 py-2 border-b border-neutral-800 flex items-center gap-1">
+        <button
+          type="button"
+          class="w-6 h-6 rounded flex items-center justify-center text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/80 transition"
+          onClick={props.onBack}
+          aria-label="Back to notifications"
+          title="Back"
+        >
+          <ArrowLeft size={13} strokeWidth={1.75} />
+        </button>
+        <span class="text-[10px] uppercase tracking-wide text-neutral-500 font-medium">
+          Settings
+        </span>
+      </div>
+      <div class="overflow-y-auto flex-1 py-1">
+        <ToggleRow
+          label="Task complete"
+          help="Notify when Claude finishes a turn."
+          checked={notifications.prefs().notifySessionComplete}
+          onToggle={() => toggle("notifySessionComplete")}
+        />
+        <ToggleRow
+          label="Permission requests"
+          help="Notify when Claude needs permission. Requires the warp/claude-code-warp plugin."
+          checked={notifications.prefs().notifyPermission}
+          onToggle={() => toggle("notifyPermission")}
+        />
+        <ToggleRow
+          label="Sounds"
+          help="Play a chime with each notification."
+          checked={notifications.prefs().playSounds}
+          onToggle={() => toggle("playSounds")}
+        />
+      </div>
+    </>
+  );
+}
+
+function ToggleRow(props: {
+  label: string;
+  help: string;
+  checked: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div class="px-3 py-2 flex items-start justify-between gap-3">
+      <div class="flex-1 min-w-0">
+        <div class="text-[12px] text-neutral-100 font-medium">{props.label}</div>
+        <div class="text-[11px] text-neutral-400 mt-0.5">{props.help}</div>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={props.checked}
+        aria-label={props.label}
+        onClick={props.onToggle}
+        class="shrink-0 mt-0.5 w-9 h-5 rounded-full transition relative"
+        classList={{
+          "bg-emerald-500/80": props.checked,
+          "bg-neutral-700": !props.checked,
+        }}
+      >
+        <span
+          class="absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all"
+          classList={{
+            "left-[18px]": props.checked,
+            "left-0.5": !props.checked,
+          }}
+        />
+      </button>
+    </div>
   );
 }

@@ -88,17 +88,19 @@ badge counting how many projects are waiting). All three are
 suppressed when you're already focused on the project the event came
 from — they only fire for **background** activity.
 
-There are two tiers, depending on whether you install the optional
-plugin:
+> 🔔 **Recommended: install the warp plugin first.** Without it,
+> Klaudio falls back to the noisier transcript-watcher path, which
+> fires once per Claude turn (often several times a minute on long
+> agentic work). With the plugin you get the cleaner
+> `permission_request` channel — Claude pings you only when it's
+> actually waiting for you. Five-second install, see [Permission
+> requests (recommended warp plugin)](#permission-requests-recommended-warp-plugin).
+>
+> Want to mute or change which channels notify you? Click the bell in
+> the titlebar → ⚙️ Settings — toggle Task complete, Permission
+> requests, and Sounds independently.
 
-### Built-in (zero-config)
-
-Out of the box, Klaudio Panels watches the Claude transcript files
-under `~/.claude/projects/` and notifies you whenever a session ends
-its turn. This works for every Claude session you run inside Klaudio,
-no extra setup needed.
-
-### Permission requests (optional warp plugin)
+### Permission requests (recommended warp plugin)
 
 The transcript watcher cannot see when Claude wants to run a tool
 (`Bash`, `Edit`, etc.) that requires your approval — that signal
@@ -119,6 +121,17 @@ claude plugin install warp@claude-code-warp
 Restart your Claude session afterwards so the plugin loads. From then
 on, permission requests get a more attention-grabbing chime + a
 banner on top of the built-in turn-completion notifications.
+
+### Built-in fallback (zero-config)
+
+Out of the box, Klaudio Panels watches the Claude transcript files
+under `~/.claude/projects/` and notifies you whenever a session ends
+its turn. This works for every Claude session you run inside Klaudio,
+no extra setup needed — but Claude reaches "end of turn" after every
+tool-free reply, which means several notifications per minute on
+busy work. The warp plugin (above) is the cleaner signal; this path
+is the safety net if you can't install it. You can also disable it
+entirely from the bell's ⚙️ Settings panel.
 
 > The plugin also emits an `idle_prompt` event every 60s while the
 > Claude prompt sits empty (which fires while you're *reading*
