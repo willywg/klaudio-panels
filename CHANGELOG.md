@@ -4,6 +4,54 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.6.1] — 2026-05-02
+
+### Fixed
+- **Notification spam from `session:complete` is now opt-out, not
+  forced** ([#36](https://github.com/willywg/klaudio-panels/issues/36)).
+  The JSONL watcher emits `session:complete` once per Claude
+  `end_turn`, and Claude reaches `end_turn` after every tool-free
+  reply — which means the bell flooded with "Claude is done" entries
+  during long agentic loops. Affects everyone, not just users without
+  the warp plugin. A community user hit it almost immediately on
+  v1.6.0.
+
+### Added
+- **Per-channel notification kill switch.** Bell → ⚙️ Settings panel
+  with three independent toggles, persisted in `localStorage`:
+  - **Task complete** — gates `session:complete` (the noisy one).
+  - **Permission requests** — gates `permission_request` from the
+    warp plugin.
+  - **Sounds** — gates both chimes; toasts/banners/bell still appear.
+
+  Toggles default ON to preserve v1.6.0 behavior. Disabling a channel
+  short-circuits at the entry point: zero side effects (no toast, no
+  bell entry, no banner, no chime, no amber ring).
+
+- **Plugin-aware Permission row.** The Permission toggle is
+  auto-disabled and visually OFF when the warp/claude-code-warp
+  plugin isn't installed (no events would arrive anyway). Helper text
+  swaps for an **Install →** link that opens the README anchor in the
+  system browser. The persisted pref is preserved through the
+  disabled/enabled transition — install the plugin and the row
+  activates with the user's last saved choice.
+
+  Detection runs through a new `is_warp_plugin_installed` Tauri
+  command that reads `~/.claude/plugins/installed_plugins.json`. State
+  refreshes on every settings-view open, so installing the plugin
+  without restarting Klaudio works.
+
+### Changed
+- **README**: bumped the warp plugin recommendation to the top of the
+  Notifications section since `permission_request` is the higher-
+  signal channel. Built-in transcript-watcher path now framed as the
+  fallback for users who can't install the plugin.
+
+### Tracked work
+- PRP: [`PRPs/015--notification-preferences.md`](PRPs/015--notification-preferences.md)
+- PR: [#37](https://github.com/willywg/klaudio-panels/pull/37)
+- Issue: [#36](https://github.com/willywg/klaudio-panels/issues/36)
+
 ## [1.6.0] — 2026-04-30
 
 ### Added
