@@ -213,7 +213,7 @@ function SettingsView(props: { onBack: () => void }) {
       <div class="overflow-y-auto flex-1 py-1">
         <ToggleRow
           label="Task complete"
-          help="Notify when Claude finishes a turn."
+          help="Notify after every assistant reply (fires often during long agentic loops)."
           checked={notifications.prefs().notifySessionComplete}
           onToggle={() => toggle("notifySessionComplete")}
         />
