@@ -279,44 +279,35 @@ export function TerminalView(props: Props) {
     onCleanup(() => window.removeEventListener("resize", onWinResize));
   });
 
-  // When the tab becomes visible again, re-measure (size may have changed
-  // while hidden), force a full redraw (xterm WebGL stops painting while the
-  // canvas is `visibility: hidden` — without refresh the panel stays blank),
-  // and refocus so keyboard input lands in the active tab. Uses the same
-  // staggered-fit pattern as onMount because a single rAF caches a too-short
-  // height on project switch while the outer layout is still reflowing
-  // (per-project sidebar width from PR #5, panelLayout memo recompute from
-  // PR #6). Without the follow-ups, xterm ends up one row short and the
-  // shell prompt is clipped until the user's next keystroke triggers auto-
-  // scroll. Focus is claimed only on the first pass so later fits don't
-  // steal it back if the user already clicked elsewhere.
+  // When the tab becomes visible again do two decoupled things:
+  //
+  //   1. Force one immediate repaint. WebGL stops painting while the canvas
+  //      is `visibility: hidden`; without a refresh the panel stays blank
+  //      until something else triggers a redraw. We keep this independent
+  //      of fit because fit may legitimately be a no-op (dimensions match).
+  //   2. Schedule a single fit at 250ms, after the outer layout has settled
+  //      (per-project sidebar width from PR #5, panelLayout memo recompute
+  //      from PR #6, diff panel auto-show/hide). The previous staggered
+  //      pattern (rAF + 180ms + 500ms) sent up to three SIGWINCHes per
+  //      activation: when dimensions changed across stages, each fit forced
+  //      Claude to re-paint the alt-screen, drifting xterm's buffer state
+  //      and occasionally leaking the welcome banner from the previous-
+  //      screen scrollback. One late fit keeps the eventual size correct
+  //      while limiting Claude to at most one re-paint. See PRP 016 / #38.
   createEffect(() => {
     if (!props.active) return;
 
-    const rafId = requestAnimationFrame(() => {
-      safeFit();
-      try {
-        if (term) term.refresh(0, term.rows - 1);
-        term?.focus();
-      } catch {
-        // ignore
-      }
-    });
+    try {
+      if (term) term.refresh(0, term.rows - 1);
+      term?.focus();
+    } catch {
+      // refresh failures shouldn't block the activation flow.
+    }
 
-    const t180 = window.setTimeout(() => safeFit(), 180);
-    const t500 = window.setTimeout(() => {
-      safeFit();
-      try {
-        if (term) term.refresh(0, term.rows - 1);
-      } catch {
-        // ignore
-      }
-    }, 500);
+    const fitTimer = window.setTimeout(() => safeFit(), 250);
 
     onCleanup(() => {
-      cancelAnimationFrame(rafId);
-      window.clearTimeout(t180);
-      window.clearTimeout(t500);
+      window.clearTimeout(fitTimer);
     });
   });
 
