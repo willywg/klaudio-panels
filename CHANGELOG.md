@@ -4,6 +4,34 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.6.2] — 2026-05-03
+
+### Fixed
+- **Terminal scroll drift + welcome banner re-appearing on project
+  switch** ([#38](https://github.com/willywg/klaudio-panels/issues/38)).
+  The activation effect ran three fits at rAF + 180ms + 500ms (plus
+  two `term.refresh()` calls). FitAddon already short-circuits no-op
+  fits internally, so on a settled layout the stages were harmless —
+  but on a project switch the outer layout reflows asynchronously
+  (per-project sidebar width, panelLayout memo, diff panel
+  auto-show/hide). Each stage caught a different intermediate width,
+  each one passed FitAddon's dimensions-changed guard, each one fired
+  a real SIGWINCH and forced Claude to redraw the alt-screen. Three
+  SIGWINCHes within 500ms confused xterm's buffer state: scroll
+  drifted upward (wrapped-line reflow shifted `viewportY`), and in
+  worse cases the previous-screen scrollback (which holds Claude's
+  startup banner) leaked through the alt-screen mid-stream.
+
+  Replaced with one immediate `term.refresh()` (handles the WebGL
+  stops-painting-while-hidden case when fit ends up being a no-op)
+  plus one `safeFit` at 250ms, after the layout has settled. Claude
+  now receives at most one SIGWINCH per activation.
+
+### Tracked work
+- PRP: [`PRPs/016--terminal-activation-resize.md`](PRPs/016--terminal-activation-resize.md)
+- PR: [#39](https://github.com/willywg/klaudio-panels/pull/39)
+- Issue: [#38](https://github.com/willywg/klaudio-panels/issues/38)
+
 ## [1.6.1] — 2026-05-02
 
 ### Fixed
