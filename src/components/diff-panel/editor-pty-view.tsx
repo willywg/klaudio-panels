@@ -256,8 +256,12 @@ export function EditorPtyView(props: Props) {
     resizeObs.observe(container!);
   });
 
-  // WebGL canvas stops painting while `visibility: hidden` — same pattern as
-  // terminal-view.tsx: fit + refresh + focus on re-show.
+  // WebGL canvas stops painting while `visibility: hidden` — fit + refresh
+  // on re-show. Intentionally NOT calling term.focus() here for the same
+  // reason as shell-terminal-view: on project re-entry the editor PTY's
+  // active flag flips alongside Claude's, and a focus call here would race
+  // with Claude's. xterm's canvas click handler still focuses on direct
+  // clicks. See PRP 017 / #40.
   createEffect(() => {
     if (!props.active) return;
     requestAnimationFrame(() => {
@@ -265,7 +269,6 @@ export function EditorPtyView(props: Props) {
       safeFit("active-change");
       try {
         if (term) term.refresh(0, term.rows - 1);
-        term?.focus();
       } catch {
         // ignore
       }

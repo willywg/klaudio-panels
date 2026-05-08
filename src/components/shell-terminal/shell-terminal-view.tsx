@@ -219,7 +219,14 @@ export function ShellTerminalView(props: Props) {
     onCleanup(() => window.removeEventListener("resize", onWinResize));
   });
 
-  // Same visibility re-fit + refresh + focus dance as the Claude terminal.
+  // Visibility re-fit + refresh on activation. Intentionally NOT calling
+  // term.focus() here: the shell is a secondary surface that lives next to
+  // the Claude tab, and on project re-entry both panels' selected tabs flip
+  // active=true simultaneously. If shell focuses inside its rAF, it lands
+  // *after* Claude's synchronous focus and steals the cursor — typing then
+  // hits whatever is running in the shell (e.g. `npm run dev`). See PRP 017
+  // / #40. The xterm canvas click handler still focuses on direct clicks,
+  // so the only regression is clicking the tab strip header.
   createEffect(() => {
     if (!props.active) return;
     requestAnimationFrame(() => {
@@ -227,7 +234,6 @@ export function ShellTerminalView(props: Props) {
       safeFit();
       try {
         if (term) term.refresh(0, term.rows - 1);
-        term?.focus();
       } catch {
         // ignore
       }
