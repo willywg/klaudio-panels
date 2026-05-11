@@ -1,7 +1,8 @@
 # PRP 017: Stop secondary terminals from stealing focus on project re-entry
 
-> **Version:** 1.0
+> **Version:** 1.1
 > **Created:** 2026-05-08
+> **Updated:** 2026-05-11 — added focus-bus for user-action tab activation
 > **Status:** Draft
 > **Tracks:** [#40](https://github.com/willywg/klaudio-panels/issues/40)
 
@@ -103,6 +104,61 @@ If QA shows the click-tab-strip path feels broken, the follow-up
 is to add `term.focus()` to the tab-strip `onActivate` handler in
 the panel components (not back into the activation effect, which
 fires on project re-entry too and resurrects the race).
+
+## v1.1 addendum — focus-bus for user actions
+
+The base PR shipped the "remove activation focus from shell + editor"
+half. In practice that left a real regression: clicking "+" or a tab
+header on the shell/editor strip no longer focused the xterm — which
+is the exact UX the user *does* want, because those clicks are
+explicit "I want to type here" gestures.
+
+**Rule we're now encoding**: user-action tab activation focuses the
+target; passive activation (project switch, auto-resume, auto-spawn)
+does not.
+
+A new module `src/lib/terminal-focus-bus.ts` mirrors the existing
+`terminal-scroll-bus`: every xterm-hosting view registers a focus
+callback keyed by its PTY id on mount, and unregisters on cleanup.
+User-action handlers call `focusTerminal(id)`; passive code paths
+never call it. Newly-created tabs (where the view hasn't mounted by
+the time the handler fires) are queued for ≤500ms and focused as
+soon as registration happens.
+
+Call sites added:
+
+| Handler | File | Action |
+| --- | --- | --- |
+| Shell "+" | `shell-terminal-panel.tsx:handleNewTab` | `focusTerminal(newPtyId)` after `openTab` resolves |
+| Shell tab click | `shell-terminal-panel.tsx:handleActivate` | `focusTerminal(ptyId)` after `setActiveForProject` |
+| Editor "Open in" (new) | `diff-panel.tsx:dispatchAppOpen` | `focusTerminal(ptyId)` after `openEditor + addEditorTab` |
+| Editor "Open in" (existing) | `diff-panel.tsx:dispatchAppOpen` | `focusTerminal(existingTab.ptyId)` for already-open editor PTY |
+| Editor tab click | `diff-panel.tsx:onActivate` | `focusTerminal(tab.ptyId)` if `tab.kind === "editor"` |
+
+Views that register: `shell-terminal-view.tsx`, `editor-pty-view.tsx`.
+Claude's `terminal-view.tsx` is **not** in the bus — its existing
+activation-effect focus already covers both project-re-entry and
+user-action focus for Claude tabs, and adding the bus would
+double-focus harmlessly but for no reason. If a future change
+removes Claude's activation focus, this is where to wire it in.
+
+**What still doesn't focus on purpose**:
+
+- Project switch back into a project (App.tsx:202-221).
+- Auto-resume of last session on project open.
+- Shell-panel auto-spawn of the first tab when the panel opens
+  (shell-terminal-panel.tsx:37-47) — the user opened the panel, but
+  if focus jumped immediately we'd race with whatever they were
+  doing before clicking the panel toggle.
+
+QA additions (on top of the original checklist):
+
+- New shell tab "+": focuses immediately, can type without clicking.
+- Shell tab strip header click: focuses the target shell.
+- "Open in <editor>" on a file: focuses the editor PTY.
+- Editor tab strip click between two editor PTYs: focuses target.
+- Editor tab strip click on a file-preview tab: doesn't crash and
+  doesn't steal focus (no-op — file preview is not a terminal).
 
 ## QA checklist
 

@@ -14,6 +14,10 @@ import {
   registerTerminalScroller,
   unregisterTerminalScroller,
 } from "@/lib/terminal-scroll-bus";
+import {
+  registerTerminalFocus,
+  unregisterTerminalFocus,
+} from "@/lib/terminal-focus-bus";
 import { ScrollToBottomButton } from "@/components/scroll-to-bottom-button";
 
 const THEME = {
@@ -176,6 +180,13 @@ export function ShellTerminalView(props: Props) {
       setIsScrolledUp(buf.viewportY < buf.baseY);
     });
     registerTerminalScroller(props.ptyId, scrollToBottom);
+    registerTerminalFocus(props.ptyId, () => {
+      try {
+        term?.focus();
+      } catch {
+        // ignore
+      }
+    });
 
     detachData = ctx.onData(props.ptyId, (bytes) => {
       if (disposed) return;
@@ -248,6 +259,7 @@ export function ShellTerminalView(props: Props) {
     detachExit?.();
     scrollDisposable?.dispose();
     unregisterTerminalScroller(props.ptyId);
+    unregisterTerminalFocus(props.ptyId);
     try {
       term?.dispose();
     } catch (err) {

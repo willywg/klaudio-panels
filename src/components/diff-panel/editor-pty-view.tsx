@@ -10,6 +10,10 @@ import {
 } from "@tauri-apps/plugin-clipboard-manager";
 import { useEditorPty } from "@/context/editor-pty";
 import { openUrlInSystemBrowser } from "@/lib/open-url";
+import {
+  registerTerminalFocus,
+  unregisterTerminalFocus,
+} from "@/lib/terminal-focus-bus";
 
 const THEME = {
   background: "#0b0b0c",
@@ -184,6 +188,14 @@ export function EditorPtyView(props: Props) {
     window.setTimeout(() => safeFit("onMount-220ms"), 220);
     window.setTimeout(() => safeFit("onMount-600ms"), 600);
 
+    registerTerminalFocus(props.ptyId, () => {
+      try {
+        term?.focus();
+      } catch {
+        // ignore
+      }
+    });
+
     term.onData((data) => {
       void editorPty.write(props.ptyId, encoder.encode(data));
     });
@@ -286,6 +298,7 @@ export function EditorPtyView(props: Props) {
 
   onCleanup(() => {
     disposed = true;
+    unregisterTerminalFocus(props.ptyId);
     resizeObs?.disconnect();
     if (fitDebounce) window.clearTimeout(fitDebounce);
     detachData?.();

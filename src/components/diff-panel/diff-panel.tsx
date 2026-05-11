@@ -18,6 +18,7 @@ import { useOpenIn } from "@/context/open-in";
 import { useEditorPty } from "@/context/editor-pty";
 import { ContextMenu, type ContextMenuItem } from "@/components/context-menu";
 import { createInternalDrag } from "@/lib/use-internal-drag";
+import { focusTerminal } from "@/lib/terminal-focus-bus";
 import { DiffFileRow } from "./diff-file-row";
 import { FilePreview } from "./file-preview";
 import { EditorPtyView } from "./editor-pty-view";
@@ -260,6 +261,12 @@ function TabStrip(props: { projectPath: string }) {
       if (existing) {
         panel.setActiveTab(props.projectPath, existing);
         panel.openPanel(props.projectPath);
+        const existingTab = panel
+          .tabsFor(props.projectPath)
+          .find((t) => tabKey(t) === existing);
+        if (existingTab && existingTab.kind === "editor") {
+          focusTerminal(existingTab.ptyId);
+        }
         return;
       }
       try {
@@ -271,6 +278,10 @@ function TabStrip(props: { projectPath: string }) {
           editorId,
         );
         panel.addEditorTab(props.projectPath, editorId, rel, ptyId);
+        // User-action focus: explicit "Open in <editor>" — queue focus so
+        // the keystroke they make next lands in the editor PTY, not the
+        // file tree or wherever they triggered the menu from.
+        focusTerminal(ptyId);
       } catch (err) {
         console.warn("openEditor failed", err);
       }
@@ -358,7 +369,12 @@ function TabStrip(props: { projectPath: string }) {
                 tab={t}
                 projectPath={props.projectPath}
                 active={isActive()}
-                onActivate={() => panel.setActiveTab(props.projectPath, key)}
+                onActivate={() => {
+                  panel.setActiveTab(props.projectPath, key);
+                  // User-action focus only for editor PTY tabs; file
+                  // preview tabs aren't xterm-hosting surfaces.
+                  if (t.kind === "editor") focusTerminal(t.ptyId);
+                }}
                 onClose={() => panel.closeTab(props.projectPath, key)}
                 onContextMenu={(e) => {
                   if (t.kind === "file") {

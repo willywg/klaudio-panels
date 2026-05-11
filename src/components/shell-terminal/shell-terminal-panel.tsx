@@ -11,6 +11,7 @@ import { Plus, X } from "lucide-solid";
 import { useShellPty } from "@/context/shell-pty";
 import { useShellPanel } from "@/context/shell-panel";
 import { ShellTerminalView } from "./shell-terminal-view";
+import { focusTerminal } from "@/lib/terminal-focus-bus";
 
 type Props = {
   projectPath: string;
@@ -67,7 +68,12 @@ export function ShellTerminalPanel(props: Props) {
   }
 
   function handleNewTab() {
-    void pty.openTab(props.projectPath);
+    void pty.openTab(props.projectPath).then((id) => {
+      // User-action focus: opening a new tab is an explicit "I want to type
+      // here" gesture. focusTerminal queues if the view hasn't mounted yet
+      // and fires as soon as it registers. See PRP 017 / #40.
+      focusTerminal(id);
+    });
   }
 
   function handleCloseTab(ptyId: string, ev: MouseEvent) {
@@ -77,6 +83,7 @@ export function ShellTerminalPanel(props: Props) {
 
   function handleActivate(ptyId: string) {
     pty.setActiveForProject(props.projectPath, ptyId);
+    focusTerminal(ptyId);
   }
 
   // --- Vertical resize (drag top edge). Pointer-based — same pattern the
