@@ -1,8 +1,9 @@
 # PRP 017: Stop secondary terminals from stealing focus on project re-entry
 
-> **Version:** 1.1
+> **Version:** 1.2
 > **Created:** 2026-05-08
-> **Updated:** 2026-05-11 — added focus-bus for user-action tab activation
+> **Updated:** 2026-05-11 — focus-bus + per-project memory; remove Claude's
+> activation-effect focus for full consistency
 > **Status:** Draft
 > **Tracks:** [#40](https://github.com/willywg/klaudio-panels/issues/40)
 
@@ -142,14 +143,80 @@ user-action focus for Claude tabs, and adding the bus would
 double-focus harmlessly but for no reason. If a future change
 removes Claude's activation focus, this is where to wire it in.
 
+## v1.2 addendum — per-project memory + Claude joins the bus
+
+v1.1 left the inverse of the original bug in place: if the user was
+last typing in the shell in Project A and switched away and back,
+Claude's activation effect would still call `term.focus()` on
+re-entry and steal the cursor from where the user actually was. The
+rule "passive activation never focuses" was right; Claude's
+activation effect was the last violator.
+
+**v1.2 changes**:
+
+1. Remove `term.focus()` from Claude's activation effect
+   (`terminal-view.tsx:297-312`). Now every view's activation effect
+   only does refresh + delayed fit; none of them call focus.
+2. Claude joins the focus-bus. `terminal-view.tsx` registers in
+   `onMount` and unregisters in `onCleanup`, same shape as shell /
+   editor.
+3. All three views (Claude, shell, editor) attach a `focus` listener
+   on `term.textarea` that calls `recordTerminalFocus(ptyId)`. This
+   catches direct clicks on the xterm body (which focus the hidden
+   textarea natively), keeping `lastFocusedForProject` accurate even
+   when the bus's explicit `focusTerminal` isn't invoked.
+4. The focus-bus gains per-project memory:
+   - `registerTerminalFocus(id, projectPath, fn)` — registration now
+     takes `projectPath` so the bus can attribute focus to a project.
+   - `recordTerminalFocus(id)` — update the per-project memory
+     without calling focus (used by the textarea focus listener).
+   - `lastFocusedForProject(projectPath)` — read accessor.
+   - `unregisterTerminalFocus(id)` clears the per-project record if
+     the disappearing PTY held it.
+5. `App.tsx`'s project-switch effect now does, after picking
+   `nextActive` and calling `term.setActiveTab(nextActive)`:
+   ```
+   const target = lastFocusedForProject(p) ?? nextActive;
+   requestAnimationFrame(() => focusTerminal(target));
+   ```
+   `requestAnimationFrame` is required because focusing a textarea
+   inside `visibility: hidden` doesn't stick in WebKit; we need to
+   wait one frame for Solid's reactive visibility flip to land.
+6. `App.tsx` user-action Claude paths now also call `focusTerminal`:
+   - `openNewTab` after `term.openTab` resolves.
+   - `openResumeTab` (used by sidebar session-click).
+   - `handleSelectSession` when an existing tab is reused.
+   - `handleActivateTab` (tab-strip click).
+   - `maybeAutoResume` after the auto-resumed tab opens.
+
+Net effect: focus is **never** a side effect of a visibility flip.
+It is always triggered by either an explicit user action or the
+per-project memory restoration in the project-switch effect. Both
+sides of #40 (shell stealing from Claude, Claude stealing from
+shell) are closed by the same uniform rule.
+
+**Call-site matrix after v1.2**:
+
+| Trigger | Where focus call lives |
+| --- | --- |
+| Project switch in | `App.tsx` project-switch effect (rAF) |
+| Claude "+" | `App.tsx:openNewTab` |
+| Claude session-click | `App.tsx:handleSelectSession` / `openResumeTab` |
+| Claude tab click | `App.tsx:handleActivateTab` |
+| Claude auto-resume | `App.tsx:maybeAutoResume` (after `openTab`) |
+| Shell "+" | `shell-terminal-panel.tsx:handleNewTab` |
+| Shell tab click | `shell-terminal-panel.tsx:handleActivate` |
+| Editor open-in (new + existing) | `diff-panel.tsx:dispatchAppOpen` |
+| Editor tab click | `diff-panel.tsx:onActivate` |
+| Direct xterm body click | `term.textarea` focus listener → `recordTerminalFocus` (memory only) |
+
 **What still doesn't focus on purpose**:
 
-- Project switch back into a project (App.tsx:202-221).
-- Auto-resume of last session on project open.
 - Shell-panel auto-spawn of the first tab when the panel opens
-  (shell-terminal-panel.tsx:37-47) — the user opened the panel, but
-  if focus jumped immediately we'd race with whatever they were
-  doing before clicking the panel toggle.
+  (shell-terminal-panel.tsx:37-47). The user opened the panel; if
+  focus jumped immediately we'd race with whatever they were doing
+  before clicking the panel toggle.
+- No project active (sidebar empty / home screen).
 
 QA additions (on top of the original checklist):
 
@@ -159,6 +226,13 @@ QA additions (on top of the original checklist):
 - Editor tab strip click between two editor PTYs: focuses target.
 - Editor tab strip click on a file-preview tab: doesn't crash and
   doesn't steal focus (no-op — file preview is not a terminal).
+- **Inverse of #40**: Project A with Claude + shell open, last
+  interaction was in shell. Switch to B, switch back to A. Cursor
+  must land in the shell, not in Claude.
+- **First entry of a project** (this session): focus lands on the
+  active Claude tab.
+- **Close a shell tab, switch project, switch back**: Claude focuses
+  (memory cleared on unregister, falls back to active Claude tab).
 
 ## QA checklist
 

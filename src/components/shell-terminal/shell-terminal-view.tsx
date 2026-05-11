@@ -15,6 +15,7 @@ import {
   unregisterTerminalScroller,
 } from "@/lib/terminal-scroll-bus";
 import {
+  recordTerminalFocus,
   registerTerminalFocus,
   unregisterTerminalFocus,
 } from "@/lib/terminal-focus-bus";
@@ -180,13 +181,28 @@ export function ShellTerminalView(props: Props) {
       setIsScrolledUp(buf.viewportY < buf.baseY);
     });
     registerTerminalScroller(props.ptyId, scrollToBottom);
-    registerTerminalFocus(props.ptyId, () => {
-      try {
-        term?.focus();
-      } catch {
-        // ignore
-      }
-    });
+    const projectPath = ctx.getTab(props.ptyId)?.projectPath;
+    if (!projectPath) {
+      console.error(
+        `shell-terminal-view: no projectPath for ${props.ptyId}; focus-bus skipped`,
+      );
+    } else {
+      registerTerminalFocus(props.ptyId, projectPath, () => {
+        try {
+          term?.focus();
+        } catch {
+          // ignore
+        }
+      });
+      // Track focus moves driven by direct clicks on the xterm body (which
+      // focus the hidden textarea natively). Keeps lastFocusedForProject
+      // current even when the bus isn't called.
+      const onTextareaFocus = () => recordTerminalFocus(props.ptyId);
+      term.textarea?.addEventListener("focus", onTextareaFocus);
+      onCleanup(() => {
+        term?.textarea?.removeEventListener("focus", onTextareaFocus);
+      });
+    }
 
     detachData = ctx.onData(props.ptyId, (bytes) => {
       if (disposed) return;

@@ -11,6 +11,7 @@ import {
 import { useEditorPty } from "@/context/editor-pty";
 import { openUrlInSystemBrowser } from "@/lib/open-url";
 import {
+  recordTerminalFocus,
   registerTerminalFocus,
   unregisterTerminalFocus,
 } from "@/lib/terminal-focus-bus";
@@ -188,13 +189,25 @@ export function EditorPtyView(props: Props) {
     window.setTimeout(() => safeFit("onMount-220ms"), 220);
     window.setTimeout(() => safeFit("onMount-600ms"), 600);
 
-    registerTerminalFocus(props.ptyId, () => {
-      try {
-        term?.focus();
-      } catch {
-        // ignore
-      }
-    });
+    const projectPath = editorPty.getTab(props.ptyId)?.projectPath;
+    if (!projectPath) {
+      console.error(
+        `editor-pty-view: no projectPath for ${props.ptyId}; focus-bus skipped`,
+      );
+    } else {
+      registerTerminalFocus(props.ptyId, projectPath, () => {
+        try {
+          term?.focus();
+        } catch {
+          // ignore
+        }
+      });
+      const onTextareaFocus = () => recordTerminalFocus(props.ptyId);
+      term.textarea?.addEventListener("focus", onTextareaFocus);
+      onCleanup(() => {
+        term?.textarea?.removeEventListener("focus", onTextareaFocus);
+      });
+    }
 
     term.onData((data) => {
       void editorPty.write(props.ptyId, encoder.encode(data));
