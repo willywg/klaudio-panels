@@ -17,6 +17,11 @@ import {
   registerTerminalScroller,
   unregisterTerminalScroller,
 } from "@/lib/terminal-scroll-bus";
+import {
+  recordTerminalFocus,
+  registerTerminalFocus,
+  unregisterTerminalFocus,
+} from "@/lib/terminal-focus-bus";
 import { ScrollToBottomButton } from "@/components/scroll-to-bottom-button";
 
 const THEME = {
@@ -229,6 +234,29 @@ export function TerminalView(props: Props) {
       setIsScrolledUp(buf.viewportY < buf.baseY);
     });
     registerTerminalScroller(props.id, scrollToBottom);
+    // Bail on focus-bus registration if the tab isn't in the store yet —
+    // that would indicate a real invariant violation (parent renders the
+    // view by iterating the store), and registering under "" would
+    // cross-contaminate per-project memory across projects.
+    const projectPath = ctx.getTab(props.id)?.projectPath;
+    if (!projectPath) {
+      console.error(
+        `terminal-view: no projectPath for ${props.id}; focus-bus skipped`,
+      );
+    } else {
+      registerTerminalFocus(props.id, projectPath, () => {
+        try {
+          term?.focus();
+        } catch {
+          // ignore
+        }
+      });
+      const onTextareaFocus = () => recordTerminalFocus(props.id);
+      term.textarea?.addEventListener("focus", onTextareaFocus);
+      onCleanup(() => {
+        term?.textarea?.removeEventListener("focus", onTextareaFocus);
+      });
+    }
 
     detachData = ctx.onData(props.id, (bytes) => {
       term?.write(bytes);
@@ -294,12 +322,17 @@ export function TerminalView(props: Props) {
   //      and occasionally leaking the welcome banner from the previous-
   //      screen scrollback. One late fit keeps the eventual size correct
   //      while limiting Claude to at most one re-paint. See PRP 016 / #38.
+  //
+  // Intentionally NOT calling term.focus() here: project re-entry is a
+  // passive activation, not a user action. App.tsx's project-switch effect
+  // calls focusTerminal(lastFocusedForProject(p) ?? activeClaudeId) once,
+  // so the surface the user was actually using last in this project takes
+  // the cursor — Claude, shell, or editor PTY. See PRP 017 v1.2 / #40.
   createEffect(() => {
     if (!props.active) return;
 
     try {
       if (term) term.refresh(0, term.rows - 1);
-      term?.focus();
     } catch {
       // refresh failures shouldn't block the activation flow.
     }
@@ -319,6 +352,7 @@ export function TerminalView(props: Props) {
     linkDisposable?.dispose();
     scrollDisposable?.dispose();
     unregisterTerminalScroller(props.id);
+    unregisterTerminalFocus(props.id);
     term?.dispose();
     // NOTE: intentionally NOT calling ctx.closeTab here — unmounting the view
     // (e.g. changing project) is separate from killing the PTY. The shell owns

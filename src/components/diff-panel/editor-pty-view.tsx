@@ -10,6 +10,11 @@ import {
 } from "@tauri-apps/plugin-clipboard-manager";
 import { useEditorPty } from "@/context/editor-pty";
 import { openUrlInSystemBrowser } from "@/lib/open-url";
+import {
+  recordTerminalFocus,
+  registerTerminalFocus,
+  unregisterTerminalFocus,
+} from "@/lib/terminal-focus-bus";
 
 const THEME = {
   background: "#0b0b0c",
@@ -184,6 +189,26 @@ export function EditorPtyView(props: Props) {
     window.setTimeout(() => safeFit("onMount-220ms"), 220);
     window.setTimeout(() => safeFit("onMount-600ms"), 600);
 
+    const projectPath = editorPty.getTab(props.ptyId)?.projectPath;
+    if (!projectPath) {
+      console.error(
+        `editor-pty-view: no projectPath for ${props.ptyId}; focus-bus skipped`,
+      );
+    } else {
+      registerTerminalFocus(props.ptyId, projectPath, () => {
+        try {
+          term?.focus();
+        } catch {
+          // ignore
+        }
+      });
+      const onTextareaFocus = () => recordTerminalFocus(props.ptyId);
+      term.textarea?.addEventListener("focus", onTextareaFocus);
+      onCleanup(() => {
+        term?.textarea?.removeEventListener("focus", onTextareaFocus);
+      });
+    }
+
     term.onData((data) => {
       void editorPty.write(props.ptyId, encoder.encode(data));
     });
@@ -256,8 +281,12 @@ export function EditorPtyView(props: Props) {
     resizeObs.observe(container!);
   });
 
-  // WebGL canvas stops painting while `visibility: hidden` — same pattern as
-  // terminal-view.tsx: fit + refresh + focus on re-show.
+  // WebGL canvas stops painting while `visibility: hidden` — fit + refresh
+  // on re-show. Intentionally NOT calling term.focus() here for the same
+  // reason as shell-terminal-view: on project re-entry the editor PTY's
+  // active flag flips alongside Claude's, and a focus call here would race
+  // with Claude's. xterm's canvas click handler still focuses on direct
+  // clicks. See PRP 017 / #40.
   createEffect(() => {
     if (!props.active) return;
     requestAnimationFrame(() => {
@@ -265,7 +294,6 @@ export function EditorPtyView(props: Props) {
       safeFit("active-change");
       try {
         if (term) term.refresh(0, term.rows - 1);
-        term?.focus();
       } catch {
         // ignore
       }
@@ -283,6 +311,7 @@ export function EditorPtyView(props: Props) {
 
   onCleanup(() => {
     disposed = true;
+    unregisterTerminalFocus(props.ptyId);
     resizeObs?.disconnect();
     if (fitDebounce) window.clearTimeout(fitDebounce);
     detachData?.();
