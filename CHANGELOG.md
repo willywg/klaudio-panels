@@ -4,6 +4,37 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.6.3] — 2026-05-11
+
+### Fixed
+- **Terminal focus race on project switch — both directions**
+  ([#40](https://github.com/willywg/klaudio-panels/issues/40)). On
+  project re-entry every visible panel's selected tab flipped
+  `active=true` simultaneously, and each terminal view's activation
+  effect called `term.focus()`. The last one to run owned the
+  cursor: keystrokes intended for Claude went to whatever was
+  running in the shell (including `npm run dev`) or vice-versa.
+
+  Replaced with a single rule across all three terminal surfaces
+  (Claude, shell, editor PTY): **focus is only triggered by an
+  explicit user action or by per-project memory restoration on
+  project switch. Visibility flips never decide focus.** A new
+  module `src/lib/terminal-focus-bus.ts` (sibling of
+  `terminal-scroll-bus`) holds a registry of focus callbacks keyed
+  by PTY id plus `lastFocusedForProject` — updated by user-action
+  handlers (Claude `+` / session-click / tab-click / auto-resume,
+  shell `+` / tab-click, editor `Open in` / tab-click) and by a
+  `focus` listener on each `term.textarea` that catches direct
+  clicks on the xterm body. `App.tsx`'s project-switch effect
+  calls `focusTerminal(lastFocusedForProject(p) ?? activeClaudeTab)`
+  inside a `requestAnimationFrame` so the cursor lands in whichever
+  terminal the user was last using in that project.
+
+### Tracked work
+- PRP: [`PRPs/017--fix-focus-steal-on-project-switch.md`](PRPs/017--fix-focus-steal-on-project-switch.md)
+- PR: [#41](https://github.com/willywg/klaudio-panels/pull/41)
+- Issue: [#40](https://github.com/willywg/klaudio-panels/issues/40)
+
 ## [1.6.2] — 2026-05-03
 
 ### Fixed
