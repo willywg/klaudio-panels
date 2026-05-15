@@ -5,6 +5,7 @@ import {
   FileText,
   FolderOpen,
   GitBranch,
+  Pencil,
   RotateCw,
   Terminal as TerminalIcon,
   X,
@@ -13,15 +14,18 @@ import {
 } from "lucide-solid";
 import { createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
 import { useDiffPanel, tabKey, type PanelTab } from "@/context/diff-panel";
+import { useEditBuffers } from "@/context/edit-buffers";
 import { useGit } from "@/context/git";
 import { useOpenIn } from "@/context/open-in";
 import { useEditorPty } from "@/context/editor-pty";
 import { ContextMenu, type ContextMenuItem } from "@/components/context-menu";
 import { createInternalDrag } from "@/lib/use-internal-drag";
 import { focusTerminal } from "@/lib/terminal-focus-bus";
+import { looksBinaryByExtension } from "@/lib/cm-language";
 import { DiffFileRow } from "./diff-file-row";
 import { FilePreview } from "./file-preview";
 import { EditorPtyView } from "./editor-pty-view";
+import { EditorTab } from "./editor-tab";
 
 type Props = {
   projectPath: string;
@@ -78,7 +82,34 @@ export function DiffPanel(props: Props) {
                 <EditorPtyView
                   ptyId={t.ptyId}
                   active={isActive()}
-                  onExit={() => panel.closeTab(props.projectPath, key)}
+                  onExit={() => void panel.closeTab(props.projectPath, key)}
+                />
+              </div>
+            );
+          }}
+        </For>
+        {/* Same visibility-toggle pattern for inline edit tabs: the
+            CodeMirror EditorView is single-instance per tab. Re-mounting on
+            switch would lose the undo stack and scroll position, so we keep
+            it alive and just hide it. */}
+        <For each={tabs().filter((t) => t.kind === "edit")}>
+          {(t) => {
+            if (t.kind !== "edit") return null;
+            const key = tabKey(t);
+            const isActive = () => key === activeKey();
+            return (
+              <div
+                class="absolute inset-0 flex flex-col"
+                style={{
+                  visibility: isActive() ? "visible" : "hidden",
+                  "pointer-events": isActive() ? "auto" : "none",
+                  "z-index": isActive() ? 2 : 0,
+                }}
+              >
+                <EditorTab
+                  projectPath={props.projectPath}
+                  relPath={t.path}
+                  active={isActive()}
                 />
               </div>
             );
@@ -209,7 +240,7 @@ function TabStrip(props: { projectPath: string }) {
         y: number;
         key: string;
         rel: string;
-        tabKind: "file" | "editor";
+        tabKind: "file" | "editor" | "edit";
         ptyId?: string;
       }
   >({ open: false });
@@ -218,7 +249,7 @@ function TabStrip(props: { projectPath: string }) {
     e: MouseEvent,
     key: string,
     rel: string,
-    tabKind: "file" | "editor",
+    tabKind: "file" | "editor" | "edit",
     ptyId?: string,
   ) {
     e.preventDefault();
@@ -302,17 +333,25 @@ function TabStrip(props: { projectPath: string }) {
     items.push({
       label: "Close tab",
       icon: X,
-      onClick: () => panel.closeTab(props.projectPath, m.key),
+      onClick: () => void panel.closeTab(props.projectPath, m.key),
     });
     items.push({
       label: "Close other tabs",
       icon: XCircle,
       onClick: () => {
-        for (const t of panel.tabsFor(props.projectPath)) {
-          const k = tabKey(t);
-          if (k === m.key || k === "diff") continue;
-          panel.closeTab(props.projectPath, k);
-        }
+        // Close in series so each guard's prompt resolves before the next
+        // tab is touched. Without await each call would race against the
+        // dialog. The IIFE keeps the menu's onClick signature sync.
+        void (async () => {
+          const keys = panel
+            .tabsFor(props.projectPath)
+            .map((t) => tabKey(t))
+            .filter((k) => k !== m.key && k !== "diff");
+          for (const k of keys) {
+            // eslint-disable-next-line no-await-in-loop
+            await panel.closeTab(props.projectPath, k);
+          }
+        })();
       },
     });
 
@@ -333,6 +372,22 @@ function TabStrip(props: { projectPath: string }) {
     }
 
     items.push({ kind: "divider" });
+
+    // Preview → inline editor. Same gating as the file-tree's "Edit"
+    // entry (PRP 019): obvious binaries are disabled by extension; the
+    // Rust read path is still the authoritative reject for non-UTF-8
+    // and >1 MiB.
+    if (m.tabKind === "file") {
+      items.push({
+        label: "Edit this file",
+        icon: Pencil,
+        disabled: looksBinaryByExtension(m.rel),
+        onClick: () => {
+          panel.openEdit(props.projectPath, m.rel);
+          panel.openPanel(props.projectPath);
+        },
+      });
+    }
 
     const defaultEditor = openIn.defaultEditorId();
     const apps: ContextMenuItem[] = openIn.availableApps().map((app) => ({
@@ -372,15 +427,17 @@ function TabStrip(props: { projectPath: string }) {
                 onActivate={() => {
                   panel.setActiveTab(props.projectPath, key);
                   // User-action focus only for editor PTY tabs; file
-                  // preview tabs aren't xterm-hosting surfaces.
+                  // preview and inline-edit tabs aren't xterm-hosting surfaces.
                   if (t.kind === "editor") focusTerminal(t.ptyId);
                 }}
-                onClose={() => panel.closeTab(props.projectPath, key)}
+                onClose={() => void panel.closeTab(props.projectPath, key)}
                 onContextMenu={(e) => {
                   if (t.kind === "file") {
                     openMenu(e, key, t.path, "file");
                   } else if (t.kind === "editor") {
                     openMenu(e, key, t.path, "editor", t.ptyId);
+                  } else if (t.kind === "edit") {
+                    openMenu(e, key, t.path, "edit");
                   }
                 }}
               />
@@ -416,18 +473,24 @@ function TabItem(props: {
   tab: PanelTab;
   /** Project path used to resolve the tab's project-relative `path` to an
    *  absolute path for the drag publisher (and for downstream @rel
-   *  conversion in `buildDropPayload`). */
+   *  conversion in `buildDropPayload`). Also lets us look up the edit
+   *  buffer's dirty state for the unsaved-changes badge. */
   projectPath: string;
   active: boolean;
   onActivate: () => void;
   onClose: () => void;
   onContextMenu?: (e: MouseEvent) => void;
 }) {
+  const buffers = useEditBuffers();
   const label = () => {
     if (props.tab.kind === "diff") return "Git changes";
     if (props.tab.kind === "file") return basename(props.tab.path);
+    if (props.tab.kind === "edit") return basename(props.tab.path);
     return `${props.tab.editorId} ${basename(props.tab.path)}`;
   };
+  const isDirty = () =>
+    props.tab.kind === "edit" &&
+    buffers.dirty(props.projectPath, props.tab.path);
 
   // Drag publisher: file/editor tabs carry a `rel` path; the diff tab does
   // not and returns null so the drag never starts on it. Absolute path is
@@ -476,11 +539,23 @@ function TabItem(props: {
         <Match when={props.tab.kind === "editor"}>
           <TerminalIcon size={12} strokeWidth={1.75} class="shrink-0 text-emerald-400" />
         </Match>
+        <Match when={props.tab.kind === "edit"}>
+          <Pencil size={12} strokeWidth={1.75} class="shrink-0 text-indigo-400" />
+        </Match>
       </Switch>
+      <Show when={isDirty()}>
+        <span
+          class="shrink-0 text-indigo-400 leading-none"
+          title="Unsaved changes"
+        >
+          •
+        </span>
+      </Show>
       <span class="truncate max-w-[180px]">{label()}</span>
       <Show when={props.tab.kind !== "diff"}>
         <button
           class="w-4 h-4 rounded-sm flex items-center justify-center text-neutral-500 hover:bg-neutral-700 hover:text-neutral-100 transition opacity-0 group-hover:opacity-100"
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation();
             props.onClose();

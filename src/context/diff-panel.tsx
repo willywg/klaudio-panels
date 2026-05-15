@@ -26,13 +26,21 @@ export type PanelTab =
       path: string;
       ptyId: string;
       openedAt: number;
-    };
+    }
+  | { kind: "edit"; path: string; openedAt: number };
 
 export function tabKey(t: PanelTab): string {
   if (t.kind === "diff") return "diff";
   if (t.kind === "file") return `file:${t.path}`;
+  if (t.kind === "edit") return `edit:${t.path}`;
   return `editor:${t.editorId}:${t.path}`;
 }
+
+/** Async, cancellable close decision. EditorTab registers one of these so it
+ *  can show a "Save / Discard / Cancel" prompt before the tab is spliced.
+ *  Returning "keep" aborts the close. Without a registered guard, closeTab
+ *  proceeds immediately as before. */
+export type CloseGuard = (tab: PanelTab) => Promise<"close" | "keep">;
 
 type ProjectPanelState = {
   tabs: PanelTab[];
@@ -132,9 +140,9 @@ function makeDiffPanelContext() {
     reveal.request(projectPath, rel);
   }
 
-  /** Callers may register a disposer (e.g. editor-pty kill) to run whenever
-   *  a tab is about to be spliced. The splice itself stays synchronous; the
-   *  side effect fires fire-and-forget. */
+  /** Fire-and-forget hook (e.g. editor-pty SIGHUP). Runs AFTER the close
+   *  guard resolves "close", and BEFORE the tab is spliced from state.
+   *  Cannot cancel — use registerCloseGuard for that. */
   type CloseHook = (tab: PanelTab) => void;
   const closeHooks = new Set<CloseHook>();
 
@@ -143,13 +151,18 @@ function makeDiffPanelContext() {
     return () => closeHooks.delete(hook);
   }
 
-  function closeTab(projectPath: string, key: string) {
-    ensureProject(projectPath);
-    if (key === "diff") return;
-    const tab = panels[projectPath].tabs.find((t) => tabKey(t) === key);
-    if (tab) {
-      for (const h of closeHooks) h(tab);
-    }
+  /** Cancellable close guards keyed by tabKey. The EditorTab registers one
+   *  on mount, unregisters on cleanup. */
+  const closeGuards = new Map<string, CloseGuard>();
+
+  function registerCloseGuard(key: string, guard: CloseGuard): () => void {
+    closeGuards.set(key, guard);
+    return () => {
+      if (closeGuards.get(key) === guard) closeGuards.delete(key);
+    };
+  }
+
+  function spliceTab(projectPath: string, key: string) {
     setPanels(
       projectPath,
       produce((state: ProjectPanelState) => {
@@ -164,20 +177,88 @@ function makeDiffPanelContext() {
     );
   }
 
-  function closeActiveTab(projectPath: string) {
+  /** Returns `{ kept: true }` when a registered guard cancelled the close,
+   *  `{ kept: false }` when the tab was successfully spliced (or was a no-op
+   *  for the protected "diff" tab / a missing key). */
+  async function closeTab(
+    projectPath: string,
+    key: string,
+  ): Promise<{ kept: boolean }> {
     ensureProject(projectPath);
-    const key = panels[projectPath].activeKey;
-    if (key !== "diff") closeTab(projectPath, key);
+    if (key === "diff") return { kept: false };
+    const tab = panels[projectPath].tabs.find((t) => tabKey(t) === key);
+    if (!tab) return { kept: false };
+    const guard = closeGuards.get(key);
+    if (guard) {
+      const decision = await guard(tab);
+      if (decision === "keep") return { kept: true };
+    }
+    for (const h of closeHooks) h(tab);
+    spliceTab(projectPath, key);
+    return { kept: false };
   }
 
-  function clearProject(projectPath: string) {
+  async function closeActiveTab(
+    projectPath: string,
+  ): Promise<{ kept: boolean }> {
+    ensureProject(projectPath);
+    const key = panels[projectPath].activeKey;
+    if (key === "diff") return { kept: false };
+    return closeTab(projectPath, key);
+  }
+
+  /** Clears every closable tab in the project, awaiting each guard in
+   *  sequence. Returns the count of tabs the user opted to keep — callers
+   *  use this to abort their own teardown (e.g. project close). When `kept`
+   *  is non-zero the kept tabs remain in their original order; everything
+   *  else has been spliced out. */
+  async function clearProject(
+    projectPath: string,
+  ): Promise<{ kept: number }> {
     const existing = panels[projectPath];
-    if (existing) {
-      for (const t of existing.tabs) {
-        for (const h of closeHooks) h(t);
-      }
+    if (!existing) {
+      setPanels(projectPath, freshState());
+      return { kept: 0 };
     }
-    setPanels(projectPath, freshState());
+    const keys = existing.tabs
+      .map((t) => tabKey(t))
+      .filter((k) => k !== "diff");
+    let kept = 0;
+    for (const key of keys) {
+      // eslint-disable-next-line no-await-in-loop
+      const r = await closeTab(projectPath, key);
+      if (r.kept) kept += 1;
+    }
+    if (kept === 0) {
+      // All tabs gone — reset to a fresh diff-only state. (closeTab already
+      // spliced them; this is just the activeKey reset.)
+      setPanels(projectPath, freshState());
+    }
+    return { kept };
+  }
+
+  function findEditTabKey(projectPath: string, path: string): string | null {
+    ensureProject(projectPath);
+    const key = `edit:${path}`;
+    return panels[projectPath].tabs.some((t) => tabKey(t) === key) ? key : null;
+  }
+
+  function openEdit(projectPath: string, rel: string) {
+    ensureProject(projectPath);
+    const key = `edit:${rel}`;
+    const existing = panels[projectPath].tabs.find((t) => tabKey(t) === key);
+    if (!existing) {
+      setPanels(
+        projectPath,
+        produce((state: ProjectPanelState) => {
+          state.tabs.push({ kind: "edit", path: rel, openedAt: Date.now() });
+          state.activeKey = key;
+        }),
+      );
+    } else {
+      setPanels(projectPath, "activeKey", key);
+    }
+    if (!isOpen(projectPath)) writeOpen(projectPath, true);
   }
 
   /** Look up an existing editor tab for `(editorId, path)`. Used to dedup
@@ -314,7 +395,10 @@ function makeDiffPanelContext() {
     clearProject,
     findEditorTabKey,
     addEditorTab,
+    openEdit,
+    findEditTabKey,
     onBeforeClose,
+    registerCloseGuard,
   };
 }
 
