@@ -152,6 +152,14 @@ export function TerminalView(props: Props) {
       // flips to raw mode. Claude doesn't actually need these pings, so
       // we just never forward them.
       if (data === "\x1b[I" || data === "\x1b[O") return;
+      // Real keystroke / paste — the user is attending this tab, so clear
+      // any pending "needs attention" pulse. clearTabAttention has an
+      // early-return when the flag is already false, so this is cheap on
+      // the hot path (PRP 018 §1). Belt-and-suspenders next to the clear
+      // in App.tsx:handleActivateTab — covers the race where the flag is
+      // raised AFTER the tab is already active (window was blurred when
+      // the event fired, focus returns, user types).
+      ctx.clearTabAttention(props.id);
       void ctx.write(props.id, encoder.encode(data));
     });
     term.onResize(({ cols, rows }) => {

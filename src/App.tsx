@@ -198,6 +198,24 @@ function Shell() {
       return best;
     },
     activateProject: (projectPath) => setActiveProjectPath(projectPath),
+    /// Toast / bell click with a known origin tab. Two paths:
+    ///   - Same project: switch tab + focus + clear pulse directly.
+    ///   - Different project: pre-mark activeByProject so the project-
+    ///     switch effect picks this tab as `nextActive`, then trigger
+    ///     the switch. The effect handles focus via lastFocusedForProject
+    ///     memory, which is fine — if the user was last in shell/editor
+    ///     for that project, focus follows them there; the target tab
+    ///     is still visible and its pulse is cleared.
+    activateTab: (projectPath, tabId) => {
+      term.clearTabAttention(tabId);
+      if (activeProjectPath() === projectPath) {
+        term.setActiveTab(tabId);
+        focusTerminal(tabId);
+      } else {
+        activeByProject.set(projectPath, tabId);
+        setActiveProjectPath(projectPath);
+      }
+    },
   });
 
   // On active project change, pick the right tab to show (remembered > first
@@ -602,6 +620,11 @@ function Shell() {
       (t) => t.projectPath === p && t.sessionId === meta.id,
     );
     if (existing) {
+      // User-action tab activation clears the "needs attention" pulse.
+      // Project-switch effect's setActiveTab call (App.tsx ~228) must
+      // NOT clear, which is why the clear lives at the call site, not
+      // inside term.setActiveTab. See PRP 018 §4.
+      term.clearTabAttention(existing.id);
       term.setActiveTab(existing.id);
       focusTerminal(existing.id);
       return;
@@ -610,6 +633,7 @@ function Shell() {
   }
 
   function handleActivateTab(id: string) {
+    term.clearTabAttention(id);
     term.setActiveTab(id);
     focusTerminal(id);
   }
