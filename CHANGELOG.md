@@ -4,6 +4,43 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.6.4] — 2026-05-15
+
+### Added
+- **Per-tab "needs attention" indicator**
+  ([#42](https://github.com/willywg/klaudio-panels/issues/42)). When a
+  project has more than one Claude tab and one of them fires a
+  notification (`session:complete` or warp `permission_request`) while
+  you're looking at a different tab, the tab strip now pulses amber
+  on the offending tab. The project ring + bell + toast already said
+  "this project needs you"; the amber dot closes the missing
+  per-tab cue ("which tab needs me"). Single-tab projects suppress
+  the pulse (no ambiguity). Pulse clears on tab activation, on user
+  typing (covers the race where the flag fires on an already-active
+  tab), and on tab close. Project switch deliberately does NOT
+  clear — too coarse for a per-tab signal.
+
+  The same payload threading lets the **toast and bell entries
+  route to the originating tab**, not just the project. Clicking a
+  toast that says "Project A · Claude is done" now lands you on the
+  exact tab Claude finished in, regardless of which tab was active
+  before. Cross-project clicks pre-mark `activeByProject` so the
+  existing project-switch effect picks the target tab as the
+  `nextActive`. Null-sessionId `permission_request` events (older
+  warp builds <0.3.0) gracefully degrade — toast still appears,
+  click activates the project without preselecting a tab, and no
+  per-tab pulse is raised (a wrong-tab pulse would be worse than
+  none).
+
+  Respects existing per-channel kill switches
+  (`notifySessionComplete`, `notifyPermission`): disabling a channel
+  suppresses both the toast and the pulse.
+
+### Tracked work
+- PRP: [`PRPs/018--tab-needs-attention-indicator.md`](PRPs/018--tab-needs-attention-indicator.md)
+- PR: [#43](https://github.com/willywg/klaudio-panels/pull/43)
+- Issue: [#42](https://github.com/willywg/klaudio-panels/issues/42)
+
 ## [1.6.3] — 2026-05-11
 
 ### Fixed
