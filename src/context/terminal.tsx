@@ -21,6 +21,12 @@ export type TerminalTab = {
   /** epoch ms when the PTY was requested; used by the session watcher to
    *  correlate "new" tabs with their JSONL once Claude writes one. */
   spawnedAt: number;
+  /** True when this tab fired a notification while the user was looking
+   *  elsewhere. Drives the amber pulse in the tab strip. Cleared by
+   *  user-action tab activation (tab-strip click, sidebar/palette select)
+   *  or by xterm onData (the user is typing here). Project-switch does
+   *  NOT clear — see PRP 018 §4. */
+  needsAttention: boolean;
 };
 
 type TerminalStore = {
@@ -106,6 +112,7 @@ export function makeTerminalContext() {
       exitCode: null,
       error: null,
       spawnedAt: Date.now(),
+      needsAttention: false,
     };
     setStore(
       produce((s) => {
@@ -267,6 +274,22 @@ export function makeTerminalContext() {
     );
   }
 
+  // Early-return is load-bearing: clearTabAttention runs on every xterm
+  // keystroke via terminal-view.tsx's onData hook. Without the guard
+  // Solid's reactive graph dirties on every char, dragging dependent
+  // memos (tab-strip dot class, etc.) with it.
+  function markTabNeedsAttention(id: string) {
+    const tab = store.tabs.find((t) => t.id === id);
+    if (!tab || tab.needsAttention) return;
+    setStore("tabs", (t) => t.id === id, "needsAttention", true);
+  }
+
+  function clearTabAttention(id: string) {
+    const tab = store.tabs.find((t) => t.id === id);
+    if (!tab || !tab.needsAttention) return;
+    setStore("tabs", (t) => t.id === id, "needsAttention", false);
+  }
+
   onCleanup(() => {
     void closeAll();
   });
@@ -285,6 +308,8 @@ export function makeTerminalContext() {
     findTabBySessionId,
     promoteTab,
     setTabLabel,
+    markTabNeedsAttention,
+    clearTabAttention,
   };
 }
 

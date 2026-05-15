@@ -58,7 +58,7 @@ export function NotificationBell() {
   });
 
   function handleItemClick(item: UnreadItem) {
-    notifications.activateProjectFromBell(item.projectPath);
+    notifications.activateProjectFromBell(item.projectPath, item.tabId);
     setOpen(false);
   }
 
