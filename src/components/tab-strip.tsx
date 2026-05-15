@@ -11,8 +11,12 @@ type Props = {
   canOpenNew: boolean;
 };
 
-function statusDotClass(status: TerminalTab["status"]): string {
-  switch (status) {
+function statusDotClass(tab: TerminalTab): string {
+  // needsAttention wins over the PTY status colour — a tab that's
+  // running normally AND just fired a notification should pulse amber,
+  // not stay green. Cleared by activation / typing / close (PRP 018 §4).
+  if (tab.needsAttention) return "bg-amber-400 animate-pulse";
+  switch (tab.status) {
     case "opening":
       return "bg-indigo-400 animate-pulse";
     case "running":
@@ -44,7 +48,7 @@ export function TabStrip(props: Props) {
               <span
                 class={
                   "inline-block w-1.5 h-1.5 rounded-full shrink-0 " +
-                  statusDotClass(tab.status)
+                  statusDotClass(tab)
                 }
               />
               <span class="truncate flex-1">{tab.label}</span>

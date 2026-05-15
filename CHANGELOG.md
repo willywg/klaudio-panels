@@ -4,6 +4,150 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.6.4] — 2026-05-15
+
+### Added
+- **Per-tab "needs attention" indicator**
+  ([#42](https://github.com/willywg/klaudio-panels/issues/42)). When a
+  project has more than one Claude tab and one of them fires a
+  notification (`session:complete` or warp `permission_request`) while
+  you're looking at a different tab, the tab strip now pulses amber
+  on the offending tab. The project ring + bell + toast already said
+  "this project needs you"; the amber dot closes the missing
+  per-tab cue ("which tab needs me"). Single-tab projects suppress
+  the pulse (no ambiguity). Pulse clears on tab activation, on user
+  typing (covers the race where the flag fires on an already-active
+  tab), and on tab close. Project switch deliberately does NOT
+  clear — too coarse for a per-tab signal.
+
+  The same payload threading lets the **toast and bell entries
+  route to the originating tab**, not just the project. Clicking a
+  toast that says "Project A · Claude is done" now lands you on the
+  exact tab Claude finished in, regardless of which tab was active
+  before. Cross-project clicks pre-mark `activeByProject` so the
+  existing project-switch effect picks the target tab as the
+  `nextActive`. Null-sessionId `permission_request` events (older
+  warp builds <0.3.0) gracefully degrade — toast still appears,
+  click activates the project without preselecting a tab, and no
+  per-tab pulse is raised (a wrong-tab pulse would be worse than
+  none).
+
+  Respects existing per-channel kill switches
+  (`notifySessionComplete`, `notifyPermission`): disabling a channel
+  suppresses both the toast and the pulse.
+
+### Tracked work
+- PRP: [`PRPs/018--tab-needs-attention-indicator.md`](PRPs/018--tab-needs-attention-indicator.md)
+- PR: [#43](https://github.com/willywg/klaudio-panels/pull/43)
+- Issue: [#42](https://github.com/willywg/klaudio-panels/issues/42)
+
+## [1.6.3] — 2026-05-11
+
+### Fixed
+- **Terminal focus race on project switch — both directions**
+  ([#40](https://github.com/willywg/klaudio-panels/issues/40)). On
+  project re-entry every visible panel's selected tab flipped
+  `active=true` simultaneously, and each terminal view's activation
+  effect called `term.focus()`. The last one to run owned the
+  cursor: keystrokes intended for Claude went to whatever was
+  running in the shell (including `npm run dev`) or vice-versa.
+
+  Replaced with a single rule across all three terminal surfaces
+  (Claude, shell, editor PTY): **focus is only triggered by an
+  explicit user action or by per-project memory restoration on
+  project switch. Visibility flips never decide focus.** A new
+  module `src/lib/terminal-focus-bus.ts` (sibling of
+  `terminal-scroll-bus`) holds a registry of focus callbacks keyed
+  by PTY id plus `lastFocusedForProject` — updated by user-action
+  handlers (Claude `+` / session-click / tab-click / auto-resume,
+  shell `+` / tab-click, editor `Open in` / tab-click) and by a
+  `focus` listener on each `term.textarea` that catches direct
+  clicks on the xterm body. `App.tsx`'s project-switch effect
+  calls `focusTerminal(lastFocusedForProject(p) ?? activeClaudeTab)`
+  inside a `requestAnimationFrame` so the cursor lands in whichever
+  terminal the user was last using in that project.
+
+### Tracked work
+- PRP: [`PRPs/017--fix-focus-steal-on-project-switch.md`](PRPs/017--fix-focus-steal-on-project-switch.md)
+- PR: [#41](https://github.com/willywg/klaudio-panels/pull/41)
+- Issue: [#40](https://github.com/willywg/klaudio-panels/issues/40)
+
+## [1.6.2] — 2026-05-03
+
+### Fixed
+- **Terminal scroll drift + welcome banner re-appearing on project
+  switch** ([#38](https://github.com/willywg/klaudio-panels/issues/38)).
+  The activation effect ran three fits at rAF + 180ms + 500ms (plus
+  two `term.refresh()` calls). FitAddon already short-circuits no-op
+  fits internally, so on a settled layout the stages were harmless —
+  but on a project switch the outer layout reflows asynchronously
+  (per-project sidebar width, panelLayout memo, diff panel
+  auto-show/hide). Each stage caught a different intermediate width,
+  each one passed FitAddon's dimensions-changed guard, each one fired
+  a real SIGWINCH and forced Claude to redraw the alt-screen. Three
+  SIGWINCHes within 500ms confused xterm's buffer state: scroll
+  drifted upward (wrapped-line reflow shifted `viewportY`), and in
+  worse cases the previous-screen scrollback (which holds Claude's
+  startup banner) leaked through the alt-screen mid-stream.
+
+  Replaced with one immediate `term.refresh()` (handles the WebGL
+  stops-painting-while-hidden case when fit ends up being a no-op)
+  plus one `safeFit` at 250ms, after the layout has settled. Claude
+  now receives at most one SIGWINCH per activation.
+
+### Tracked work
+- PRP: [`PRPs/016--terminal-activation-resize.md`](PRPs/016--terminal-activation-resize.md)
+- PR: [#39](https://github.com/willywg/klaudio-panels/pull/39)
+- Issue: [#38](https://github.com/willywg/klaudio-panels/issues/38)
+
+## [1.6.1] — 2026-05-02
+
+### Fixed
+- **Notification spam from `session:complete` is now opt-out, not
+  forced** ([#36](https://github.com/willywg/klaudio-panels/issues/36)).
+  The JSONL watcher emits `session:complete` once per Claude
+  `end_turn`, and Claude reaches `end_turn` after every tool-free
+  reply — which means the bell flooded with "Claude is done" entries
+  during long agentic loops. Affects everyone, not just users without
+  the warp plugin. A community user hit it almost immediately on
+  v1.6.0.
+
+### Added
+- **Per-channel notification kill switch.** Bell → ⚙️ Settings panel
+  with three independent toggles, persisted in `localStorage`:
+  - **Task complete** — gates `session:complete` (the noisy one).
+  - **Permission requests** — gates `permission_request` from the
+    warp plugin.
+  - **Sounds** — gates both chimes; toasts/banners/bell still appear.
+
+  Toggles default ON to preserve v1.6.0 behavior. Disabling a channel
+  short-circuits at the entry point: zero side effects (no toast, no
+  bell entry, no banner, no chime, no amber ring).
+
+- **Plugin-aware Permission row.** The Permission toggle is
+  auto-disabled and visually OFF when the warp/claude-code-warp
+  plugin isn't installed (no events would arrive anyway). Helper text
+  swaps for an **Install →** link that opens the README anchor in the
+  system browser. The persisted pref is preserved through the
+  disabled/enabled transition — install the plugin and the row
+  activates with the user's last saved choice.
+
+  Detection runs through a new `is_warp_plugin_installed` Tauri
+  command that reads `~/.claude/plugins/installed_plugins.json`. State
+  refreshes on every settings-view open, so installing the plugin
+  without restarting Klaudio works.
+
+### Changed
+- **README**: bumped the warp plugin recommendation to the top of the
+  Notifications section since `permission_request` is the higher-
+  signal channel. Built-in transcript-watcher path now framed as the
+  fallback for users who can't install the plugin.
+
+### Tracked work
+- PRP: [`PRPs/015--notification-preferences.md`](PRPs/015--notification-preferences.md)
+- PR: [#37](https://github.com/willywg/klaudio-panels/pull/37)
+- Issue: [#36](https://github.com/willywg/klaudio-panels/issues/36)
+
 ## [1.6.0] — 2026-04-30
 
 ### Added

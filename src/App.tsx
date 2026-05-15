@@ -66,6 +66,10 @@ import {
 import { ShellTerminalPanel } from "@/components/shell-terminal/shell-terminal-panel";
 import { Toaster } from "@/components/toaster";
 import { requestScrollToBottom } from "@/lib/terminal-scroll-bus";
+import {
+  focusTerminal,
+  lastFocusedForProject,
+} from "@/lib/terminal-focus-bus";
 import { displayLabel } from "@/lib/session-label";
 
 const AUTO_RESUME_FAIL_WINDOW_MS = 2000;
@@ -196,11 +200,37 @@ function Shell() {
       return best;
     },
     activateProject: (projectPath) => setActiveProjectPath(projectPath),
+    /// Toast / bell click with a known origin tab. Two paths:
+    ///   - Same project: switch tab + focus + clear pulse directly.
+    ///   - Different project: pre-mark activeByProject so the project-
+    ///     switch effect picks this tab as `nextActive`, then trigger
+    ///     the switch. The effect handles focus via lastFocusedForProject
+    ///     memory, which is fine — if the user was last in shell/editor
+    ///     for that project, focus follows them there; the target tab
+    ///     is still visible and its pulse is cleared.
+    activateTab: (projectPath, tabId) => {
+      term.clearTabAttention(tabId);
+      if (activeProjectPath() === projectPath) {
+        term.setActiveTab(tabId);
+        focusTerminal(tabId);
+      } else {
+        activeByProject.set(projectPath, tabId);
+        setActiveProjectPath(projectPath);
+      }
+    },
   });
 
   // On active project change, pick the right tab to show (remembered > first
   // existing > null). If none, consider auto-resume. This is the SOLE place
   // that calls term.setActiveTab as a response to project switch.
+  //
+  // After picking the active Claude tab, restore keyboard focus to whichever
+  // terminal in THIS project had it last (Claude / shell / editor PTY). If
+  // no record exists (first entry), fall back to the active Claude tab.
+  // Deferred to rAF so the visibility flip — driven by reactive `props.active`
+  // becoming true — has happened before we call term.focus(); focusing an
+  // element inside `visibility: hidden` doesn't stick in WebKit. See PRP 017
+  // v1.2 / #40.
   createEffect(
     on(activeProjectPath, (p) => {
       if (!p) {
@@ -218,7 +248,17 @@ function Shell() {
         nextActive = tabsInProject[0].id;
       }
       term.setActiveTab(nextActive);
-      if (nextActive === null) maybeAutoResume(p);
+      if (nextActive === null) {
+        maybeAutoResume(p);
+        return;
+      }
+      const target = lastFocusedForProject(p) ?? nextActive;
+      requestAnimationFrame(() => {
+        // If the user has already switched away from `p` during the
+        // ~16ms rAF window, don't focus a now-hidden xterm.
+        if (activeProjectPath() !== p) return;
+        focusTerminal(target);
+      });
     }),
   );
 
@@ -545,7 +585,11 @@ function Shell() {
     const p = activeProjectPath();
     if (!p) return;
     try {
-      await term.openTab(p, [], { label: "New session", sessionId: null });
+      const id = await term.openTab(p, [], {
+        label: "New session",
+        sessionId: null,
+      });
+      focusTerminal(id);
     } catch (err) {
       console.error("openTab(new) failed", err);
     } finally {
@@ -559,10 +603,11 @@ function Shell() {
     label: string,
   ) {
     try {
-      await term.openTab(projectPath, ["--resume", sessionId], {
+      const id = await term.openTab(projectPath, ["--resume", sessionId], {
         label,
         sessionId,
       });
+      focusTerminal(id);
     } catch (err) {
       console.error("openTab(resume) failed", err);
     } finally {
@@ -577,14 +622,22 @@ function Shell() {
       (t) => t.projectPath === p && t.sessionId === meta.id,
     );
     if (existing) {
+      // User-action tab activation clears the "needs attention" pulse.
+      // Project-switch effect's setActiveTab call (App.tsx ~228) must
+      // NOT clear, which is why the clear lives at the call site, not
+      // inside term.setActiveTab. See PRP 018 §4.
+      term.clearTabAttention(existing.id);
       term.setActiveTab(existing.id);
+      focusTerminal(existing.id);
       return;
     }
     void openResumeTab(p, meta.id, displayLabel(meta));
   }
 
   function handleActivateTab(id: string) {
+    term.clearTabAttention(id);
     term.setActiveTab(id);
+    focusTerminal(id);
   }
 
   async function handleCloseTab(id: string) {
@@ -629,6 +682,11 @@ function Shell() {
           ["--resume", lastId],
           { label, sessionId: lastId },
         );
+        // The project-switch effect ran before tabs existed for this project
+        // and skipped its focus call. Now that auto-resume materialised a
+        // tab, hand the cursor to it — the user just opened the project to
+        // use Claude.
+        focusTerminal(tabId);
         const detach = term.onExit(tabId, (code) => {
           const elapsed = Date.now() - spawnedAt;
           if (elapsed < AUTO_RESUME_FAIL_WINDOW_MS && code !== 0) {

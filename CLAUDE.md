@@ -18,6 +18,12 @@ cd src-tauri && cargo check
 cd src-tauri && cargo clippy -- -D warnings
 ```
 
+Release flow: see [`docs/release-flow.md`](docs/release-flow.md).
+Every release ends with a cask bump in
+[`willywg/homebrew-klaudio-panels`](https://github.com/willywg/homebrew-klaudio-panels)
+or brew users freeze on the previous version. Build the DMG with
+`--target universal-apple-darwin` — host-arch builds break Intel users.
+
 ## What this project is
 
 Tauri v2 + SolidJS desktop app that **embeds the real Claude Code TUI inside a native window** via PTY. The app is a shell around `claude`, not a reimplementation of it. The sidebar has two tabs per project: **Sessions** (past `~/.claude/projects/**/*.jsonl` rendered as a list; clicking resumes via `claude --resume <id>` in the PTY) and **Files** (a lazy-loaded project tree backed by `notify` + `ignore` crates). A background JSONL watcher propagates live `/rename` updates to open tab labels and correlates brand-new (non-resumed) tabs with their `sessionId` once Claude writes the first line.

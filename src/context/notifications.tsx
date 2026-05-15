@@ -11,6 +11,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { playPermissionRequest, playTaskComplete } from "@/lib/sound";
+import {
+  getPrefs,
+  setPrefs,
+  type NotificationPrefs,
+} from "@/lib/notifications-prefs";
+import { useTerminal } from "@/context/terminal";
 
 type SessionCompletePayload = {
   project_path: string;
@@ -46,6 +52,11 @@ export type Toast = {
   id: number;
   kind: ToastKind;
   projectPath: string;
+  /** Tab the event came from, when we could resolve it from the
+   *  payload's sessionId. Null when sessionId was missing (older warp
+   *  builds) or no open tab matched — in which case clicking the toast
+   *  just activates the project without preselecting a tab. */
+  tabId: string | null;
   title: string;
   body: string;
 };
@@ -57,6 +68,9 @@ export type UnreadItem = {
   id: number;
   kind: ToastKind;
   projectPath: string;
+  /** Same routing target as Toast.tabId — bell items click straight to
+   *  the originating tab when known. */
+  tabId: string | null;
   title: string;
   body: string;
   createdAt: number;
@@ -79,10 +93,17 @@ export type UnreadItem = {
 /// - `activateProject(path)`: switches the active project, used by the
 ///   toast click handler. The host's project-switch effect already
 ///   runs `markRead(path)` so the amber ring clears as a side effect.
+///
+/// - `activateTab(path, tabId)`: like `activateProject` but also makes
+///   `tabId` the active tab. Cross-project case pre-marks
+///   `activeByProject` so the project-switch effect picks it; same-
+///   project case calls `setActiveTab` directly. Used by toast / bell
+///   click when we know which tab the event came from.
 type ProjectResolver = {
   isActiveProject: (projectPath: string) => boolean;
   resolveOpenProject: (cwd: string | null) => string | null;
   activateProject: (projectPath: string) => void;
+  activateTab: (projectPath: string, tabId: string) => void;
 };
 
 const MAX_VISIBLE_TOASTS = 5;
@@ -101,6 +122,13 @@ function autoDismissMs(kind: ToastKind): number {
 }
 
 function makeNotificationsContext() {
+  // Pull the terminal store so we can route per-tab "needs attention"
+  // flags on session:complete / permission_request. NotificationsProvider
+  // is mounted inside TerminalProvider (see App.tsx tree), so this lookup
+  // is always defined. If a future refactor flips the order, useTerminal
+  // will throw on mount — keep this dependency in mind.
+  const term = useTerminal();
+
   // `unread` carries the steady amber ring on each project's avatar.
   // Cleared only when the user activates the project (markRead).
   const [unread, setUnread] = createSignal<ReadonlySet<string>>(new Set());
@@ -120,11 +148,38 @@ function makeNotificationsContext() {
   const [unreadItems, setUnreadItems] = createSignal<readonly UnreadItem[]>([]);
   let nextItemId = 1;
 
+  // Per-channel kill switches surfaced from the bell ⚙️ panel. Read at
+  // every event entry point — disabling a channel produces zero side
+  // effects (no ring, no bell, no toast, no banner, no chime).
+  const [prefs, setPrefsSignal] = createSignal<NotificationPrefs>(getPrefs());
+
+  function updatePrefs(patch: Partial<NotificationPrefs>) {
+    setPrefs(patch);
+    setPrefsSignal(getPrefs());
+  }
+
+  // Warp plugin install state. The Permission row in settings is gated
+  // on this — without the plugin no `permission_request` events fire,
+  // so showing an enabled toggle would be misleading. Seeded async on
+  // mount; refresh-on-demand from the settings view covers users who
+  // install the plugin without restarting Klaudio.
+  const [warpInstalled, setWarpInstalled] = createSignal<boolean>(false);
+
+  async function refreshWarpInstalled() {
+    try {
+      const v = await invoke<boolean>("is_warp_plugin_installed");
+      setWarpInstalled(v);
+    } catch {
+      setWarpInstalled(false);
+    }
+  }
+
   // Default no-op resolver until App.tsx wires the real one.
   let resolver: ProjectResolver = {
     isActiveProject: () => false,
     resolveOpenProject: () => null,
     activateProject: () => {},
+    activateTab: () => {},
   };
 
   function setProjectResolver(next: ProjectResolver) {
@@ -217,13 +272,24 @@ function makeNotificationsContext() {
     // Activating routes through the App's project-switch effect, which
     // calls markRead → clearProjectItems. We still clear here defensively
     // in case the resolver is ever wired to a no-op (early-mount).
-    resolver.activateProject(toast.projectPath);
+    if (toast.tabId) {
+      resolver.activateTab(toast.projectPath, toast.tabId);
+    } else {
+      resolver.activateProject(toast.projectPath);
+    }
     clearProjectItems(toast.projectPath);
     dismissToast(toast.id);
   }
 
-  function activateProjectFromBell(projectPath: string) {
-    resolver.activateProject(projectPath);
+  function activateProjectFromBell(
+    projectPath: string,
+    tabId: string | null = null,
+  ) {
+    if (tabId) {
+      resolver.activateTab(projectPath, tabId);
+    } else {
+      resolver.activateProject(projectPath);
+    }
     clearProjectItems(projectPath);
   }
 
@@ -279,6 +345,8 @@ function makeNotificationsContext() {
     unlistenAgent = await listen<CliAgentEvent>("claude:event", (e) =>
       handleAgentEvent(e.payload),
     );
+
+    void refreshWarpInstalled();
   });
 
   onCleanup(() => {
@@ -295,49 +363,100 @@ function makeNotificationsContext() {
   /// active surface based on focus state — in-app toast when focused,
   /// OS native banner when blurred. Sound is the caller's
   /// responsibility since each event uses a different chime.
+  ///
+  /// `tabId` is the tab the event originated from (resolved via
+  /// findTabForEvent in the caller). Stored on the Toast/UnreadItem
+  /// so clicking either routes the user straight to that tab.
   function alertProject(
     projectPath: string,
     title: string,
     body: string,
     kind: ToastKind,
+    tabId: string | null,
   ) {
     const here = focused() && resolver.isActiveProject(projectPath);
 
     if (!here) {
       markUnread(projectPath);
-      enqueueUnreadItem({ kind, projectPath, title, body });
+      enqueueUnreadItem({ kind, projectPath, tabId, title, body });
     }
 
     if (focused()) {
-      enqueueToast({ kind, projectPath, title, body });
+      enqueueToast({ kind, projectPath, tabId, title, body });
     } else {
       void invoke("notify_native", { title, body }).catch(() => {});
     }
   }
 
+  /// Pure mapping: which open tab does this event correspond to?
+  /// Single source of truth for both "route toast click" and "raise
+  /// the per-tab attention flag." Returns null when sessionId is
+  /// missing (older warp builds) or no open tab matches.
+  function findTabForEvent(
+    projectPath: string,
+    sessionId: string | null,
+  ): string | null {
+    if (!sessionId) return null;
+    const tab = term.store.tabs.find(
+      (t) => t.projectPath === projectPath && t.sessionId === sessionId,
+    );
+    return tab?.id ?? null;
+  }
+
+  /// Gate for raising the amber-pulse flag on a tab. False when:
+  ///   - the project has ≤1 tab open (no ambiguity to disambiguate)
+  ///   - the user is literally looking at the tab (focused window +
+  ///     active project + this tab is its active tab; note activeTabId
+  ///     can be null on first project open, in which case the equality
+  ///     is false and we DO raise the flag — intentional).
+  /// Separate from findTabForEvent because the toast / bell routing
+  /// wants the tabId regardless of these gates (single-tab toast
+  /// click should still activate that one tab).
+  function shouldRaisePulse(projectPath: string, tabId: string): boolean {
+    const tabsInProject = term.store.tabs.filter(
+      (t) => t.projectPath === projectPath,
+    );
+    if (tabsInProject.length <= 1) return false;
+    const here =
+      focused() &&
+      resolver.isActiveProject(projectPath) &&
+      term.store.activeTabId === tabId;
+    return !here;
+  }
+
   function handleComplete(payload: SessionCompletePayload) {
-    playTaskComplete();
+    if (!prefs().notifySessionComplete) return;
+    if (prefs().playSounds) playTaskComplete();
     const title = `${projectName(payload.project_path)} · Claude is done`;
     const body =
       payload.preview && payload.preview.length > 0
         ? payload.preview
         : "Your turn — open Klaudio Panels.";
-    alertProject(payload.project_path, title, body, "complete");
+    const tabId = findTabForEvent(payload.project_path, payload.session_id);
+    alertProject(payload.project_path, title, body, "complete", tabId);
+    if (tabId && shouldRaisePulse(payload.project_path, tabId)) {
+      term.markTabNeedsAttention(tabId);
+    }
   }
 
   function handleAgentEvent(payload: CliAgentEvent) {
     // Only `permission_request` reaches the frontend — `stop` and
     // `idle_prompt` are dropped server-side in cli_agent.rs.
     if (payload.event !== "permission_request") return;
+    if (!prefs().notifyPermission) return;
     const projectPath = resolver.resolveOpenProject(payload.cwd);
     if (!projectPath) return;
 
-    playPermissionRequest();
+    if (prefs().playSounds) playPermissionRequest();
     const tool = payload.tool_name ?? "a tool";
     const preview = payload.tool_input_preview;
     const body = preview && preview.length > 0 ? `${tool}: ${preview}` : tool;
     const title = `${projectName(projectPath)} · Claude needs permission`;
-    alertProject(projectPath, title, body, "permission");
+    const tabId = findTabForEvent(projectPath, payload.session_id);
+    alertProject(projectPath, title, body, "permission", tabId);
+    if (tabId && shouldRaisePulse(projectPath, tabId)) {
+      term.markTabNeedsAttention(tabId);
+    }
   }
 
   return {
@@ -353,6 +472,10 @@ function makeNotificationsContext() {
     unreadItems,
     activateProjectFromBell,
     clearAllItems,
+    prefs,
+    updatePrefs,
+    warpInstalled,
+    refreshWarpInstalled,
   };
 }
 

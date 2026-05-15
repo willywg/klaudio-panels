@@ -14,6 +14,11 @@ import {
   registerTerminalScroller,
   unregisterTerminalScroller,
 } from "@/lib/terminal-scroll-bus";
+import {
+  recordTerminalFocus,
+  registerTerminalFocus,
+  unregisterTerminalFocus,
+} from "@/lib/terminal-focus-bus";
 import { ScrollToBottomButton } from "@/components/scroll-to-bottom-button";
 
 const THEME = {
@@ -176,6 +181,28 @@ export function ShellTerminalView(props: Props) {
       setIsScrolledUp(buf.viewportY < buf.baseY);
     });
     registerTerminalScroller(props.ptyId, scrollToBottom);
+    const projectPath = ctx.getTab(props.ptyId)?.projectPath;
+    if (!projectPath) {
+      console.error(
+        `shell-terminal-view: no projectPath for ${props.ptyId}; focus-bus skipped`,
+      );
+    } else {
+      registerTerminalFocus(props.ptyId, projectPath, () => {
+        try {
+          term?.focus();
+        } catch {
+          // ignore
+        }
+      });
+      // Track focus moves driven by direct clicks on the xterm body (which
+      // focus the hidden textarea natively). Keeps lastFocusedForProject
+      // current even when the bus isn't called.
+      const onTextareaFocus = () => recordTerminalFocus(props.ptyId);
+      term.textarea?.addEventListener("focus", onTextareaFocus);
+      onCleanup(() => {
+        term?.textarea?.removeEventListener("focus", onTextareaFocus);
+      });
+    }
 
     detachData = ctx.onData(props.ptyId, (bytes) => {
       if (disposed) return;
@@ -219,7 +246,14 @@ export function ShellTerminalView(props: Props) {
     onCleanup(() => window.removeEventListener("resize", onWinResize));
   });
 
-  // Same visibility re-fit + refresh + focus dance as the Claude terminal.
+  // Visibility re-fit + refresh on activation. Intentionally NOT calling
+  // term.focus() here: the shell is a secondary surface that lives next to
+  // the Claude tab, and on project re-entry both panels' selected tabs flip
+  // active=true simultaneously. If shell focuses inside its rAF, it lands
+  // *after* Claude's synchronous focus and steals the cursor — typing then
+  // hits whatever is running in the shell (e.g. `npm run dev`). See PRP 017
+  // / #40. The xterm canvas click handler still focuses on direct clicks,
+  // so the only regression is clicking the tab strip header.
   createEffect(() => {
     if (!props.active) return;
     requestAnimationFrame(() => {
@@ -227,7 +261,6 @@ export function ShellTerminalView(props: Props) {
       safeFit();
       try {
         if (term) term.refresh(0, term.rows - 1);
-        term?.focus();
       } catch {
         // ignore
       }
@@ -242,6 +275,7 @@ export function ShellTerminalView(props: Props) {
     detachExit?.();
     scrollDisposable?.dispose();
     unregisterTerminalScroller(props.ptyId);
+    unregisterTerminalFocus(props.ptyId);
     try {
       term?.dispose();
     } catch (err) {

@@ -17,6 +17,11 @@ import {
   registerTerminalScroller,
   unregisterTerminalScroller,
 } from "@/lib/terminal-scroll-bus";
+import {
+  recordTerminalFocus,
+  registerTerminalFocus,
+  unregisterTerminalFocus,
+} from "@/lib/terminal-focus-bus";
 import { ScrollToBottomButton } from "@/components/scroll-to-bottom-button";
 
 const THEME = {
@@ -147,6 +152,14 @@ export function TerminalView(props: Props) {
       // flips to raw mode. Claude doesn't actually need these pings, so
       // we just never forward them.
       if (data === "\x1b[I" || data === "\x1b[O") return;
+      // Real keystroke / paste — the user is attending this tab, so clear
+      // any pending "needs attention" pulse. clearTabAttention has an
+      // early-return when the flag is already false, so this is cheap on
+      // the hot path (PRP 018 §1). Belt-and-suspenders next to the clear
+      // in App.tsx:handleActivateTab — covers the race where the flag is
+      // raised AFTER the tab is already active (window was blurred when
+      // the event fired, focus returns, user types).
+      ctx.clearTabAttention(props.id);
       void ctx.write(props.id, encoder.encode(data));
     });
     term.onResize(({ cols, rows }) => {
@@ -229,6 +242,29 @@ export function TerminalView(props: Props) {
       setIsScrolledUp(buf.viewportY < buf.baseY);
     });
     registerTerminalScroller(props.id, scrollToBottom);
+    // Bail on focus-bus registration if the tab isn't in the store yet —
+    // that would indicate a real invariant violation (parent renders the
+    // view by iterating the store), and registering under "" would
+    // cross-contaminate per-project memory across projects.
+    const projectPath = ctx.getTab(props.id)?.projectPath;
+    if (!projectPath) {
+      console.error(
+        `terminal-view: no projectPath for ${props.id}; focus-bus skipped`,
+      );
+    } else {
+      registerTerminalFocus(props.id, projectPath, () => {
+        try {
+          term?.focus();
+        } catch {
+          // ignore
+        }
+      });
+      const onTextareaFocus = () => recordTerminalFocus(props.id);
+      term.textarea?.addEventListener("focus", onTextareaFocus);
+      onCleanup(() => {
+        term?.textarea?.removeEventListener("focus", onTextareaFocus);
+      });
+    }
 
     detachData = ctx.onData(props.id, (bytes) => {
       term?.write(bytes);
@@ -279,44 +315,40 @@ export function TerminalView(props: Props) {
     onCleanup(() => window.removeEventListener("resize", onWinResize));
   });
 
-  // When the tab becomes visible again, re-measure (size may have changed
-  // while hidden), force a full redraw (xterm WebGL stops painting while the
-  // canvas is `visibility: hidden` — without refresh the panel stays blank),
-  // and refocus so keyboard input lands in the active tab. Uses the same
-  // staggered-fit pattern as onMount because a single rAF caches a too-short
-  // height on project switch while the outer layout is still reflowing
-  // (per-project sidebar width from PR #5, panelLayout memo recompute from
-  // PR #6). Without the follow-ups, xterm ends up one row short and the
-  // shell prompt is clipped until the user's next keystroke triggers auto-
-  // scroll. Focus is claimed only on the first pass so later fits don't
-  // steal it back if the user already clicked elsewhere.
+  // When the tab becomes visible again do two decoupled things:
+  //
+  //   1. Force one immediate repaint. WebGL stops painting while the canvas
+  //      is `visibility: hidden`; without a refresh the panel stays blank
+  //      until something else triggers a redraw. We keep this independent
+  //      of fit because fit may legitimately be a no-op (dimensions match).
+  //   2. Schedule a single fit at 250ms, after the outer layout has settled
+  //      (per-project sidebar width from PR #5, panelLayout memo recompute
+  //      from PR #6, diff panel auto-show/hide). The previous staggered
+  //      pattern (rAF + 180ms + 500ms) sent up to three SIGWINCHes per
+  //      activation: when dimensions changed across stages, each fit forced
+  //      Claude to re-paint the alt-screen, drifting xterm's buffer state
+  //      and occasionally leaking the welcome banner from the previous-
+  //      screen scrollback. One late fit keeps the eventual size correct
+  //      while limiting Claude to at most one re-paint. See PRP 016 / #38.
+  //
+  // Intentionally NOT calling term.focus() here: project re-entry is a
+  // passive activation, not a user action. App.tsx's project-switch effect
+  // calls focusTerminal(lastFocusedForProject(p) ?? activeClaudeId) once,
+  // so the surface the user was actually using last in this project takes
+  // the cursor — Claude, shell, or editor PTY. See PRP 017 v1.2 / #40.
   createEffect(() => {
     if (!props.active) return;
 
-    const rafId = requestAnimationFrame(() => {
-      safeFit();
-      try {
-        if (term) term.refresh(0, term.rows - 1);
-        term?.focus();
-      } catch {
-        // ignore
-      }
-    });
+    try {
+      if (term) term.refresh(0, term.rows - 1);
+    } catch {
+      // refresh failures shouldn't block the activation flow.
+    }
 
-    const t180 = window.setTimeout(() => safeFit(), 180);
-    const t500 = window.setTimeout(() => {
-      safeFit();
-      try {
-        if (term) term.refresh(0, term.rows - 1);
-      } catch {
-        // ignore
-      }
-    }, 500);
+    const fitTimer = window.setTimeout(() => safeFit(), 250);
 
     onCleanup(() => {
-      cancelAnimationFrame(rafId);
-      window.clearTimeout(t180);
-      window.clearTimeout(t500);
+      window.clearTimeout(fitTimer);
     });
   });
 
@@ -328,6 +360,7 @@ export function TerminalView(props: Props) {
     linkDisposable?.dispose();
     scrollDisposable?.dispose();
     unregisterTerminalScroller(props.id);
+    unregisterTerminalFocus(props.id);
     term?.dispose();
     // NOTE: intentionally NOT calling ctx.closeTab here — unmounting the view
     // (e.g. changing project) is separate from killing the PTY. The shell owns
