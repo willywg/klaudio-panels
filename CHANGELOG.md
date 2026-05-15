@@ -4,6 +4,47 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.7.0] — 2026-05-15
+
+### Added
+- **Inline file editor — quick "Edit" from the file tree**
+  ([#34](https://github.com/willywg/klaudio-panels/issues/34)). A new
+  `kind: "edit"` tab in the diff panel, backed by CodeMirror 6, opens
+  in three ways: right-click a text file in the tree → **Edit**,
+  right-click an existing preview tab → **Edit this file**, or ⌘E
+  (falls back to the file-tree selection when no preview is active).
+  Plain-text only, ≤1 MiB, strict UTF-8 — binaries and non-UTF-8 are
+  rejected at the read step so the editor can't introduce U+FFFD
+  replacements and then save them back, corrupting the file. ⌘S
+  writes the file; the backend re-stats first and returns a
+  `stale` result on `mtime_ms` mismatch, which the UI surfaces as a
+  **Reload / Keep mine** banner so an external change doesn't get
+  clobbered. Dirty indicator on the tab; close-guard prompts
+  Save / Discard / Cancel, and awaits an in-flight save so ⌘S
+  followed by an immediate close doesn't pop a spurious dialog.
+  Lazy-loaded language packs for ~11 common languages — everything
+  else opens as plain text.
+
+### Changed
+- **Editor + confirm-dialog palette aligned with `<FilePreview>`**.
+  CodeMirror was using `defaultHighlightStyle` from
+  `@codemirror/language` (dark red strings, blue identifiers, magenta
+  keywords) which clashed with the github-dark-default tokens that
+  `<FilePreview>` already renders via Shiki. Replaced with a custom
+  HighlightStyle approximating the same palette: light blue strings,
+  blue numbers, coral keywords, green property names + tags, purple
+  function names, orange types, muted gray italic comments. The
+  Save / Discard buttons in the confirmation dialog dropped their
+  saturated indigo / red fills in favour of a subtler accent
+  treatment — still semantically red-for-destructive and
+  indigo-for-primary, just turned down to match the rest of the app.
+
+### Tracked work
+- PRP: [`PRPs/019--inline-file-editor.md`](PRPs/019--inline-file-editor.md)
+- PR: [#35](https://github.com/willywg/klaudio-panels/pull/35)
+- Issue: [#34](https://github.com/willywg/klaudio-panels/issues/34)
+- Follow-up: [#44](https://github.com/willywg/klaudio-panels/issues/44) — consolidate inline editor under the "Open with" registry so ⌘+click can route to CodeMirror and the "three tabs for the same file" state disappears.
+
 ## [1.6.4] — 2026-05-15
 
 ### Added
