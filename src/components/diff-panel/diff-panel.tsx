@@ -21,6 +21,7 @@ import { useEditorPty } from "@/context/editor-pty";
 import { ContextMenu, type ContextMenuItem } from "@/components/context-menu";
 import { createInternalDrag } from "@/lib/use-internal-drag";
 import { focusTerminal } from "@/lib/terminal-focus-bus";
+import { looksBinaryByExtension } from "@/lib/cm-language";
 import { DiffFileRow } from "./diff-file-row";
 import { FilePreview } from "./file-preview";
 import { EditorPtyView } from "./editor-pty-view";
@@ -371,6 +372,22 @@ function TabStrip(props: { projectPath: string }) {
     }
 
     items.push({ kind: "divider" });
+
+    // Preview → inline editor. Same gating as the file-tree's "Edit"
+    // entry (PRP 019): obvious binaries are disabled by extension; the
+    // Rust read path is still the authoritative reject for non-UTF-8
+    // and >1 MiB.
+    if (m.tabKind === "file") {
+      items.push({
+        label: "Edit this file",
+        icon: Pencil,
+        disabled: looksBinaryByExtension(m.rel),
+        onClick: () => {
+          panel.openEdit(props.projectPath, m.rel);
+          panel.openPanel(props.projectPath);
+        },
+      });
+    }
 
     const defaultEditor = openIn.defaultEditorId();
     const apps: ContextMenuItem[] = openIn.availableApps().map((app) => ({

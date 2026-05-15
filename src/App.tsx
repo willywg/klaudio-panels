@@ -38,7 +38,7 @@ import {
   useSessionWatcher,
 } from "@/context/session-watcher";
 import { GitProvider, useGit } from "@/context/git";
-import { DiffPanelProvider, useDiffPanel } from "@/context/diff-panel";
+import { DiffPanelProvider, tabKey, useDiffPanel } from "@/context/diff-panel";
 import { EditBuffersProvider } from "@/context/edit-buffers";
 import { OpenInProvider } from "@/context/open-in";
 import { EditorPtyProvider, useEditorPty } from "@/context/editor-pty";
@@ -365,6 +365,20 @@ function Shell() {
         if (key === "diff") return;
         e.preventDefault();
         void diffPanel.closeActiveTab(p);
+      }
+      // Cmd+E swaps the active file-preview tab for the inline CodeMirror
+      // editor. Mirrors the "Edit this file" context-menu entry. Only when
+      // the diff panel is open and a `kind: "file"` tab is active —
+      // otherwise pass-through so Ctrl-E in xterm still reaches readline.
+      if (mod && !e.shiftKey && !e.altKey && (e.key === "e" || e.key === "E")) {
+        const p = activeProjectPath();
+        if (!p || !diffPanel.isOpen(p)) return;
+        const active = diffPanel
+          .tabsFor(p)
+          .find((t) => tabKey(t) === diffPanel.activeKeyFor(p));
+        if (!active || active.kind !== "file") return;
+        e.preventDefault();
+        diffPanel.openEdit(p, active.path);
       }
       // Cmd+J toggles the bottom shell terminal. WebKit uses the same combo
       // for "Jump to Downloads" when nothing is focused — preventDefault
