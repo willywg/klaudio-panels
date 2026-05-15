@@ -70,6 +70,8 @@ import {
   focusTerminal,
   lastFocusedForProject,
 } from "@/lib/terminal-focus-bus";
+import { selectedFile } from "@/lib/selected-file-bus";
+import { looksBinaryByExtension } from "@/lib/cm-language";
 import { displayLabel } from "@/lib/session-label";
 
 const AUTO_RESUME_FAIL_WINDOW_MS = 2000;
@@ -366,19 +368,39 @@ function Shell() {
         e.preventDefault();
         void diffPanel.closeActiveTab(p);
       }
-      // Cmd+E swaps the active file-preview tab for the inline CodeMirror
-      // editor. Mirrors the "Edit this file" context-menu entry. Only when
-      // the diff panel is open and a `kind: "file"` tab is active —
-      // otherwise pass-through so Ctrl-E in xterm still reaches readline.
+      // Cmd+E opens the inline CodeMirror editor for, in priority order:
+      //   1. the active file-preview tab in the diff panel, or
+      //   2. the file currently selected in the project's file tree.
+      // Both flows go through diffPanel.openEdit() which dedupes against
+      // an existing edit tab. Falls through (no preventDefault) when
+      // neither source has a target, so Ctrl-E in xterm still reaches
+      // readline. Binaries and directories are filtered to avoid opening
+      // an edit tab that would just immediately surface a read error.
       if (mod && !e.shiftKey && !e.altKey && (e.key === "e" || e.key === "E")) {
         const p = activeProjectPath();
-        if (!p || !diffPanel.isOpen(p)) return;
-        const active = diffPanel
-          .tabsFor(p)
-          .find((t) => tabKey(t) === diffPanel.activeKeyFor(p));
-        if (!active || active.kind !== "file") return;
-        e.preventDefault();
-        diffPanel.openEdit(p, active.path);
+        if (!p) return;
+        const active = diffPanel.isOpen(p)
+          ? diffPanel
+              .tabsFor(p)
+              .find((t) => tabKey(t) === diffPanel.activeKeyFor(p))
+          : undefined;
+        if (active && active.kind === "file") {
+          if (looksBinaryByExtension(active.path)) return;
+          e.preventDefault();
+          diffPanel.openEdit(p, active.path);
+          return;
+        }
+        const sel = selectedFile();
+        if (
+          sel &&
+          sel.projectPath === p &&
+          !sel.isDir &&
+          !looksBinaryByExtension(sel.rel)
+        ) {
+          e.preventDefault();
+          diffPanel.openEdit(p, sel.rel);
+          diffPanel.openPanel(p);
+        }
       }
       // Cmd+J toggles the bottom shell terminal. WebKit uses the same combo
       // for "Jump to Downloads" when nothing is focused — preventDefault

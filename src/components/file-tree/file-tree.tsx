@@ -25,6 +25,7 @@ import {
   Trash2,
 } from "lucide-solid";
 import { looksBinaryByExtension } from "@/lib/cm-language";
+import { setSelectedFile } from "@/lib/selected-file-bus";
 import { ContextMenu, type ContextMenuItem } from "@/components/context-menu";
 import { useGit } from "@/context/git";
 import { useDiffPanel } from "@/context/diff-panel";
@@ -563,6 +564,33 @@ export function FileTree(props: Props) {
       ...rows.slice(targetIdx + 1),
     ];
   });
+
+  // Publish the current tree selection to the global bus so the App-level
+  // ⌘E handler can fall back on it when no file-preview tab is active.
+  // The bus stores at most one selection (only one FileTree is mounted at
+  // a time — sidebar `<Show>` toggles Sessions/Files), and we clear on
+  // unmount so a project switch doesn't leak a stale ref.
+  createEffect(() => {
+    const sel = selected();
+    if (!sel) {
+      setSelectedFile(null);
+      return;
+    }
+    const rows = renderRows();
+    const found = rows.find(
+      (r) => r.kind === "node" && r.row.node.path === sel,
+    );
+    if (!found || found.kind !== "node") {
+      setSelectedFile(null);
+      return;
+    }
+    setSelectedFile({
+      projectPath: props.projectPath,
+      rel: toRel(sel),
+      isDir: found.row.node.isDir,
+    });
+  });
+  onCleanup(() => setSelectedFile(null));
 
   return (
     <div class="h-full flex flex-col">
