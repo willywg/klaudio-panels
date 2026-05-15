@@ -65,9 +65,9 @@ export function ConfirmDialog<R extends string>(props: Props<R>) {
                   class={
                     "px-3 h-7 rounded text-[12px] transition border " +
                     (btn.variant === "danger"
-                      ? "border-red-600/60 bg-red-600/15 hover:bg-red-600/25 text-red-200"
+                      ? "border-neutral-700 hover:border-red-500/40 hover:bg-red-500/10 text-red-300"
                       : btn.variant === "primary"
-                        ? "border-indigo-600/60 bg-indigo-600/20 hover:bg-indigo-600/35 text-indigo-100"
+                        ? "border-indigo-500/40 hover:border-indigo-400/70 bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-200"
                         : "border-neutral-700 hover:bg-neutral-800 text-neutral-200")
                   }
                   onClick={() => props.onResolve(btn.id)}

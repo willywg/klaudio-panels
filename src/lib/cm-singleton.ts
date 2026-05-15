@@ -1,4 +1,5 @@
 import type { Extension } from "@codemirror/state";
+import type { HighlightStyle } from "@codemirror/language";
 
 type CMCore = {
   EditorState: typeof import("@codemirror/state").EditorState;
@@ -16,7 +17,7 @@ type CMCore = {
   bracketMatching: typeof import("@codemirror/language").bracketMatching;
   indentOnInput: typeof import("@codemirror/language").indentOnInput;
   syntaxHighlighting: typeof import("@codemirror/language").syntaxHighlighting;
-  defaultHighlightStyle: typeof import("@codemirror/language").defaultHighlightStyle;
+  klaudioHighlightStyle: HighlightStyle;
 };
 
 let core: Promise<CMCore> | null = null;
@@ -24,11 +25,66 @@ let core: Promise<CMCore> | null = null;
 export function loadCMCore(): Promise<CMCore> {
   if (!core) {
     core = (async () => {
-      const [state, view, commands, language] = await Promise.all([
+      const [state, view, commands, language, lezer] = await Promise.all([
         import("@codemirror/state"),
         import("@codemirror/view"),
         import("@codemirror/commands"),
         import("@codemirror/language"),
+        import("@lezer/highlight"),
+      ]);
+      const t = lezer.tags;
+      // Approximate Shiki's `github-dark-default` palette so the inline
+      // editor matches `<FilePreview>`. lezer collapses TextMate scope info
+      // into a small set of tags, so a few choices diverge from the source
+      // theme — propertyName=green keeps YAML keys visually consistent with
+      // the preview (the most common file kind we see this in), at the cost
+      // of JS object access also being green-tinted.
+      const klaudioHighlightStyle = language.HighlightStyle.define([
+        { tag: t.comment, color: "#8b949e", fontStyle: "italic" },
+        { tag: t.lineComment, color: "#8b949e", fontStyle: "italic" },
+        { tag: t.blockComment, color: "#8b949e", fontStyle: "italic" },
+        { tag: t.docComment, color: "#8b949e", fontStyle: "italic" },
+        { tag: t.string, color: "#a5d6ff" },
+        { tag: t.special(t.string), color: "#a5d6ff" },
+        { tag: t.regexp, color: "#a5d6ff" },
+        { tag: t.escape, color: "#a5d6ff" },
+        { tag: t.url, color: "#a5d6ff" },
+        { tag: t.link, color: "#a5d6ff", textDecoration: "underline" },
+        { tag: t.number, color: "#79c0ff" },
+        { tag: t.integer, color: "#79c0ff" },
+        { tag: t.float, color: "#79c0ff" },
+        { tag: t.bool, color: "#79c0ff" },
+        { tag: t.atom, color: "#79c0ff" },
+        { tag: t.null, color: "#79c0ff" },
+        { tag: t.keyword, color: "#ff7b72" },
+        { tag: t.controlKeyword, color: "#ff7b72" },
+        { tag: t.operatorKeyword, color: "#ff7b72" },
+        { tag: t.modifier, color: "#ff7b72" },
+        { tag: t.moduleKeyword, color: "#ff7b72" },
+        { tag: t.definitionKeyword, color: "#ff7b72" },
+        { tag: t.self, color: "#ff7b72" },
+        { tag: t.propertyName, color: "#7ee787" },
+        { tag: t.attributeName, color: "#7ee787" },
+        { tag: t.attributeValue, color: "#a5d6ff" },
+        { tag: t.tagName, color: "#7ee787" },
+        { tag: t.function(t.variableName), color: "#d2a8ff" },
+        { tag: t.function(t.definition(t.variableName)), color: "#d2a8ff" },
+        { tag: t.definition(t.variableName), color: "#d2a8ff" },
+        { tag: t.typeName, color: "#ffa657" },
+        { tag: t.className, color: "#ffa657" },
+        { tag: t.namespace, color: "#ffa657" },
+        { tag: t.labelName, color: "#ffa657" },
+        { tag: t.heading, color: "#79c0ff", fontWeight: "bold" },
+        { tag: t.heading1, color: "#79c0ff", fontWeight: "bold" },
+        { tag: t.heading2, color: "#79c0ff", fontWeight: "bold" },
+        { tag: t.heading3, color: "#79c0ff", fontWeight: "bold" },
+        { tag: t.heading4, color: "#79c0ff", fontWeight: "bold" },
+        { tag: t.heading5, color: "#79c0ff", fontWeight: "bold" },
+        { tag: t.heading6, color: "#79c0ff", fontWeight: "bold" },
+        { tag: t.strong, fontWeight: "bold" },
+        { tag: t.emphasis, fontStyle: "italic" },
+        { tag: t.invalid, color: "#ffa198" },
+        { tag: t.meta, color: "#79c0ff" },
       ]);
       return {
         EditorState: state.EditorState,
@@ -46,7 +102,7 @@ export function loadCMCore(): Promise<CMCore> {
         bracketMatching: language.bracketMatching,
         indentOnInput: language.indentOnInput,
         syntaxHighlighting: language.syntaxHighlighting,
-        defaultHighlightStyle: language.defaultHighlightStyle,
+        klaudioHighlightStyle,
       };
     })();
   }
@@ -71,7 +127,7 @@ export function baseExtensions(
     cm.dropCursor(),
     cm.indentOnInput(),
     cm.bracketMatching(),
-    cm.syntaxHighlighting(cm.defaultHighlightStyle, { fallback: true }),
+    cm.syntaxHighlighting(cm.klaudioHighlightStyle, { fallback: true }),
     cm.highlightActiveLine(),
     cm.keymap.of([
       {
