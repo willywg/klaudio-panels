@@ -11,6 +11,7 @@ import {
 import { useTerminal } from "@/context/terminal";
 import { useDiffPanel } from "@/context/diff-panel";
 import { makeFileLinkProvider } from "@/lib/xterm-file-links";
+import { makeBareUrlLinkProvider } from "@/lib/xterm-bare-url-links";
 import { hoverPtyId } from "@/lib/internal-drag";
 import { openUrlInSystemBrowser } from "@/lib/open-url";
 import {
@@ -66,6 +67,7 @@ export function TerminalView(props: Props) {
   let detachData: (() => void) | undefined;
   let detachExit: (() => void) | undefined;
   let linkDisposable: { dispose: () => void } | undefined;
+  let bareUrlDisposable: { dispose: () => void } | undefined;
   let scrollDisposable: { dispose: () => void } | undefined;
   let fitDebounce: number | undefined;
 
@@ -273,6 +275,11 @@ export function TerminalView(props: Props) {
       term?.writeln(`\x1b[2m\r\n[claude exited with code ${code}]\x1b[0m`);
     });
 
+    // Bare-URL provider runs BEFORE the file provider so domains like
+    // `app.constructai.la` route to the browser instead of being treated as
+    // a file with `.la` extension (file regex would otherwise greedy-match).
+    bareUrlDisposable = term.registerLinkProvider(makeBareUrlLinkProvider(term));
+
     // Cmd/Ctrl+click on `src/foo.ts` or `src/foo.ts:42` opens a preview tab.
     // Uses xterm's native link provider API so we never parse the PTY buffer
     // ourselves beyond extracting the text under the cursor.
@@ -358,6 +365,7 @@ export function TerminalView(props: Props) {
     detachData?.();
     detachExit?.();
     linkDisposable?.dispose();
+    bareUrlDisposable?.dispose();
     scrollDisposable?.dispose();
     unregisterTerminalScroller(props.id);
     unregisterTerminalFocus(props.id);

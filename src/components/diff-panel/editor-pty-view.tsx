@@ -10,6 +10,7 @@ import {
 } from "@tauri-apps/plugin-clipboard-manager";
 import { useEditorPty } from "@/context/editor-pty";
 import { openUrlInSystemBrowser } from "@/lib/open-url";
+import { makeBareUrlLinkProvider } from "@/lib/xterm-bare-url-links";
 import {
   recordTerminalFocus,
   registerTerminalFocus,
@@ -106,6 +107,7 @@ export function EditorPtyView(props: Props) {
   let detachData: (() => void) | undefined;
   let detachExit: (() => void) | undefined;
   let fitDebounce: number | undefined;
+  let bareUrlDisposable: { dispose: () => void } | undefined;
   let disposed = false;
 
   const encoder = new TextEncoder();
@@ -160,6 +162,12 @@ export function EditorPtyView(props: Props) {
 
     term.open(container!);
     term.unicode.activeVersion = "11";
+
+    // Bare-URL provider (see xterm-bare-url-links.ts). Editor PTYs (nvim/
+    // helix) don't have file-link match conflicts to worry about — this is
+    // purely for the convenience of clicking a bare domain that appears in
+    // an editor buffer.
+    bareUrlDisposable = term.registerLinkProvider(makeBareUrlLinkProvider(term));
 
     let webgl: WebglAddon | undefined;
     try {
@@ -316,6 +324,7 @@ export function EditorPtyView(props: Props) {
     if (fitDebounce) window.clearTimeout(fitDebounce);
     detachData?.();
     detachExit?.();
+    bareUrlDisposable?.dispose();
     try {
       term?.dispose();
     } catch (err) {

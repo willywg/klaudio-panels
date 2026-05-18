@@ -10,6 +10,7 @@ import {
 } from "@tauri-apps/plugin-clipboard-manager";
 import { useShellPty } from "@/context/shell-pty";
 import { openUrlInSystemBrowser } from "@/lib/open-url";
+import { makeBareUrlLinkProvider } from "@/lib/xterm-bare-url-links";
 import {
   registerTerminalScroller,
   unregisterTerminalScroller,
@@ -62,6 +63,7 @@ export function ShellTerminalView(props: Props) {
   let detachData: (() => void) | undefined;
   let detachExit: (() => void) | undefined;
   let scrollDisposable: { dispose: () => void } | undefined;
+  let bareUrlDisposable: { dispose: () => void } | undefined;
   let fitDebounce: number | undefined;
   let disposed = false;
 
@@ -103,6 +105,11 @@ export function ShellTerminalView(props: Props) {
 
     term.open(container!);
     term.unicode.activeVersion = "11";
+
+    // Bare-URL provider lifts domains without an explicit scheme into the
+    // browser (mirrors terminal-view; see xterm-bare-url-links.ts for the
+    // collision rationale).
+    bareUrlDisposable = term.registerLinkProvider(makeBareUrlLinkProvider(term));
 
     let webgl: WebglAddon | undefined;
     try {
@@ -274,6 +281,7 @@ export function ShellTerminalView(props: Props) {
     detachData?.();
     detachExit?.();
     scrollDisposable?.dispose();
+    bareUrlDisposable?.dispose();
     unregisterTerminalScroller(props.ptyId);
     unregisterTerminalFocus(props.ptyId);
     try {

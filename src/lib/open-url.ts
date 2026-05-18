@@ -1,4 +1,5 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { debugLog } from "@/lib/debug-log";
 
 /** Shared click handler for xterm's WebLinksAddon. WebKit's default
  *  `window.open(uri, "_blank")` either no-ops or opens a second webview
@@ -8,5 +9,9 @@ export function openUrlInSystemBrowser(
   _event: MouseEvent,
   uri: string,
 ): void {
-  void openUrl(uri).catch((err) => console.warn("openUrl failed", uri, err));
+  debugLog("open-url", `attempt ${uri}`);
+  void openUrl(uri).catch((err) => {
+    const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+    debugLog("open-url", `failed ${uri} — ${msg}`);
+  });
 }
