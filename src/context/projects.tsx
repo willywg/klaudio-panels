@@ -10,6 +10,7 @@ import {
   type RecentProject,
   loadRecentProjects,
   saveRecentProjects,
+  sanitizeCustomInitials,
   MAX_RECENT_PROJECTS,
 } from "@/lib/recent-projects";
 
@@ -82,6 +83,23 @@ function makeProjectsContext() {
     saveRecentProjects(state.list);
   }
 
+  /** Set or clear the user's avatar-initials override for a project.
+   *  Passing an empty/whitespace string clears the override and the avatar
+   *  falls back to the auto-generated initials. */
+  function setCustomInitials(path: string, value: string): void {
+    const sanitized = sanitizeCustomInitials(value);
+    setState(
+      "list",
+      produce((list: RecentProject[]) => {
+        const idx = list.findIndex((p) => p.path === path);
+        if (idx < 0) return;
+        if (sanitized === undefined) delete list[idx].customInitials;
+        else list[idx].customInitials = sanitized;
+      }),
+    );
+    saveRecentProjects(state.list);
+  }
+
   /** Reorder: drop `fromPath` relative to `toPath`, Slack-style.
    *   - Drag DOWN (fromIdx < toIdx): drops AFTER the target.
    *   - Drag UP   (fromIdx > toIdx): drops BEFORE the target.
@@ -115,6 +133,7 @@ function makeProjectsContext() {
     unpin,
     remove,
     reorder,
+    setCustomInitials,
   };
 }
 

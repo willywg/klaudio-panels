@@ -3,10 +3,24 @@ export type RecentProject = {
   lastOpened: number; // epoch ms
   /** Whether the project shows in the sidebar. Home always shows all. */
   pinned: boolean;
+  /** User override for the avatar initials. 1–3 chars, already trimmed and
+   *  upper-cased on write. When undefined, projectInitial() computes them
+   *  automatically from the path. */
+  customInitials?: string;
 };
 
 export const RECENT_PROJECTS_KEY = "recentProjects";
 export const MAX_RECENT_PROJECTS = 20;
+export const MAX_CUSTOM_INITIALS = 3;
+
+/** Sanitize a user-supplied initials override. Returns undefined to clear
+ *  the override (empty string after trim). Caller persists via the projects
+ *  context which routes through saveRecentProjects. */
+export function sanitizeCustomInitials(input: string): string | undefined {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) return undefined;
+  return trimmed.slice(0, MAX_CUSTOM_INITIALS).toUpperCase();
+}
 
 export function loadRecentProjects(): RecentProject[] {
   try {
@@ -25,11 +39,16 @@ export function loadRecentProjects(): RecentProject[] {
           return null;
         }
         const raw = p as Partial<RecentProject>;
+        const customInitials =
+          typeof raw.customInitials === "string"
+            ? sanitizeCustomInitials(raw.customInitials)
+            : undefined;
         // Backward compat: entries persisted before pinning existed default to pinned.
         return {
           path: raw.path!,
           lastOpened: raw.lastOpened!,
           pinned: raw.pinned === undefined ? true : !!raw.pinned,
+          ...(customInitials ? { customInitials } : {}),
         } satisfies RecentProject;
       })
       .filter((p): p is RecentProject => p !== null);
@@ -61,8 +80,26 @@ export function projectColor(path: string): string {
   return `hsl(${hue}, 50%, 42%)`;
 }
 
-export function projectInitial(path: string): string {
-  return projectLabel(path).slice(0, 1).toUpperCase();
+/** Two-letter avatar initials for the project. Splits the folder name on
+ *  separators (_, -, ., space) and camelCase boundaries; multi-word names
+ *  take the first letter of the first two words (platform_two → "PT"), while
+ *  single-word names take the first two characters (Perfil → "PE"). Callers
+ *  may pass a `customInitials` override (already sanitized) to short-circuit
+ *  the algorithm. */
+export function projectInitial(
+  path: string,
+  customInitials?: string,
+): string {
+  if (customInitials && customInitials.length > 0) return customInitials;
+  const label = projectLabel(path);
+  const words = label
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[\s._\-]+/)
+    .filter(Boolean);
+  if (words.length >= 2) {
+    return (words[0][0] + words[1][0]).toUpperCase();
+  }
+  return label.slice(0, 2).toUpperCase();
 }
 
 /** "3 s ago", "5 min ago", "2 h ago", "3 d ago". */

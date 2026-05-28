@@ -1,13 +1,15 @@
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Home, Plus, X } from "lucide-solid";
+import { Home, Pencil, Plus, X } from "lucide-solid";
 import {
+  MAX_CUSTOM_INITIALS,
   projectColor,
   projectInitial,
   projectLabel,
 } from "@/lib/recent-projects";
 import { useProjects } from "@/context/projects";
 import { useNotifications } from "@/context/notifications";
+import { ContextMenu, type ContextMenuItem } from "@/components/context-menu";
 
 type Props = {
   activePath: string | null;
@@ -26,6 +28,15 @@ export function ProjectsSidebar(props: Props) {
   const notifications = useNotifications();
   const [draggingPath, setDraggingPath] = createSignal<string | null>(null);
   const [dragOverPath, setDragOverPath] = createSignal<string | null>(null);
+  const [menu, setMenu] = createSignal<{
+    path: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [renaming, setRenaming] = createSignal<{
+    path: string;
+    value: string;
+  } | null>(null);
 
   // Press state — mutated synchronously by handlers, not reactive.
   let pressPath: string | null = null;
@@ -154,7 +165,7 @@ export function ProjectsSidebar(props: Props) {
           const isActive = () => props.activePath === proj.path;
           const openCount = () => props.openTabsByProject.get(proj.path) ?? 0;
           const label = () => projectLabel(proj.path);
-          const initial = () => projectInitial(proj.path);
+          const initial = () => projectInitial(proj.path, proj.customInitials);
           const color = () => projectColor(proj.path);
           const isDragging = () => draggingPath() === proj.path;
           const isDragOver = () =>
@@ -175,15 +186,20 @@ export function ProjectsSidebar(props: Props) {
                 onPointerDown={(e) => onPointerDown(e, proj.path)}
                 onClick={(e) => onClickAvatar(e, proj.path)}
                 onContextMenu={(e) => {
-                  // Suppress the native context menu but do NOT trigger
-                  // close — too destructive for an accidental right-click,
-                  // and has surfaced hard-to-reproduce side effects on the
-                  // other projects' panels. Close lives on the × hover
-                  // affordance only.
+                  // Right-click opens a controlled menu (Rename initials,
+                  // Close project) instead of suppressing it outright. Close
+                  // still requires confirmation, so the destructive-by-accident
+                  // concern from the previous version remains addressed.
                   e.preventDefault();
+                  setMenu({
+                    path: proj.path,
+                    x: e.clientX,
+                    y: e.clientY,
+                  });
                 }}
                 class={
-                  "w-10 h-10 rounded-lg flex items-center justify-center text-[15px] font-semibold text-white transition shadow-sm select-none " +
+                  "w-10 h-10 rounded-lg flex items-center justify-center font-semibold text-white transition shadow-sm select-none " +
+                  (initial().length >= 3 ? "text-[11px] " : "text-[13px] ") +
                   (isActive()
                     ? "ring-2 ring-indigo-500 ring-offset-2 ring-offset-neutral-950"
                     : unread()
@@ -195,7 +211,7 @@ export function ProjectsSidebar(props: Props) {
                   opacity: isDragging() ? 0.4 : undefined,
                   cursor: isDragging() ? "grabbing" : "pointer",
                 }}
-                title={`${label()}\n${proj.path}${openCount() > 0 ? `\n${openCount()} open tab(s)` : ""}\n\nClick: open. Hold + drag: reorder. × (hover): close.`}
+                title={`${label()}\n${proj.path}${openCount() > 0 ? `\n${openCount()} open tab(s)` : ""}\n\nClick: open. Hold + drag: reorder. Right-click: more.`}
               >
                 {initial()}
               </button>
@@ -231,6 +247,138 @@ export function ProjectsSidebar(props: Props) {
       >
         <Plus size={18} strokeWidth={2} />
       </button>
+      <Show when={menu()}>
+        {(m) => (
+          <ContextMenu
+            open={true}
+            x={m().x}
+            y={m().y}
+            items={menuItemsFor(m().path)}
+            onClose={() => setMenu(null)}
+          />
+        )}
+      </Show>
+      <Show when={renaming()}>
+        {(r) => (
+          <RenameInitialsDialog
+            projectPath={r().path}
+            value={r().value}
+            onChange={(v) => setRenaming({ path: r().path, value: v })}
+            onCancel={() => setRenaming(null)}
+            onConfirm={() => {
+              projects.setCustomInitials(r().path, r().value);
+              setRenaming(null);
+            }}
+            onClear={() => {
+              projects.setCustomInitials(r().path, "");
+              setRenaming(null);
+            }}
+          />
+        )}
+      </Show>
     </nav>
+  );
+
+  function menuItemsFor(path: string): ContextMenuItem[] {
+    return [
+      {
+        kind: "action",
+        label: "Rename initials…",
+        icon: Pencil,
+        onClick: () => {
+          const current = projects.list.find((p) => p.path === path);
+          setRenaming({
+            path,
+            value: current?.customInitials ?? projectInitial(path),
+          });
+        },
+      },
+      { kind: "divider" },
+      {
+        kind: "action",
+        label: "Close project",
+        icon: X,
+        onClick: () => requestClose(path),
+      },
+    ];
+  }
+}
+
+function RenameInitialsDialog(props: {
+  projectPath: string;
+  value: string;
+  onChange: (v: string) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+  onClear: () => void;
+}) {
+  let inputRef!: HTMLInputElement;
+  onMount(() => {
+    inputRef.focus();
+    inputRef.select();
+  });
+
+  function onKey(e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      props.onConfirm();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      props.onCancel();
+    }
+  }
+
+  return (
+    <div
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) props.onCancel();
+      }}
+    >
+      <div class="bg-neutral-900 border border-neutral-700 rounded-lg shadow-xl w-[320px] p-4">
+        <div class="text-[13px] text-neutral-200 font-medium mb-1">
+          Rename initials
+        </div>
+        <div class="text-[11px] text-neutral-500 mb-3 truncate" title={props.projectPath}>
+          {projectLabel(props.projectPath)}
+        </div>
+        <input
+          ref={inputRef}
+          type="text"
+          maxLength={MAX_CUSTOM_INITIALS}
+          value={props.value}
+          onInput={(e) => props.onChange(e.currentTarget.value.toUpperCase())}
+          onKeyDown={onKey}
+          placeholder="e.g. PT"
+          class="w-full px-3 py-2 bg-neutral-950 border border-neutral-700 rounded text-[14px] text-neutral-100 text-center uppercase tracking-wider focus:outline-none focus:border-indigo-500"
+        />
+        <div class="text-[10px] text-neutral-500 mt-1.5">
+          Up to {MAX_CUSTOM_INITIALS} characters. Leave empty and press
+          “Reset” to restore the auto-generated initials.
+        </div>
+        <div class="flex justify-between items-center gap-2 mt-4">
+          <button
+            class="px-2.5 py-1.5 text-[12px] text-neutral-400 hover:text-neutral-200 transition"
+            onClick={props.onClear}
+          >
+            Reset
+          </button>
+          <div class="flex gap-2">
+            <button
+              class="px-3 py-1.5 text-[12px] text-neutral-300 hover:bg-neutral-800 rounded transition"
+              onClick={props.onCancel}
+            >
+              Cancel
+            </button>
+            <button
+              class="px-3 py-1.5 text-[12px] bg-indigo-600 hover:bg-indigo-500 text-white rounded transition"
+              onClick={props.onConfirm}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

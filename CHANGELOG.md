@@ -4,6 +4,28 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [Unreleased]
+
+### Added
+- **Two-letter project avatar initials, with per-project override.** Avatars
+  in the projects sidebar now show two characters by default — multi-word
+  names like `platform-two` or `myCoolApp` use the first letter of each
+  word (`PT`, `MC`); single-word names take the first two letters
+  (`Perfil` → `PE`). Right-click an avatar → **Rename initials…** opens a
+  small dialog to set a custom 1–3 character override (auto-uppercased,
+  Enter to save, Esc to cancel, **Reset** to fall back to the auto value).
+  The override is persisted in `localStorage` alongside the rest of
+  `recentProjects` and survives reload. Existing entries without an
+  override migrate transparently.
+
+### Changed
+- Avatar font size auto-shrinks from `13px` to `11px` when the initials
+  are 3 characters so they don't overflow the 40×40 tile.
+- Right-clicking an avatar now opens a controlled context menu
+  (Rename initials… / Close project) instead of suppressing the native
+  one outright. Close still requires confirmation, preserving the
+  destructive-by-accident guard from the previous behavior.
+
 ## [1.7.1] — 2026-05-18
 
 ### Added
