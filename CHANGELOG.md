@@ -4,6 +4,21 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [Unreleased]
+
+### Fixed
+- **Closing a project now actually shows its confirmation dialog**
+  ([#50](https://github.com/willywg/klaudio-panels/issues/50)). The sidebar's
+  close flow called the browser-global `confirm()`, which Tauri routes to
+  `plugin:dialog|confirm` — a command our capability file never permitted, so
+  every attempt was rejected by the ACL (`dialog|confirm not allowed by ACL`)
+  and logged as an unhandled rejection. Worse, `confirm()` returns a Promise
+  under Tauri, so the synchronous `if (confirm(msg))` guard was always truthy
+  and the project closed with no prompt at all. Fixed by granting
+  `dialog:allow-confirm` and awaiting the async `confirm()` so the guard
+  genuinely gates the close. Pre-existing since 2026-04-24; unrelated to the
+  v1.8.0 avatar work.
+
 ## [1.8.0] — 2026-06-01
 
 ### Added

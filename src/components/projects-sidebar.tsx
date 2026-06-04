@@ -1,5 +1,5 @@
 import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { confirm as confirmDialog, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Home, Pencil, Plus, X } from "lucide-solid";
 import {
   MAX_CUSTOM_INITIALS,
@@ -135,14 +135,18 @@ export function ProjectsSidebar(props: Props) {
     if (typeof picked === "string") props.onAdd(picked);
   }
 
-  function requestClose(path: string) {
+  async function requestClose(path: string) {
     const label = projectLabel(path);
     const openCount = props.openTabsByProject.get(path) ?? 0;
     const msg =
       openCount > 0
-        ? `Close "${label}"?\nThis will kill ${openCount} open tab(s) and remove it from the sidebar.\nIt will still be available under "Recent projects" on the home screen.`
-        : `Close "${label}"?\nIt will be removed from the sidebar. Still available under "Recent projects" on the home screen.`;
-    if (confirm(msg)) props.onCloseProject(path);
+        ? `This will kill ${openCount} open tab(s) and remove it from the sidebar.\nIt will still be available under "Recent projects" on the home screen.`
+        : `It will be removed from the sidebar. Still available under "Recent projects" on the home screen.`;
+    const ok = await confirmDialog(msg, {
+      title: `Close "${label}"?`,
+      kind: "warning",
+    });
+    if (ok) props.onCloseProject(path);
   }
 
   return (
@@ -231,7 +235,7 @@ export function ProjectsSidebar(props: Props) {
                 title="Close project (still in history)"
                 onClick={(e) => {
                   e.stopPropagation();
-                  requestClose(proj.path);
+                  void requestClose(proj.path);
                 }}
               >
                 <X size={9} strokeWidth={3} />
