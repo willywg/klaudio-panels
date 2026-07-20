@@ -7,6 +7,16 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 ## [Unreleased]
 
 ### Added
+- **Rendered markdown mode in the file preview**
+  ([#58](https://github.com/willywg/klaudio-panels/issues/58)). Markdown
+  previews now default to a GitHub-style rendered view: hard-wrapped source
+  lines flow into paragraphs that reflow to the panel width, with headings,
+  lists, tables, blockquotes, and Shiki-highlighted code fences. A floating
+  button in the preview (or `Cmd+Shift+M`) toggles back to the source view —
+  the preference is global and persisted. `Cmd+click` line jumps still land
+  in Source (Rendered has no line numbers), absolute links open in the
+  system browser, and all HTML is sanitized with DOMPurify before it touches
+  the DOM.
 - **Home screen: project avatars + filter box**
   ([#56](https://github.com/willywg/klaudio-panels/issues/56)). Each row in
   Recent projects now shows the project's avatar tile — same initials

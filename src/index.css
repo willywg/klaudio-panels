@@ -73,6 +73,131 @@ body {
   padding-left: 68px;
   text-indent: -68px;
 }
+/* Rendered markdown mode (.md-rendered set by FilePreview). GitHub-ish
+   dark typography; Shiki fences keep their own inline colors, we only
+   frame them. Tables scroll inside themselves so the page never scrolls
+   horizontally. */
+.md-rendered {
+  font-family: var(--font-sans);
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: #d4d4d4;
+  padding: 20px 28px 48px;
+  word-break: break-word;
+}
+.md-rendered h1,
+.md-rendered h2,
+.md-rendered h3,
+.md-rendered h4,
+.md-rendered h5,
+.md-rendered h6 {
+  color: #f5f5f5;
+  font-weight: 600;
+  line-height: 1.3;
+  margin: 22px 0 10px;
+}
+.md-rendered h1 {
+  font-size: 22px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #27272a;
+  margin-top: 4px;
+}
+.md-rendered h2 {
+  font-size: 18px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #232326;
+}
+.md-rendered h3 {
+  font-size: 15.5px;
+}
+.md-rendered h4,
+.md-rendered h5,
+.md-rendered h6 {
+  font-size: 13.5px;
+}
+.md-rendered p {
+  margin: 0 0 12px;
+}
+.md-rendered ul,
+.md-rendered ol {
+  margin: 0 0 12px;
+  padding-left: 24px;
+}
+.md-rendered ul {
+  list-style: disc;
+}
+.md-rendered ol {
+  list-style: decimal;
+}
+.md-rendered li {
+  margin: 3px 0;
+}
+.md-rendered li > ul,
+.md-rendered li > ol {
+  margin-bottom: 0;
+}
+.md-rendered code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: #27272a;
+  padding: 1.5px 5px;
+  border-radius: 4px;
+}
+.md-rendered pre.shiki {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  background: #101012 !important;
+  border: 1px solid #1f1f23;
+}
+.md-rendered pre.shiki code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+.md-rendered blockquote {
+  margin: 0 0 12px;
+  padding: 2px 0 2px 14px;
+  border-left: 3px solid #3f3f46;
+  color: #a3a3a3;
+}
+.md-rendered a {
+  color: #818cf8;
+  text-decoration: none;
+}
+.md-rendered a:hover {
+  text-decoration: underline;
+}
+.md-rendered table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0 0 14px;
+}
+.md-rendered th,
+.md-rendered td {
+  border: 1px solid #3f3f46;
+  padding: 6px 10px;
+  text-align: left;
+}
+.md-rendered th {
+  background: #18181b;
+  color: #e5e5e5;
+}
+.md-rendered img {
+  max-width: 100%;
+}
+.md-rendered hr {
+  border: none;
+  border-top: 1px solid #27272a;
+  margin: 20px 0;
+}
+
 .preview-scroll::-webkit-scrollbar {
   width: 10px;
   height: 10px;

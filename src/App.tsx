@@ -72,6 +72,10 @@ import {
 } from "@/lib/terminal-focus-bus";
 import { selectedFile } from "@/lib/selected-file-bus";
 import { looksBinaryByExtension } from "@/lib/cm-language";
+import {
+  isMarkdownPath,
+  toggleMarkdownPreviewMode,
+} from "@/lib/markdown-preview-prefs";
 import { displayLabel } from "@/lib/session-label";
 
 const AUTO_RESUME_FAIL_WINDOW_MS = 2000;
@@ -356,6 +360,21 @@ function Shell() {
         e.preventDefault();
         const p = activeProjectPath();
         if (p) diffPanel.toggle(p);
+      }
+      // Cmd+Shift+M toggles Source|Rendered for the active markdown
+      // preview tab. (Cmd+Shift+V — the VS Code combo — would collide
+      // with the terminals' paste handling, which lowercases e.key.)
+      if (mod && e.shiftKey && !e.altKey && (e.key === "m" || e.key === "M")) {
+        const p = activeProjectPath();
+        if (!p || !diffPanel.isOpen(p)) return;
+        const active = diffPanel
+          .tabsFor(p)
+          .find((t) => tabKey(t) === diffPanel.activeKeyFor(p));
+        if (!active || active.kind !== "file" || !isMarkdownPath(active.path))
+          return;
+        e.preventDefault();
+        toggleMarkdownPreviewMode();
+        return;
       }
       // Cmd+W closes the active file-preview tab in the diff panel. Only
       // when the panel is open and a file tab is active — otherwise Cmd+W
