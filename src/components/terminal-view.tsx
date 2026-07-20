@@ -182,6 +182,17 @@ export function TerminalView(props: Props) {
         void ctx.write(props.id, encoder.encode("\x1b\r"));
         return false;
       }
+      // App-level tab-switch combos (Ctrl+Tab cycle, Cmd+Opt+digit jump) —
+      // let them bubble to the window handler but keep xterm from acting:
+      // Ctrl+Tab would emit \t (and Ctrl+Shift+Tab would reach Claude as
+      // Shift+Tab, cycling its permission modes); Opt+digit could insert
+      // the layout's dead char into the prompt.
+      if (e.key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) {
+        return false;
+      }
+      if (e.metaKey && e.altKey && /^Digit[1-9]$/.test(e.code)) {
+        return false;
+      }
       const mac = navigator.platform.toUpperCase().includes("MAC");
       const meta = mac ? e.metaKey : e.ctrlKey && e.shiftKey;
       if (!meta) return true;

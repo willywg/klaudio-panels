@@ -6,6 +6,16 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
 ## [Unreleased]
 
+### Added
+- **Keyboard shortcuts to switch tabs within a project**
+  ([#52](https://github.com/willywg/klaudio-panels/issues/52)). `Cmd+Opt+1..8`
+  jumps to the Nth tab of the active project and `Cmd+Opt+9` to the last one —
+  the within-project mirror of the `Cmd+1..9` project switcher (iTerm2's
+  window/tab convention). `Ctrl+Tab` / `Ctrl+Shift+Tab` cycles next/previous
+  tab, browser-style, on any keyboard layout. Both combos are swallowed
+  before reaching the PTY, so `Ctrl+Shift+Tab` no longer risks leaking a
+  `Shift+Tab` into Claude's permission-mode toggle.
+
 ### Fixed
 - **Closing a project now actually shows its confirmation dialog**
   ([#50](https://github.com/willywg/klaudio-panels/issues/50)). The sidebar's

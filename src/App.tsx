@@ -459,6 +459,37 @@ function Shell() {
         if (!target) return;
         e.preventDefault();
         setActiveProjectPath(target.path);
+        return;
+      }
+      // Cmd+Opt+1..8 jumps to the Nth tab of the active project; Cmd+Opt+9
+      // goes to the last one — the within-project mirror of Cmd+1..9
+      // (iTerm2's window/tab split). Matched on e.code because with Opt
+      // held macOS transforms e.key (Opt+1 → "¡" on US, varies by layout).
+      if (mod && !e.shiftKey && e.altKey && /^Digit[1-9]$/.test(e.code)) {
+        const tabs = projectTabs();
+        if (tabs.length === 0) return;
+        const n = Number(e.code.slice(5));
+        const target = n === 9 ? tabs[tabs.length - 1] : tabs[n - 1];
+        if (!target) return;
+        e.preventDefault();
+        handleActivateTab(target.id);
+        return;
+      }
+      // Ctrl+Tab / Ctrl+Shift+Tab cycles next/prev tab within the active
+      // project (browser convention; works on every keyboard layout, unlike
+      // Cmd+Shift+[ which needs Opt on Spanish ISO). Ctrl only — Cmd+Tab
+      // belongs to macOS app switching. The PTY never wants this combo:
+      // terminals can't encode Ctrl+Tab distinctly, and each terminal
+      // view's custom key handler swallows it so xterm doesn't emit \t.
+      if (e.ctrlKey && !e.metaKey && !e.altKey && e.key === "Tab") {
+        const tabs = projectTabs();
+        if (tabs.length === 0) return;
+        e.preventDefault();
+        const idx = tabs.findIndex((t) => t.id === term.store.activeTabId);
+        const delta = e.shiftKey ? -1 : 1;
+        const target =
+          idx < 0 ? tabs[0] : tabs[(idx + delta + tabs.length) % tabs.length];
+        handleActivateTab(target.id);
       }
     };
     window.addEventListener("keydown", onKey);

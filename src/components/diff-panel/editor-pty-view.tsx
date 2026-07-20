@@ -226,6 +226,14 @@ export function EditorPtyView(props: Props) {
 
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
+      // App-level tab-switch combos — bubble to the window handler, but
+      // keep xterm from forwarding \t / a layout dead-char to the editor.
+      if (e.key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) {
+        return false;
+      }
+      if (e.metaKey && e.altKey && /^Digit[1-9]$/.test(e.code)) {
+        return false;
+      }
       const mac = navigator.platform.toUpperCase().includes("MAC");
       const meta = mac ? e.metaKey : e.ctrlKey && e.shiftKey;
       if (!meta) return true;
