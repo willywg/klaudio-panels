@@ -7,6 +7,14 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 ## [Unreleased]
 
 ### Added
+- **Home screen: project avatars + filter box**
+  ([#56](https://github.com/willywg/klaudio-panels/issues/56)). Each row in
+  Recent projects now shows the project's avatar tile — same initials
+  (including the per-project rename override) and deterministic color as the
+  sidebar. A search box above the list filters by name, path, or initials as
+  you type; Enter opens the first match, Esc clears. The box is focused
+  automatically when the home screen appears.
+
 - **Soft wrap for prose files in the file preview**
   ([#54](https://github.com/willywg/klaudio-panels/issues/54)). Markdown and
   plain-text files (`md`, `markdown`, `mdx`, `txt`) now wrap long lines
@@ -23,6 +31,14 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   `Shift+Tab` into Claude's permission-mode toggle.
 
 ### Fixed
+- **Home screen list is scrollable again**
+  ([#56](https://github.com/willywg/klaudio-panels/issues/56)). The
+  recent-projects list was clipped with no way to scroll: the screen's root
+  div relied on `flex-1` inside a non-flex absolute layer, so it grew with
+  content and its `overflow-y-auto` never engaged, while `justify-center`
+  clipped the top of the overflow. Now the root is `h-full` and the column
+  centers via `margin: auto`, which collapses to 0 when content is taller
+  than the viewport so the list scrolls from the first row.
 - **Closing a project now actually shows its confirmation dialog**
   ([#50](https://github.com/willywg/klaudio-panels/issues/50)). The sidebar's
   close flow called the browser-global `confirm()`, which Tauri routes to
