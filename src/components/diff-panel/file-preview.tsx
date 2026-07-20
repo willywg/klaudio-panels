@@ -17,6 +17,16 @@ type Props = {
   line?: number;
 };
 
+/** Prose formats read as paragraphs, not code — soft-wrap them instead of
+ *  horizontal scrolling. Code files keep `pre` so indentation-heavy lines
+ *  (and the mental column ruler) stay intact. */
+const PROSE_EXTENSIONS = new Set(["md", "markdown", "mdx", "txt"]);
+
+function isProsePath(relPath: string): boolean {
+  const ext = relPath.split(".").pop()?.toLowerCase() ?? "";
+  return PROSE_EXTENSIONS.has(ext);
+}
+
 export function FilePreview(props: Props) {
   const panel = useDiffPanel();
   const [html, setHtml] = createSignal<string>("");
@@ -127,7 +137,10 @@ export function FilePreview(props: Props) {
         >
           <div
             ref={codeHost}
-            class="preview-code"
+            classList={{
+              "preview-code": true,
+              "preview-wrap": isProsePath(props.relPath),
+            }}
             // eslint-disable-next-line solid/no-innerhtml
             innerHTML={html()}
           />

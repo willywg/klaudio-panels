@@ -7,6 +7,12 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 ## [Unreleased]
 
 ### Added
+- **Soft wrap for prose files in the file preview**
+  ([#54](https://github.com/willywg/klaudio-panels/issues/54)). Markdown and
+  plain-text files (`md`, `markdown`, `mdx`, `txt`) now wrap long lines
+  downward with a hanging indent aligned after the line-number gutter,
+  instead of forcing horizontal scroll. Code files keep `pre` + horizontal
+  scroll so indentation stays intact.
 - **Keyboard shortcuts to switch tabs within a project**
   ([#52](https://github.com/willywg/klaudio-panels/issues/52)). `Cmd+Opt+1..8`
   jumps to the Nth tab of the active project and `Cmd+Opt+9` to the last one —

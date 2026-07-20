@@ -56,6 +56,23 @@ body {
   background: rgba(99, 102, 241, 0.18);
   transition: background 400ms ease-out;
 }
+/* Soft wrap for prose files (.preview-wrap set by FilePreview). Shiki emits
+   `\n` text nodes between .line spans; `white-space: normal` on `code` makes
+   those whitespace-only boxes collapse once each .line becomes a block, so
+   we don't get double spacing. The padding/text-indent pair is a hanging
+   indent: 68px = 48px number + 12px padding + 8px margin of `.line::before`,
+   so wrapped continuation lines align after the gutter instead of under the
+   line number. */
+.preview-code.preview-wrap pre.shiki code {
+  white-space: normal;
+}
+.preview-code.preview-wrap pre.shiki .line {
+  display: block;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding-left: 68px;
+  text-indent: -68px;
+}
 .preview-scroll::-webkit-scrollbar {
   width: 10px;
   height: 10px;
