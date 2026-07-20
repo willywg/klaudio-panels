@@ -41,6 +41,20 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   `Shift+Tab` into Claude's permission-mode toggle.
 
 ### Fixed
+- **Opening a project with huge session files no longer freezes the app**
+  ([#60](https://github.com/willywg/klaudio-panels/issues/60)). Projects
+  carrying hundreds of MB of `~/.claude/projects` JSONLs (one real case:
+  561MB, largest session 334MB) hard-froze the UI for minutes — macOS showed
+  "Application not responding". Two causes, both fixed: the
+  `list_sessions_for_project` command was synchronous, which Tauri v2 runs
+  on the main thread (now async + `spawn_blocking`), and the sidebar scan
+  fully JSON-parsed every line of every session file (now a cheap substring
+  gate skips the giant user/assistant lines once the preview is settled).
+  The watcher's completion detector also stops reading whole files into
+  memory — it inspects only a bounded 4 MiB tail.
+- **Buttons show a pointer cursor**. Tailwind's preflight leaves buttons on
+  the OS default arrow cursor; a global rule now opts every enabled button
+  into `cursor: pointer` (first noticed on the markdown preview toggle).
 - **Home screen list is scrollable again**
   ([#56](https://github.com/willywg/klaudio-panels/issues/56)). The
   recent-projects list was clipped with no way to scroll: the screen's root

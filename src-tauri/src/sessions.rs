@@ -1,7 +1,7 @@
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 const SCAN_LINES_FOR_CWD: usize = 50;
@@ -93,6 +93,21 @@ pub(crate) struct SessionScan {
     pub(crate) has_conversation: bool,
 }
 
+/// Cheap substring gate that runs before the expensive `serde_json` parse
+/// in `scan_session_file`. Session files reach hundreds of MB (#60) and
+/// most of that bulk is giant user/assistant lines (tool results, pasted
+/// dumps) that stop mattering once the preview is settled — only
+/// `custom-title` / `summary` rewrites do. A false positive (the word
+/// appearing inside message content) just costs one parse that the type
+/// match then discards; a false negative can't happen for well-formed
+/// entries because the JSON type value is always a substring of its line.
+fn line_may_matter(line: &str, need_conversation_info: bool) -> bool {
+    if line.contains("custom-title") || line.contains("\"summary\"") {
+        return true;
+    }
+    need_conversation_info && (line.contains("\"user\"") || line.contains("\"assistant\""))
+}
+
 /// Single pass over the JSONL: captures first user message, custom-title and
 /// summary entries. `custom-title` and `summary` are last-write-wins.
 pub(crate) fn scan_session_file(file: &Path) -> SessionScan {
@@ -107,6 +122,10 @@ pub(crate) fn scan_session_file(file: &Path) -> SessionScan {
         return scan;
     };
     for line in BufReader::new(f).lines().map_while(Result::ok) {
+        let need_conv = scan.first_preview.is_none() || !scan.has_conversation;
+        if !line_may_matter(&line, need_conv) {
+            continue;
+        }
         let Ok(v) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
@@ -174,8 +193,24 @@ pub(crate) struct AssistantComplete {
 pub(crate) fn last_assistant_complete(file: &Path) -> Option<AssistantComplete> {
     const TERMINAL: &[&str] = &["end_turn", "max_tokens", "stop_sequence", "refusal"];
 
-    let f = fs::File::open(file).ok()?;
-    let lines: Vec<String> = BufReader::new(f).lines().map_while(Result::ok).collect();
+    // Only the tail can hold "the most recent assistant entry", so cap the
+    // read — collecting a multi-hundred-MB session (#60) into memory on
+    // every watcher event was pure churn. 4 MiB comfortably covers even an
+    // enormous assistant message plus the trailing system entries.
+    const TAIL_BYTES: u64 = 4 * 1024 * 1024;
+
+    let mut f = fs::File::open(file).ok()?;
+    let len = f.metadata().ok()?.len();
+    let clipped = len > TAIL_BYTES;
+    if clipped {
+        f.seek(SeekFrom::End(-(TAIL_BYTES as i64))).ok()?;
+    }
+    let mut lines: Vec<String> = BufReader::new(f).lines().map_while(Result::ok).collect();
+    if clipped && !lines.is_empty() {
+        // The seek almost certainly landed mid-line; the partial first row
+        // would fail to parse anyway, but drop it explicitly.
+        lines.remove(0);
+    }
 
     for line in lines.iter().rev() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
@@ -207,8 +242,20 @@ pub(crate) fn last_assistant_complete(file: &Path) -> Option<AssistantComplete> 
     None
 }
 
+/// Async so Tauri dispatches it off the main thread — as a sync command
+/// this ran ON the main thread and a project with hundreds of MB of
+/// session JSONLs froze the whole UI for minutes (#60). `spawn_blocking`
+/// keeps the CPU-bound scan off the async runtime's core threads too.
 #[tauri::command]
-pub fn list_sessions_for_project(project_path: String) -> Result<Vec<SessionMeta>, String> {
+pub async fn list_sessions_for_project(
+    project_path: String,
+) -> Result<Vec<SessionMeta>, String> {
+    tauri::async_runtime::spawn_blocking(move || list_sessions_for_project_sync(project_path))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn list_sessions_for_project_sync(project_path: String) -> Result<Vec<SessionMeta>, String> {
     let projects_dir = claude_projects_dir().ok_or("cannot resolve ~/.claude/projects")?;
     if !projects_dir.exists() {
         return Ok(vec![]);

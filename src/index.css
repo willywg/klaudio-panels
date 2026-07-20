@@ -21,6 +21,13 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Buttons render with the OS default cursor unless opted in — Tailwind's
+   preflight doesn't set it. Every clickable button in this app should
+   read as clickable (first reported on the markdown preview toggle). */
+button:not(:disabled) {
+  cursor: pointer;
+}
+
 /* Read-only file preview (Shiki output) — counter-based line numbers,
    monospace body, flash highlight for cmd+click jumps. */
 .preview-code pre.shiki {
