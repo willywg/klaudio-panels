@@ -9,6 +9,7 @@ pub mod git;
 pub mod notify;
 pub mod open_in;
 pub mod plugins;
+pub mod project_env;
 pub mod pty;
 pub mod session_watcher;
 pub mod sessions;
@@ -116,6 +117,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             binary::get_claude_binary,
             sessions::list_sessions_for_project,
+            project_env::resolve_profile_id,
             pty::pty_open,
             pty::pty_open_editor,
             pty::pty_open_shell,

@@ -39,7 +39,7 @@ fn parse_shell_env(stdout: &[u8]) -> HashMap<String, String> {
         .collect()
 }
 
-fn command_output_with_timeout(
+pub(crate) fn command_output_with_timeout(
     mut cmd: Command,
     timeout: Duration,
 ) -> std::io::Result<Option<std::process::Output>> {

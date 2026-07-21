@@ -59,8 +59,14 @@ fn ts_key(v: &Option<String>) -> Option<DateTime<Utc>> {
     v.as_deref().and_then(parse_rfc3339)
 }
 
-fn claude_projects_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".claude/projects"))
+/// Resolve the Claude sessions directory: `<config_dir>/projects` when the
+/// project's direnv (see `project_env.rs`) set a `CLAUDE_CONFIG_DIR`,
+/// otherwise the default `~/.claude/projects`.
+fn projects_dir_for(config_dir: Option<PathBuf>) -> Option<PathBuf> {
+    match config_dir {
+        Some(dir) => Some(dir.join("projects")),
+        None => dirs::home_dir().map(|h| h.join(".claude/projects")),
+    }
 }
 
 fn canonical(path: &str) -> String {
@@ -346,7 +352,12 @@ pub async fn list_sessions_for_project(
 }
 
 fn list_sessions_for_project_sync(project_path: String) -> Result<Vec<SessionMeta>, String> {
-    let projects_dir = claude_projects_dir().ok_or("cannot resolve ~/.claude/projects")?;
+    // Fails closed on a direnv evaluation error (see project_env.rs) — we
+    // never fall back to the default ~/.claude/projects after a failure,
+    // since that could show sessions from the wrong Claude account.
+    let config_dir = crate::project_env::resolve_claude_config_dir(&project_path)?;
+    let projects_dir =
+        projects_dir_for(config_dir).ok_or("cannot resolve Claude sessions directory")?;
     if !projects_dir.exists() {
         return Ok(vec![]);
     }
@@ -356,7 +367,12 @@ fn list_sessions_for_project_sync(project_path: String) -> Result<Vec<SessionMet
 /// Scans every encoded project dir under `projects_dir` for sessions whose
 /// recorded `cwd` matches `project_path`, sorted by recency (see the
 /// `sort_by` below). Pure and side-effect-free beyond reading
-/// `projects_dir`, so it's the unit under test for the recency ordering.
+/// `projects_dir`, so it's the unit under test for both the recency
+/// ordering and config-root scoping (see `tests::` below) — `projects_dir`
+/// is whatever `list_sessions_for_project` already resolved (custom
+/// `CLAUDE_CONFIG_DIR/projects` or the default `~/.claude/projects`), never
+/// both, so a caller that passes the wrong root is the only way this can
+/// leak sessions across profiles.
 fn scan_projects_dir(projects_dir: &Path, project_path: &str) -> Vec<SessionMeta> {
     let target = canonical(project_path);
 
@@ -443,6 +459,8 @@ fn scan_projects_dir(projects_dir: &Path, project_path: &str) -> Vec<SessionMeta
 #[cfg(unix)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::os::unix::fs::PermissionsExt;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     /// A directory under the OS temp dir, removed on drop.
@@ -471,6 +489,19 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// Same fake-direnv technique as `project_env::tests` — a shell script
+    /// whose stdout is controlled via `FAKE_DIRENV_STDOUT`.
+    fn write_fake_direnv(bin_dir: &Path) {
+        let script = "#!/bin/sh\n\
+             if [ -n \"$FAKE_DIRENV_STDOUT\" ]; then printf '%s' \"$FAKE_DIRENV_STDOUT\"; fi\n\
+             exit 0\n";
+        let path = bin_dir.join("direnv");
+        fs::write(&path, script).unwrap();
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).unwrap();
     }
 
     /// Encodes a project path the way Claude does: "/" -> "-".
@@ -702,5 +733,93 @@ mod tests {
             vec!["session-a", "session-b"],
             "identical updated_at/created_at must still produce a deterministic order via session id"
         );
+    }
+
+    #[test]
+    fn list_sessions_scopes_to_resolved_config_root_only() {
+        let bin = TempDir::new("direnv-bin");
+        write_fake_direnv(bin.path());
+
+        let default_root = TempDir::new("default-root"); // stands in for ~/.claude (default profile)
+        let custom_root = TempDir::new("custom-root"); // stands in for $CLAUDE_CONFIG_DIR (custom profile)
+        let project = TempDir::new("project-custom-profile");
+        let project_path = project.path().to_str().unwrap().to_string();
+        let encoded = encode(&project_path);
+
+        // The default profile already has a session recorded for this exact
+        // cwd — e.g. from before the project's .envrc existed.
+        write_session_jsonl(
+            &default_root.path().join("projects").join(&encoded),
+            "default-profile-session",
+            &project_path,
+            "hi from default profile",
+            "2026-01-01T00:00:00.000Z",
+        );
+
+        // The custom profile has its own session for the same cwd.
+        write_session_jsonl(
+            &custom_root.path().join("projects").join(&encoded),
+            "custom-profile-session",
+            &project_path,
+            "hi from custom profile",
+            "2026-01-01T00:00:00.000Z",
+        );
+
+        // Fake direnv points CLAUDE_CONFIG_DIR at the custom root, exactly
+        // like `resolve_project_env` would resolve it for `pty_open`.
+        let mut env = HashMap::new();
+        env.insert("PATH".into(), bin.path().display().to_string());
+        env.insert("HOME".into(), "/tmp".into());
+        env.insert(
+            "FAKE_DIRENV_STDOUT".into(),
+            format!(
+                r#"{{"CLAUDE_CONFIG_DIR":"{}"}}"#,
+                custom_root.path().display()
+            ),
+        );
+
+        let resolved = crate::project_env::resolve_project_env(&project_path, Some(env), vec![])
+            .expect("direnv export should succeed");
+        let config_dir = resolved
+            .into_iter()
+            .find(|(k, _)| k == "CLAUDE_CONFIG_DIR")
+            .map(|(_, v)| PathBuf::from(v));
+
+        let projects_dir = projects_dir_for(config_dir).expect("resolves a projects dir");
+        assert_eq!(projects_dir, custom_root.path().join("projects"));
+
+        let sessions = scan_projects_dir(&projects_dir, &project_path);
+
+        assert_eq!(
+            sessions.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["custom-profile-session"],
+            "must return only the custom-profile session, never merge in the default root"
+        );
+
+        // The default root is never touched by a resolution that found a
+        // custom CLAUDE_CONFIG_DIR — confirm it independent of the above.
+        assert!(default_root.path().join("projects").join(&encoded).exists());
+    }
+
+    #[test]
+    fn scan_returns_empty_when_custom_projects_dir_does_not_exist() {
+        let project = TempDir::new("project-missing-root");
+        let project_path = project.path().to_str().unwrap().to_string();
+
+        // CLAUDE_CONFIG_DIR resolved to a path whose `projects` subdir was
+        // never created — must yield an empty list, not an error and not a
+        // fallback to ~/.claude/projects.
+        let missing_root = TempDir::new("config-root-without-projects-subdir");
+        let projects_dir = projects_dir_for(Some(missing_root.path().to_path_buf())).unwrap();
+        assert!(!projects_dir.exists());
+
+        let sessions = scan_projects_dir(&projects_dir, &project_path);
+        assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn projects_dir_for_none_defaults_to_dot_claude() {
+        let home = dirs::home_dir().expect("home dir must resolve in test env");
+        assert_eq!(projects_dir_for(None), Some(home.join(".claude/projects")));
     }
 }

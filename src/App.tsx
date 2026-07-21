@@ -28,8 +28,11 @@ import { NotificationToastStack } from "@/components/notification-toast";
 import { FileTree } from "@/components/file-tree/file-tree";
 import {
   getLastSessionId,
+  getLegacyLastSessionId,
   setLastSessionId,
+  clearLegacyLastSessionId,
 } from "@/components/last-session";
+import { resolveAutoResumeTarget } from "@/lib/auto-resume";
 import { ProjectsProvider, useProjects } from "@/context/projects";
 import { TerminalProvider, useTerminal } from "@/context/terminal";
 import { SidebarProvider, useSidebar } from "@/context/sidebar";
@@ -672,21 +675,26 @@ function Shell() {
     return Array.from(set);
   });
 
-  // Persist lastSessionId for the active project.
+  // Persist lastSessionId for the active project, namespaced to the
+  // profile that tab actually spawned under.
   createEffect(() => {
     const p = activeProjectPath();
     const a = activeTab();
     if (!p || !a || a.projectPath !== p) return;
-    if (a.sessionId) setLastSessionId(p, a.sessionId);
+    if (a.sessionId) setLastSessionId(p, a.profileId, a.sessionId);
   });
 
   async function openNewTab() {
     const p = activeProjectPath();
     if (!p) return;
     try {
+      const profileId = await invoke<string>("resolve_profile_id", {
+        projectPath: p,
+      });
       const id = await term.openTab(p, [], {
         label: "New session",
         sessionId: null,
+        profileId,
       });
       focusTerminal(id);
     } catch (err) {
@@ -702,9 +710,13 @@ function Shell() {
     label: string,
   ) {
     try {
+      const profileId = await invoke<string>("resolve_profile_id", {
+        projectPath,
+      });
       const id = await term.openTab(projectPath, ["--resume", sessionId], {
         label,
         sessionId,
+        profileId,
       });
       focusTerminal(id);
     } catch (err) {
@@ -750,36 +762,58 @@ function Shell() {
       (t) => t.projectPath === projectPath,
     );
     if (existing.length > 0) return;
-    const lastId = getLastSessionId(projectPath);
-    if (!lastId) return;
 
-    // Resolve the real session label (custom-title / summary) before opening
-    // the tab, so auto-resumed tabs show the rename, not "session xxxxxxxx".
     void (async () => {
-      const spawnedAt = Date.now();
-      let label = `session ${lastId.slice(0, 8)}`;
+      let profileId: string;
       try {
-        const sessions = (await invoke("list_sessions_for_project", {
+        profileId = await invoke<string>("resolve_profile_id", {
           projectPath,
-        })) as SessionMeta[];
-        const meta = sessions.find((s) => s.id === lastId);
-        if (!meta) {
-          console.info(
-            `auto-resume target ${lastId} no longer exists in ${projectPath}. Clearing lastSessionId.`,
-          );
-          setLastSessionId(projectPath, null);
-          return;
-        }
-        label = displayLabel(meta);
+        });
       } catch (err) {
-        console.warn("list_sessions_for_project failed during auto-resume", err);
+        // Could be a transient/blocked .envrc (e.g. `direnv allow` not run
+        // yet) — abort without touching any stored pointer, not a "this
+        // project has no last session" signal.
+        console.warn("resolve_profile_id failed during auto-resume", err);
+        return;
       }
 
+      const decision = await resolveAutoResumeTarget(profileId, {
+        getNamespaced: () => getLastSessionId(projectPath, profileId),
+        getLegacy: () => getLegacyLastSessionId(projectPath),
+        listSessions: () =>
+          invoke("list_sessions_for_project", {
+            projectPath,
+          }) as Promise<SessionMeta[]>,
+      });
+
+      if (decision.action === "none") return;
+
+      if (decision.action === "stale") {
+        // Session listing succeeded and the id it named no longer exists —
+        // clear only the pointer it actually came from.
+        if (decision.source === "namespaced") {
+          setLastSessionId(projectPath, profileId, null);
+        } else {
+          clearLegacyLastSessionId(projectPath);
+        }
+        return;
+      }
+
+      // decision.action === "open"
+      if (decision.source === "legacy") {
+        // Validated against the current (profile-scoped) session list —
+        // migrate it under the namespaced key and retire the legacy
+        // pointer so it can't resurrect a stale id on a later launch.
+        setLastSessionId(projectPath, profileId, decision.sessionId);
+        clearLegacyLastSessionId(projectPath);
+      }
+
+      const spawnedAt = Date.now();
       try {
         const tabId = await term.openTab(
           projectPath,
-          ["--resume", lastId],
-          { label, sessionId: lastId },
+          ["--resume", decision.sessionId],
+          { label: decision.label, sessionId: decision.sessionId, profileId },
         );
         // The project-switch effect ran before tabs existed for this project
         // and skipped its focus call. Now that auto-resume materialised a
@@ -790,16 +824,16 @@ function Shell() {
           const elapsed = Date.now() - spawnedAt;
           if (elapsed < AUTO_RESUME_FAIL_WINDOW_MS && code !== 0) {
             console.info(
-              `auto-resume failed for ${lastId} (exit ${code} after ${elapsed}ms). Clearing lastSessionId.`,
+              `auto-resume failed for ${decision.sessionId} (exit ${code} after ${elapsed}ms). Clearing lastSessionId.`,
             );
-            setLastSessionId(projectPath, null);
+            setLastSessionId(projectPath, profileId, null);
             void term.closeTab(tabId);
           }
           detach();
         });
       } catch (err) {
         console.warn("auto-resume openTab threw", err);
-        setLastSessionId(projectPath, null);
+        setLastSessionId(projectPath, profileId, null);
       } finally {
         setSessionsRefresh((k) => k + 1);
       }
@@ -864,9 +898,13 @@ function Shell() {
     projects.touch(projectPath);
     setActiveProjectPath(projectPath);
     try {
+      const profileId = await invoke<string>("resolve_profile_id", {
+        projectPath,
+      });
       await term.openTab(projectPath, [], {
         label: "New session",
         sessionId: null,
+        profileId,
       });
     } catch (err) {
       console.error("cli:open → openTab failed", err);

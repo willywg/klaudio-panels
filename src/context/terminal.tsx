@@ -14,6 +14,13 @@ export type TerminalTab = {
   id: string;
   projectPath: string;
   sessionId: string | null;
+  /** "default" or "custom:<...>" (see project_env::profile_id_for_config_dir),
+   *  resolved *before* this tab is created (never assigned after the fact —
+   *  that would leave a window where a live session event can't tell which
+   *  profile the tab belongs to). Every consumer of session:new/meta/complete
+   *  must gate on this being exactly "default", since the backend watcher
+   *  that emits those only observes the default ~/.claude/projects root. */
+  profileId: string;
   label: string;
   status: TabStatus;
   exitCode: number | null;
@@ -40,6 +47,9 @@ type ExitHandler = (code: number) => void;
 export type OpenTabOpts = {
   label: string;
   sessionId: string | null;
+  /** Resolved by the caller via `resolve_profile_id` *before* calling
+   *  `openTab` — see `TerminalTab.profileId`. */
+  profileId: string;
 };
 
 function newId(): string {
@@ -107,6 +117,7 @@ export function makeTerminalContext() {
       id,
       projectPath,
       sessionId: opts.sessionId,
+      profileId: opts.profileId,
       label: opts.label,
       status: "opening",
       exitCode: null,
@@ -122,7 +133,12 @@ export function makeTerminalContext() {
     );
 
     try {
-      await invoke("pty_open", { id, projectPath, args });
+      await invoke("pty_open", {
+        id,
+        projectPath,
+        args,
+        expectedProfileId: opts.profileId,
+      });
     } catch (err) {
       const msg = String(err);
       console.error("pty_open failed", msg);
