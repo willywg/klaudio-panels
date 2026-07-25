@@ -15,6 +15,7 @@ pub mod session_watcher;
 pub mod sessions;
 pub mod shell_env;
 pub mod shell_install;
+pub mod statusline_context;
 pub mod statusline_resolve;
 pub mod usage_snapshot;
 

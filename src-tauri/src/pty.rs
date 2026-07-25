@@ -251,6 +251,7 @@ pub async fn pty_open(
     project_path: String,
     args: Vec<String>,
     expected_profile_id: String,
+    enable_status_bar: bool,
 ) -> Result<(), String> {
     let bin = crate::binary::find_claude_binary()?;
     let shell = crate::shell_env::get_user_shell();
@@ -297,6 +298,45 @@ pub async fn pty_open(
              have been edited) — reopen the project and try again"
                 .to_string(),
         );
+    }
+
+    let mut args = args;
+    let mut env = env;
+
+    // Status-bar overlay: optional telemetry only, never allowed to block
+    // or fail the actual Claude launch. Every failure mode inside
+    // `statusline_context` collapses to `Ok(None)` (or a missing bridge
+    // binary, checked here) — in every one of those cases we just proceed
+    // to spawn normally, with no `--settings` flag and no
+    // `KLAUDIO_CONTEXT_FILE` env var.
+    if enable_status_bar {
+        if let Some(bridge_binary_path) = crate::statusline_context::resolve_bridge_binary_path(&app)
+        {
+            let overlay = crate::statusline_context::prepare_status_bar_overlay(
+                &app,
+                &project_path,
+                &actual_profile_id,
+                &id,
+                &bridge_binary_path,
+            )
+            .unwrap_or(None);
+
+            if let Some(overlay) = overlay {
+                args.push("--settings".to_string());
+                args.push(overlay.settings_arg);
+                env.push(overlay.env_var);
+
+                // Cleanup only ever runs once this tab's exit is *confirmed*
+                // via `pty:exit:<id>` — never on a mere `pty_kill` request,
+                // which doesn't itself guarantee the child has exited yet
+                // (see `register_exit_cleanup`'s own doc comment).
+                register_exit_cleanup(
+                    &app,
+                    &id,
+                    vec![overlay.context_file_path, overlay.snapshot_file_path],
+                );
+            }
+        }
     }
 
     let bin_str = bin

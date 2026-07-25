@@ -63,7 +63,7 @@ pub struct RateWindow {
 /// `statusline_context.rs` before Claude is spawned; the child only ever
 /// receives a path to this file (`KLAUDIO_CONTEXT_FILE`), never the values
 /// directly as env vars.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BridgeContext {
     pub provider_id: String,
     pub tab_id: String,
