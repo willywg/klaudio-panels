@@ -17,6 +17,7 @@ pub mod shell_env;
 pub mod shell_install;
 pub mod statusline_context;
 pub mod statusline_resolve;
+pub mod statusline_snapshot;
 pub mod usage_snapshot;
 
 /// Best-effort restoration of the outer terminal's tty modes when we exit.
@@ -66,6 +67,12 @@ pub fn run() {
             std::thread::spawn(move || {
                 if let Err(e) = session_watcher::install(handle) {
                     debug_log::write("boot", &format!("session_watcher install failed: {e}"));
+                }
+            });
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                if let Err(e) = statusline_snapshot::install(handle) {
+                    debug_log::write("boot", &format!("statusline_snapshot install failed: {e}"));
                 }
             });
             {
@@ -151,6 +158,7 @@ pub fn run() {
             notify::notify_native,
             notify::set_dock_badge,
             plugins::is_warp_plugin_installed,
+            statusline_snapshot::read_status_snapshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
