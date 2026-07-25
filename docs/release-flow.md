@@ -85,8 +85,18 @@ specific commit; the cask URL also embeds `vX.Y.Z`. Don't skip it.
 ## 4. Build universal DMG
 
 ```bash
-bun tauri build --target universal-apple-darwin
+bun run release:mac
 ```
+
+This is `bun run bridge:prepare:macos-universal && tauri build --config
+src-tauri/tauri.bundle.conf.json --target universal-apple-darwin` — see
+["Bundling `klaudio-statusline-bridge`"](#bundling-klaudio-statusline-bridge)
+below for what those two pieces do and why a release build needs both.
+Don't run bare `tauri build --target universal-apple-darwin` for a real
+release — it'll produce a DMG, but without `--config
+src-tauri/tauri.bundle.conf.json` the bridge sidecar is never declared, so
+the status bar's live usage data silently never appears for anyone who
+installs it.
 
 ⚠️ **`--target universal-apple-darwin` is mandatory.** Without it Tauri
 builds a host-arch DMG (e.g. `Klaudio Panels_X.Y.Z_aarch64.dmg`) and
@@ -196,45 +206,79 @@ Open the app, verify the version in About (or the title bar) reads
 `X.Y.Z`. macOS may show a Gatekeeper warning on first launch — the
 cask's `caveats` block documents the right-click → Open workaround.
 
-## Known gap: `klaudio-statusline-bridge` isn't bundled into packaged builds yet
+## Bundling `klaudio-statusline-bridge`
 
 The status bar feature's helper binary (`src-tauri/src/bin/klaudio-statusline-bridge.rs`,
 a second binary target in the same crate) is resolved at runtime by
-`statusline_context::resolve_bridge_binary_path`, which tries a file
-named `klaudio-statusline-bridge` next to Klaudio's own running
-executable. That works out of the box under `bun tauri dev` (both
-binaries land in the same `target/debug/` directory), but a packaged
-DMG/AppImage/deb from this flow does **not** include it — the feature
-degrades gracefully (the overlay is never installed, `pty_open` just
-spawns Claude normally, exactly the fail-open behavior the whole
-feature is designed around), but no live usage data will appear in a
-shipped build until this is finished.
+`statusline_context::resolve_bridge_binary_path`, which tries, in order:
+a file named `klaudio-statusline-bridge` next to Klaudio's own running
+executable (covers `bun tauri dev`/`cargo run`, where both binaries land
+in the same `target/debug/` directory — no packaging step involved), then
+Tauri's resource directory (covers a packaged build, once the bundle
+actually ships the sidecar — this section).
 
-Tauri's documented mechanism for this is `bundle.externalBin` in
-`tauri.conf.json`, which requires a target-triple-suffixed binary
+Tauri's mechanism for shipping a second binary alongside the app is
+`bundle.externalBin`, which requires a target-triple-suffixed binary
 (e.g. `src-tauri/binaries/klaudio-statusline-bridge-x86_64-unknown-linux-gnu`,
-or `-universal-apple-darwin` to mirror this doc's own `--target
-universal-apple-darwin` lipo step) to **already exist on disk before
-`cargo check`/`cargo build` runs at all** — `tauri-build`'s build
-script validates every `externalBin` entry eagerly, for every crate
-build, not just at packaging time. This was tried and reverted during
+or `-universal-apple-darwin` for the mac release) to **already exist on
+disk before `cargo check`/`cargo build` runs at all** — `tauri-build`'s
+build script validates every `externalBin` entry eagerly, for every crate
+build, not just at packaging time. Declaring it directly in
+`tauri.conf.json` was tried and reverted early in this feature's
 implementation because it broke `cargo check` for every contributor
-immediately (there's no way to make Cargo build the bridge binary
-first and copy it into place before its own build script runs within
-a single invocation — it needs an explicit, separate pre-build step
-runners and every contributor's dev setup would have to pick up).
+immediately, with no packaged binary in sight.
 
-Before wiring this up for real, decide and document a workflow for:
-building the bridge binary (`cargo build --release --bin
-klaudio-statusline-bridge`, lipo'd for both `x86_64`/`aarch64` on
-macOS same as the main app), copying/renaming it into
-`src-tauri/binaries/` with the right target-triple suffix, and doing
-so *before* every `cargo check`/`bun tauri dev`/`tauri build` — not
-just before a release build — or finding a lighter-weight alternative
-(a committed placeholder binary that's overwritten just before
-packaging, a build wrapper script, etc.). Whichever approach is
-chosen, it needs validating with a real packaged build (this repo's
-release flow is macOS-only end-to-end) before being trusted.
+The fix is to keep `externalBin` out of the base config entirely and
+declare it only in a second, packaging-only config file:
+
+- **`src-tauri/tauri.bundle.conf.json`** — the only place
+  `bundle.externalBin: ["binaries/klaudio-statusline-bridge"]` is
+  declared. `cargo check`, `cargo test`, `cargo clippy`, and `bun tauri
+  dev` never load it, so none of them are affected by whether the
+  sidecar binary happens to exist. Only a packaging command that passes
+  `--config src-tauri/tauri.bundle.conf.json` (Tauri deep-merges it over
+  `tauri.conf.json` for that one invocation) ever sees it.
+- **`src-tauri/scripts/prepare-statusline-bridge.sh <target-triple>`** —
+  builds the bridge in release mode for one explicit target, stages it
+  at the exact `src-tauri/binaries/klaudio-statusline-bridge-<target-triple>`
+  path `externalBin` expects, removing any stale artifact first, and
+  verifies the result exists and is executable (running it once with
+  empty stdin, for native targets only — see the script's own comments
+  for why that's safe). Never commits its output — `src-tauri/binaries/`
+  is gitignored.
+- **`src-tauri/scripts/prepare-statusline-bridge-universal-macos.sh`** —
+  macOS-only. Runs the script above for both `x86_64-apple-darwin` and
+  `aarch64-apple-darwin`, then `lipo -create`s the two slices into the
+  single `klaudio-statusline-bridge-universal-apple-darwin` sidecar
+  `--target universal-apple-darwin` expects, mirroring the main app's own
+  universal-binary step in this doc. `lipo -info` confirms both
+  architectures landed in the result before declaring success.
+- **`package.json` scripts** — `bun run bridge:prepare -- <target>` (ad
+  hoc/CI use of the first script directly), `bun run package:linux`
+  (prepares the Linux sidecar, then packages with `--config
+  src-tauri/tauri.bundle.conf.json`), and `bun run release:mac` (the
+  macOS equivalent — see step 4 above). Plain contributor workflows
+  (`bun run validate`, `bun run dev:app`) never touch any of this and
+  have no sidecar prerequisite.
+
+When none of this has run — a fresh `git clone` with no packaging step
+performed — the feature degrades gracefully exactly as designed:
+`resolve_bridge_binary_path` finds nothing, `pty_open` just spawns Claude
+normally with no `--settings` overlay, and no live usage data appears.
+That's the correct fail-open behavior for a dev checkout, not a bug.
+
+**Validated so far:** a Linux `.deb` built with `bun run package:linux`
+and installed fresh in a throwaway container — the bridge sidecar landed
+at its installed resource path, `pty_open` resolved it, Claude executed
+it, and status-bar snapshots reached the UI from the installed binary
+(see the branch's own PR description / commit history for the exact
+session). **Not yet validated: the macOS universal path.** Nobody has
+run `bun run release:mac` on a real Mac and installed the resulting DMG
+since this packaging config was added — do that before trusting it for
+an actual release. If it fails, the most likely culprits are `lipo` not
+being on PATH (needs Xcode Command Line Tools) or one of the two Darwin
+Rust targets not being installed (`rustup target add x86_64-apple-darwin
+aarch64-apple-darwin`).
 
 ## Anti-patterns to avoid
 
