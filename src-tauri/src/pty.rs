@@ -252,7 +252,7 @@ pub async fn pty_open(
     args: Vec<String>,
     expected_profile_id: String,
     enable_status_bar: bool,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let bin = crate::binary::find_claude_binary()?;
     let shell = crate::shell_env::get_user_shell();
     let shell_env = crate::shell_env::load_shell_env(&shell);
@@ -309,6 +309,19 @@ pub async fn pty_open(
     // binary, checked here) — in every one of those cases we just proceed
     // to spawn normally, with no `--settings` flag and no
     // `KLAUDIO_CONTEXT_FILE` env var.
+    //
+    // The returned bool tells the frontend whether the overlay was actually
+    // installed for this spawn — a known, distinguishable "we never even
+    // tried" state (bridge binary missing, ambiguous pre-existing
+    // statusLine, app-data dir unresolvable). It must NOT be used to infer
+    // anything about what happens *after* a successful install: whether
+    // Claude Code's own statusLine ever actually ticks for this tab (a
+    // managed policy or `disableAllHooks` could silently prevent that) is
+    // deliberately indistinguishable from "hasn't ticked yet" — the
+    // frontend has no business pretending otherwise. `true` only ever means
+    // "the overlay was installed"; it is not a promise of live data.
+    let mut status_bar_overlay_installed = false;
+
     if enable_status_bar {
         if let Some(bridge_binary_path) = crate::statusline_context::resolve_bridge_binary_path(&app)
         {
@@ -325,6 +338,7 @@ pub async fn pty_open(
                 args.push("--settings".to_string());
                 args.push(overlay.settings_arg);
                 env.push(overlay.env_var);
+                status_bar_overlay_installed = true;
 
                 // Cleanup only ever runs once this tab's exit is *confirmed*
                 // via `pty:exit:<id>` — never on a mere `pty_kill` request,
@@ -343,7 +357,8 @@ pub async fn pty_open(
         .to_str()
         .ok_or_else(|| "claude binary path is not valid UTF-8".to_string())?
         .to_string();
-    spawn_pty(app, &state, id, bin_str, args, project_path, env, None, None)
+    spawn_pty(app, &state, id, bin_str, args, project_path, env, None, None)?;
+    Ok(status_bar_overlay_installed)
 }
 
 /// Spawn an embedded terminal editor (nvim / helix / vim / micro) inside a
