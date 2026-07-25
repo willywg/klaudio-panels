@@ -14,6 +14,7 @@ function makeTab(overrides: Partial<TerminalTab> = {}): TerminalTab {
     error: null,
     spawnedAt: 1_000,
     needsAttention: false,
+    statusBarOverlayInstalled: false,
     ...overrides,
   };
 }
