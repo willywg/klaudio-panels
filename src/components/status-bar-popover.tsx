@@ -7,6 +7,7 @@ import {
   Show,
   type JSX,
 } from "solid-js";
+import { Portal } from "solid-js/web";
 import { ArrowLeft, Settings } from "lucide-solid";
 import {
   modelContextAvailability,
@@ -51,13 +52,40 @@ type Props = {
 
 export function StatusBarPopover(props: Props) {
   const [view, setView] = createSignal<View>(props.initialView);
+  let popoverRef: HTMLDivElement | undefined;
+
+  // Rendered via <Portal> (see below) so the footer's own `overflow-hidden`
+  // (needed to keep long branch names/paths from blowing out its fixed
+  // 26px height) can never clip this popover — a plain CSS `absolute` +
+  // `bottom-full` child, which is what this used to be, is clipped by any
+  // `overflow: hidden` ancestor regardless of how far outside that
+  // ancestor's own box it's positioned. Portaling to `document.body`
+  // means position must be computed in viewport (`fixed`) coordinates from
+  // the trigger's own rect instead of relying on CSS anchoring to a
+  // `position: relative` wrapper we're no longer a DOM descendant of.
+  const [style, setStyle] = createSignal<JSX.CSSProperties>({});
+
+  function reposition() {
+    const anchor = props.triggerRef;
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    setStyle({
+      position: "fixed",
+      right: `${Math.max(0, window.innerWidth - rect.right)}px`,
+      bottom: `${Math.max(0, window.innerHeight - rect.top + 4)}px`,
+    });
+  }
 
   onMount(() => {
+    reposition();
+    window.addEventListener("resize", reposition);
+
     const onDown = (e: PointerEvent) => {
+      const target = e.target;
       if (
-        props.wrapRef &&
-        e.target instanceof Node &&
-        !props.wrapRef.contains(e.target)
+        target instanceof Node &&
+        !props.wrapRef?.contains(target) &&
+        !popoverRef?.contains(target)
       ) {
         // Outside click: close without stealing focus from wherever the
         // click landed (e.g. back into the terminal).
@@ -73,32 +101,37 @@ export function StatusBarPopover(props: Props) {
     window.addEventListener("pointerdown", onDown, true);
     window.addEventListener("keydown", onKey);
     onCleanup(() => {
+      window.removeEventListener("resize", reposition);
       window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey);
     });
   });
 
   return (
-    <div
-      role="dialog"
-      aria-label="Usage status"
-      class="absolute right-0 bottom-full mb-1 z-50 w-[300px] max-h-[420px] rounded-md border border-neutral-800 bg-neutral-900 shadow-xl text-[12px] flex flex-col"
-    >
-      <Show
-        when={view() === "settings"}
-        fallback={
-          <ProfileView
-            activeProfileId={props.activeProfileId}
-            overlayInstalled={props.overlayInstalled}
-            snapshot={props.snapshot}
-            profileRateLimits={props.profileRateLimits}
-            onOpenSettings={() => setView("settings")}
-          />
-        }
+    <Portal>
+      <div
+        ref={popoverRef}
+        role="dialog"
+        aria-label="Usage status"
+        class="z-50 w-[300px] max-h-[420px] rounded-md border border-neutral-800 bg-neutral-900 shadow-xl text-[12px] flex flex-col"
+        style={style()}
       >
-        <SettingsView onBack={() => setView("profile")} />
-      </Show>
-    </div>
+        <Show
+          when={view() === "settings"}
+          fallback={
+            <ProfileView
+              activeProfileId={props.activeProfileId}
+              overlayInstalled={props.overlayInstalled}
+              snapshot={props.snapshot}
+              profileRateLimits={props.profileRateLimits}
+              onOpenSettings={() => setView("settings")}
+            />
+          }
+        >
+          <SettingsView onBack={() => setView("profile")} />
+        </Show>
+      </div>
+    </Portal>
   );
 }
 
