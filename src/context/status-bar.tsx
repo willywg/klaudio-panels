@@ -166,22 +166,34 @@ export function modelContextAvailability(
     : "waiting";
 }
 
-/** Availability for the rate-limit widgets (5h + weekly).
+/** Availability for the rate-limit widgets (5h + weekly). Rate limits are
+ *  account-level, not per-session, so `profileRateLimits` (this profile's
+ *  freshest observation across every tab — see `freshest_rate_limits` in
+ *  `statusline_snapshot.rs`) takes priority over this one tab's own
+ *  snapshot: a brand-new tab on a profile that's already reported usage
+ *  via a sibling tab should show it immediately rather than waiting for
+ *  its own first tick.
  *
  *  - `overlayInstalled === false` (while requested): same "bridge never
  *    ran" case as `modelContextAvailability` — "unavailable".
- *  - No snapshot yet: "waiting", no timeout, same as above.
- *  - A valid snapshot exists but `rate_limits` is `null`: "unavailable"
- *    — Claude Code itself omitted rate-limit data (near-certainly an
- *    API-key-billed session, where 5h/weekly windows are a Pro/Max-only
- *    concept). This is specific to the rate-limit widgets — it says
- *    nothing about `modelContextAvailability`, which stays "available"
- *    from that same snapshot regardless. */
+ *  - `profileRateLimits` present: "available", regardless of whether this
+ *    tab's own snapshot has arrived yet.
+ *  - No snapshot yet (and no profile-level data either): "waiting", no
+ *    timeout, same as above.
+ *  - A valid snapshot exists but `rate_limits` is `null` (and no
+ *    profile-level data exists): "unavailable" — Claude Code itself
+ *    omitted rate-limit data (near-certainly an API-key-billed session,
+ *    where 5h/weekly windows are a Pro/Max-only concept). This is specific
+ *    to the rate-limit widgets — it says nothing about
+ *    `modelContextAvailability`, which stays "available" from that same
+ *    snapshot regardless. */
 export function rateLimitAvailability(
   overlayInstalled: boolean,
   snapshot: UsageSnapshot | undefined,
+  profileRateLimits?: ProfileRateLimitRecord,
 ): Availability {
   if (!overlayInstalled) return "unavailable";
+  if (profileRateLimits) return "available";
   if (!snapshot) return "waiting";
   return snapshot.rate_limits !== null ? "available" : "unavailable";
 }

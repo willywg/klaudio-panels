@@ -171,19 +171,20 @@ function ProjectStatusBar(props: { projectPath: string; footerWidth: number }) {
     ),
   );
 
+  const profileRateLimits = createMemo(() =>
+    statusBar.profileRateLimitsFor(activeTab()?.profileId ?? ""),
+  );
+
   const usageAvailability = createMemo<Availability>(() =>
     rateLimitAvailability(
       activeTab()?.statusBarOverlayInstalled ?? false,
       snapshot(),
+      profileRateLimits(),
     ),
   );
 
   const gitSummary = createMemo(() =>
     git.summaryFor(activeTab()?.projectPath ?? props.projectPath),
-  );
-
-  const profileRateLimits = createMemo(() =>
-    statusBar.profileRateLimitsFor(activeTab()?.profileId ?? ""),
   );
 
   const showAliasPrefix = createMemo(() => statusBar.knownProfileCount() >= 2);

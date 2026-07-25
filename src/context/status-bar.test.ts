@@ -197,4 +197,35 @@ describe("rateLimitAvailability", () => {
     expect(rateLimitAvailability(false, undefined)).toBe("unavailable");
     expect(rateLimitAvailability(false, makeSnapshot())).toBe("unavailable");
   });
+
+  test("available from profileRateLimits alone, before this tab's own snapshot has arrived", () => {
+    const profileRateLimits: ProfileRateLimitRecord = {
+      rate_limits: makeRateLimits(),
+      observed_at: 1_000,
+    };
+    expect(rateLimitAvailability(true, undefined, profileRateLimits)).toBe(
+      "available",
+    );
+  });
+
+  test("available from profileRateLimits even when this tab's own snapshot has rate_limits null", () => {
+    const snap = makeSnapshot({ rate_limits: null });
+    const profileRateLimits: ProfileRateLimitRecord = {
+      rate_limits: makeRateLimits(),
+      observed_at: 1_000,
+    };
+    expect(rateLimitAvailability(true, snap, profileRateLimits)).toBe(
+      "available",
+    );
+  });
+
+  test("profileRateLimits never overrides a failed overlay install", () => {
+    const profileRateLimits: ProfileRateLimitRecord = {
+      rate_limits: makeRateLimits(),
+      observed_at: 1_000,
+    };
+    expect(rateLimitAvailability(false, undefined, profileRateLimits)).toBe(
+      "unavailable",
+    );
+  });
 });

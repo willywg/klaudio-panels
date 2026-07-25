@@ -180,7 +180,11 @@ function ProfileView(props: {
     modelContextAvailability(props.overlayInstalled, props.snapshot),
   );
   const rateLimitAvail = createMemo(() =>
-    rateLimitAvailability(props.overlayInstalled, props.snapshot),
+    rateLimitAvailability(
+      props.overlayInstalled,
+      props.snapshot,
+      props.profileRateLimits,
+    ),
   );
 
   const unavailableTitle = createMemo(() => modelContextUnavailableTooltip());
