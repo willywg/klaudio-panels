@@ -4,6 +4,7 @@ version = "1.10.0"
 description = "Klaudio Panels — native window embedding the Claude Code CLI"
 authors = ["willywg"]
 edition = "2021"
+default-run = "klaudio-panels"
 
 [lib]
 name = "klaudio_panels_lib"
