@@ -196,6 +196,46 @@ Open the app, verify the version in About (or the title bar) reads
 `X.Y.Z`. macOS may show a Gatekeeper warning on first launch — the
 cask's `caveats` block documents the right-click → Open workaround.
 
+## Known gap: `klaudio-statusline-bridge` isn't bundled into packaged builds yet
+
+The status bar feature's helper binary (`src-tauri/src/bin/klaudio-statusline-bridge.rs`,
+a second binary target in the same crate) is resolved at runtime by
+`statusline_context::resolve_bridge_binary_path`, which tries a file
+named `klaudio-statusline-bridge` next to Klaudio's own running
+executable. That works out of the box under `bun tauri dev` (both
+binaries land in the same `target/debug/` directory), but a packaged
+DMG/AppImage/deb from this flow does **not** include it — the feature
+degrades gracefully (the overlay is never installed, `pty_open` just
+spawns Claude normally, exactly the fail-open behavior the whole
+feature is designed around), but no live usage data will appear in a
+shipped build until this is finished.
+
+Tauri's documented mechanism for this is `bundle.externalBin` in
+`tauri.conf.json`, which requires a target-triple-suffixed binary
+(e.g. `src-tauri/binaries/klaudio-statusline-bridge-x86_64-unknown-linux-gnu`,
+or `-universal-apple-darwin` to mirror this doc's own `--target
+universal-apple-darwin` lipo step) to **already exist on disk before
+`cargo check`/`cargo build` runs at all** — `tauri-build`'s build
+script validates every `externalBin` entry eagerly, for every crate
+build, not just at packaging time. This was tried and reverted during
+implementation because it broke `cargo check` for every contributor
+immediately (there's no way to make Cargo build the bridge binary
+first and copy it into place before its own build script runs within
+a single invocation — it needs an explicit, separate pre-build step
+runners and every contributor's dev setup would have to pick up).
+
+Before wiring this up for real, decide and document a workflow for:
+building the bridge binary (`cargo build --release --bin
+klaudio-statusline-bridge`, lipo'd for both `x86_64`/`aarch64` on
+macOS same as the main app), copying/renaming it into
+`src-tauri/binaries/` with the right target-triple suffix, and doing
+so *before* every `cargo check`/`bun tauri dev`/`tauri build` — not
+just before a release build — or finding a lighter-weight alternative
+(a committed placeholder binary that's overwritten just before
+packaging, a build wrapper script, etc.). Whichever approach is
+chosen, it needs validating with a real packaged build (this repo's
+release flow is macOS-only end-to-end) before being trusted.
+
 ## Anti-patterns to avoid
 
 - ❌ Building without `--target universal-apple-darwin` — Intel users break.
