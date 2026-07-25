@@ -34,6 +34,8 @@ lru = "0.14"
 git2 = { version = "0.20", default-features = false }
 tauri-plugin-deep-link = "2.4.7"
 url = "2.5.8"
+sha2 = "0.10"
+signal-hook = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
