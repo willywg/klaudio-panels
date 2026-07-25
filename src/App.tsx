@@ -36,6 +36,7 @@ import {
 import { resolveAutoResumeTarget } from "@/lib/auto-resume";
 import { ProjectsProvider, useProjects } from "@/context/projects";
 import { TerminalProvider, useTerminal } from "@/context/terminal";
+import { StatusBarProvider } from "@/context/status-bar";
 import { SidebarProvider, useSidebar } from "@/context/sidebar";
 import {
   SessionWatcherProvider,
@@ -69,6 +70,8 @@ import {
 } from "@/lib/panel-layout";
 import { ShellTerminalPanel } from "@/components/shell-terminal/shell-terminal-panel";
 import { Toaster } from "@/components/toaster";
+import { StatusBar } from "@/components/status-bar";
+import { getPrefs } from "@/lib/status-bar-prefs";
 import { requestScrollToBottom } from "@/lib/terminal-scroll-bus";
 import {
   focusTerminal,
@@ -708,7 +711,7 @@ function Shell() {
         label: "New session",
         sessionId: null,
         profileId,
-        enableStatusBar: false, // TODO(status-bar): read lib/status-bar-prefs.ts
+        enableStatusBar: getPrefs().enabled && getPrefs().usageIntegrationEnabled,
       });
       focusTerminal(id);
     } catch (err) {
@@ -731,7 +734,7 @@ function Shell() {
         label,
         sessionId,
         profileId,
-        enableStatusBar: false, // TODO(status-bar): read lib/status-bar-prefs.ts
+        enableStatusBar: getPrefs().enabled && getPrefs().usageIntegrationEnabled,
       });
       focusTerminal(id);
     } catch (err) {
@@ -832,7 +835,8 @@ function Shell() {
             label: decision.label,
             sessionId: decision.sessionId,
             profileId,
-            enableStatusBar: false, // TODO(status-bar): read lib/status-bar-prefs.ts
+            enableStatusBar:
+              getPrefs().enabled && getPrefs().usageIntegrationEnabled,
           },
         );
         // The project-switch effect ran before tabs existed for this project
@@ -925,7 +929,7 @@ function Shell() {
         label: "New session",
         sessionId: null,
         profileId,
-        enableStatusBar: false, // TODO(status-bar): read lib/status-bar-prefs.ts
+        enableStatusBar: getPrefs().enabled && getPrefs().usageIntegrationEnabled,
       });
     } catch (err) {
       console.error("cli:open → openTab failed", err);
@@ -1207,6 +1211,7 @@ function Shell() {
         </Show>
       </div>
       </main>
+      <StatusBar activeProjectPath={activeProjectPath()} />
       <Toaster />
     </div>
   );
@@ -1245,13 +1250,15 @@ export default function App() {
                     <ShellPanelProvider>
                       <ShellPtyProvider>
                         <TerminalProvider>
-                          <SessionWatcherProvider>
-                            <NotificationsProvider>
-                              <CommandPaletteProvider>
-                                <Shell />
-                              </CommandPaletteProvider>
-                            </NotificationsProvider>
-                          </SessionWatcherProvider>
+                          <StatusBarProvider>
+                            <SessionWatcherProvider>
+                              <NotificationsProvider>
+                                <CommandPaletteProvider>
+                                  <Shell />
+                                </CommandPaletteProvider>
+                              </NotificationsProvider>
+                            </SessionWatcherProvider>
+                          </StatusBarProvider>
                         </TerminalProvider>
                       </ShellPtyProvider>
                     </ShellPanelProvider>
