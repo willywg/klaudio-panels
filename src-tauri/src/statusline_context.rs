@@ -397,8 +397,7 @@ mod tests {
         assert_eq!(file_mode(&overlay.context_file_path), 0o600);
 
         let written: BridgeContext =
-            serde_json::from_str(&fs::read_to_string(&overlay.context_file_path).unwrap())
-                .unwrap();
+            serde_json::from_str(&fs::read_to_string(&overlay.context_file_path).unwrap()).unwrap();
         assert_eq!(written.original_command, None);
         assert_eq!(written.tab_id, "tab-1");
         assert!(overlay.settings_arg.contains("klaudio-statusline-bridge"));
@@ -426,8 +425,7 @@ mod tests {
         .expect("overlay should still be prepared, chaining the original command");
 
         let written: BridgeContext =
-            serde_json::from_str(&fs::read_to_string(&overlay.context_file_path).unwrap())
-                .unwrap();
+            serde_json::from_str(&fs::read_to_string(&overlay.context_file_path).unwrap()).unwrap();
         assert_eq!(written.original_command.as_deref(), Some("echo original"));
     }
 

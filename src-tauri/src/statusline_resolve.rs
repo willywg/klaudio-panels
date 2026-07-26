@@ -267,8 +267,7 @@ mod tests {
     #[test]
     fn local_tier_statusline_as_plain_string_is_an_error() {
         let project = TempDir::new("local-string-statusline");
-        project
-            .write_claude_settings("settings.local.json", r#"{"statusLine": "just-a-string"}"#);
+        project.write_claude_settings("settings.local.json", r#"{"statusLine": "just-a-string"}"#);
 
         resolve_effective_statusline(project.path().to_str().unwrap())
             .expect_err("a non-object statusLine value must fail closed");
