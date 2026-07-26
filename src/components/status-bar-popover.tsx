@@ -11,8 +11,8 @@ import { Portal } from "solid-js/web";
 import { ArrowLeft, Settings } from "lucide-solid";
 import {
   modelContextAvailability,
-  rateLimitAvailability,
   useStatusBar,
+  type Availability,
   type ProfileRateLimitRecord,
   type UsageSnapshot,
 } from "@/context/status-bar";
@@ -44,8 +44,17 @@ type Props = {
    *  passed through explicitly (not re-derived from `snapshot`, which is
    *  also undefined during the ordinary "waiting" state) so the two
    *  distinct "unavailable" causes stay distinguishable. `false` when
-   *  there's no active tab at all (e.g. opened from the home-screen gear). */
+   *  there's no active tab at all (e.g. opened from the home-screen gear,
+   *  or a project that's open but hasn't had a session started yet).
+   *  Still drives model/context availability directly (tab-only data —
+   *  there's no pre-tab equivalent worth showing). */
   overlayInstalled: boolean;
+  /** Rate-limit availability, precomputed by the caller — unlike
+   *  `overlayInstalled`, this already accounts for the pre-tab case (a
+   *  project's cached, profile-level usage can be "available" even before
+   *  any tab/overlay exists), so it's threaded through as-is rather than
+   *  re-derived here from `overlayInstalled` alone. */
+  usageAvailability: Availability;
   snapshot: UsageSnapshot | undefined;
   profileRateLimits: ProfileRateLimitRecord | undefined;
 };
@@ -122,6 +131,7 @@ export function StatusBarPopover(props: Props) {
             <ProfileView
               activeProfileId={props.activeProfileId}
               overlayInstalled={props.overlayInstalled}
+              usageAvailability={props.usageAvailability}
               snapshot={props.snapshot}
               profileRateLimits={props.profileRateLimits}
               onOpenSettings={() => setView("settings")}
@@ -172,6 +182,7 @@ function Waiting() {
 function ProfileView(props: {
   activeProfileId: string | undefined;
   overlayInstalled: boolean;
+  usageAvailability: Availability;
   snapshot: UsageSnapshot | undefined;
   profileRateLimits: ProfileRateLimitRecord | undefined;
   onOpenSettings: () => void;
@@ -208,17 +219,14 @@ function ProfileView(props: {
   // Same availability contract the compact bar uses — "waiting" (no
   // snapshot yet, still ticking) must render differently from a
   // permanent "unavailable" (bridge never ran, or API-key billing), even
-  // though both currently lack a value to show.
+  // though both currently lack a value to show. Rate-limit availability
+  // comes in precomputed (see the Props doc comment) — unlike
+  // model/context, it isn't purely a function of overlayInstalled +
+  // snapshot once the pre-tab, profile-cached case is in play.
   const modelContextAvail = createMemo(() =>
     modelContextAvailability(props.overlayInstalled, props.snapshot),
   );
-  const rateLimitAvail = createMemo(() =>
-    rateLimitAvailability(
-      props.overlayInstalled,
-      props.snapshot,
-      props.profileRateLimits,
-    ),
-  );
+  const rateLimitAvail = createMemo(() => props.usageAvailability);
 
   const unavailableTitle = createMemo(() => modelContextUnavailableTooltip());
   const rateUnavailableTitle = createMemo(() =>

@@ -198,6 +198,31 @@ export function rateLimitAvailability(
   return snapshot.rate_limits !== null ? "available" : "unavailable";
 }
 
+/** Availability for the rate-limit widgets *before* any tab exists yet for
+ *  this project — e.g. right after opening it, before a session is picked
+ *  or started. Rate limits are account-level, so if the project's profile
+ *  already has cached data from a previous session, it should show up
+ *  immediately rather than waiting on a brand-new tab's own first tick.
+ *  Deliberately separate from `rateLimitAvailability` above: that one's
+ *  first check is "did *this tab's* overlay install", which has no
+ *  meaning before any tab exists.
+ *
+ *  - `profileRateLimits` present: "available", regardless of resolution
+ *    state — cached data always wins.
+ *  - Resolving the project's own profile id failed (e.g. a direnv
+ *    evaluation error): "unavailable" — matches this module's fail-closed
+ *    philosophy elsewhere.
+ *  - Otherwise (still resolving, or resolved but nothing cached yet):
+ *    "waiting", no timeout — same rule as every other Availability here. */
+export function preTabUsageAvailability(
+  profileResolutionFailed: boolean,
+  profileRateLimits: ProfileRateLimitRecord | undefined,
+): Availability {
+  if (profileRateLimits) return "available";
+  if (profileResolutionFailed) return "unavailable";
+  return "waiting";
+}
+
 // ---------------------------------------------------------------------
 // Context
 // ---------------------------------------------------------------------
@@ -293,6 +318,32 @@ function makeStatusBarContext() {
     }
   }
 
+  /** One-shot pull for a *project's* freshest rate-limit window, with no
+   *  tab involved yet — the pre-tab counterpart to `ensureTabStatus`. Rate
+   *  limits are account-level, so this is what lets a profile's already-
+   *  cached usage show up the moment a project is opened, before any
+   *  session is picked or started. Deliberately ignores `res.tab` (there
+   *  is no tab to apply it to); passing an empty `tabId` is safe since no
+   *  real tab ever has that id (`crypto.randomUUID()`-generated), so it
+   *  can never collide with — or overwrite — a real tab's snapshot file. */
+  async function ensureProfileRateLimits(profileId: string): Promise<void> {
+    try {
+      const res = await invoke<ReadStatusSnapshotResponse>(
+        "read_status_snapshot",
+        { profileId, tabId: "" },
+      );
+      if (res.profile_rate_limits) {
+        applyProfileRateLimits(
+          profileId,
+          res.profile_rate_limits.rate_limits,
+          res.profile_rate_limits.observed_at,
+        );
+      }
+    } catch (err) {
+      console.warn("read_status_snapshot (project probe) failed", err);
+    }
+  }
+
   function tabSnapshot(tabId: string): UsageSnapshot | undefined {
     return tabStatus[tabId];
   }
@@ -339,6 +390,7 @@ function makeStatusBarContext() {
     tabSnapshot,
     profileRateLimitsFor,
     ensureTabStatus,
+    ensureProfileRateLimits,
     knownProfileIds,
     knownProfileCount,
     prefs,

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   modelContextAvailability,
+  preTabUsageAvailability,
   rateLimitAvailability,
   resolveProfileIdForTab,
   shouldApplyProfileRateLimits,
@@ -227,5 +228,35 @@ describe("rateLimitAvailability", () => {
     expect(rateLimitAvailability(false, undefined, profileRateLimits)).toBe(
       "unavailable",
     );
+  });
+});
+
+describe("preTabUsageAvailability", () => {
+  test("available when profileRateLimits is already cached, regardless of resolution state", () => {
+    const profileRateLimits: ProfileRateLimitRecord = {
+      rate_limits: makeRateLimits(),
+      observed_at: 1_000,
+    };
+    expect(preTabUsageAvailability(false, profileRateLimits)).toBe(
+      "available",
+    );
+  });
+
+  test("cached data wins even if resolution somehow also failed", () => {
+    const profileRateLimits: ProfileRateLimitRecord = {
+      rate_limits: makeRateLimits(),
+      observed_at: 1_000,
+    };
+    expect(preTabUsageAvailability(true, profileRateLimits)).toBe(
+      "available",
+    );
+  });
+
+  test("unavailable when the project's profile id failed to resolve and nothing is cached", () => {
+    expect(preTabUsageAvailability(true, undefined)).toBe("unavailable");
+  });
+
+  test("waiting when still resolving (or resolved but nothing cached yet)", () => {
+    expect(preTabUsageAvailability(false, undefined)).toBe("waiting");
   });
 });

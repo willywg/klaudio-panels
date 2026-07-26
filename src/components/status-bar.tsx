@@ -8,11 +8,13 @@ import {
   Show,
 } from "solid-js";
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { Clock, Settings } from "lucide-solid";
 import { useTerminal } from "@/context/terminal";
 import { useGit } from "@/context/git";
 import {
   modelContextAvailability,
+  preTabUsageAvailability,
   rateLimitAvailability,
   useStatusBar,
   type Availability,
@@ -119,6 +121,7 @@ function HomeSettingsButton() {
           onClose={() => setOpen(false)}
           activeProfileId={undefined}
           overlayInstalled={false}
+          usageAvailability="unavailable"
           snapshot={undefined}
           profileRateLimits={undefined}
         />
@@ -162,6 +165,39 @@ function ProjectStatusBar(props: { projectPath: string; footerWidth: number }) {
     ),
   );
 
+  // Resolves *this project's* profile id independent of any tab, so a
+  // profile's already-cached rate limits (from some earlier session) can
+  // show up the moment the project is opened — before any session is
+  // picked or started, not just once a brand-new tab's own bridge has
+  // ticked. Model/context stay tab-only: there's no meaningful "cached
+  // model" to show before a session exists. Re-runs whenever the project
+  // itself changes; a project's profile can never change out from under
+  // an already-open project (see project_env.rs), so no need to re-resolve
+  // beyond that.
+  const [projectProfileId, setProjectProfileId] = createSignal<
+    string | undefined
+  >();
+  const [projectProfileFailed, setProjectProfileFailed] = createSignal(false);
+
+  createEffect(
+    on(
+      () => props.projectPath,
+      (path) => {
+        setProjectProfileId(undefined);
+        setProjectProfileFailed(false);
+        invoke<string>("resolve_profile_id", { projectPath: path })
+          .then((id) => {
+            setProjectProfileId(id);
+            void statusBar.ensureProfileRateLimits(id);
+          })
+          .catch((err) => {
+            console.warn("status-bar: resolve_profile_id failed", err);
+            setProjectProfileFailed(true);
+          });
+      },
+    ),
+  );
+
   const prefs = statusBar.prefs;
 
   const modelAvailability = createMemo<Availability>(() =>
@@ -171,17 +207,28 @@ function ProjectStatusBar(props: { projectPath: string; footerWidth: number }) {
     ),
   );
 
-  const profileRateLimits = createMemo(() =>
-    statusBar.profileRateLimitsFor(activeTab()?.profileId ?? ""),
+  // The active tab's own profile takes priority the moment one exists;
+  // before that, fall back to the project's own resolved profile so
+  // cached account-level usage can appear pre-session.
+  const effectiveProfileId = createMemo(
+    () => activeTab()?.profileId ?? projectProfileId(),
   );
 
-  const usageAvailability = createMemo<Availability>(() =>
-    rateLimitAvailability(
-      activeTab()?.statusBarOverlayInstalled ?? false,
-      snapshot(),
-      profileRateLimits(),
-    ),
+  const profileRateLimits = createMemo(() =>
+    statusBar.profileRateLimitsFor(effectiveProfileId() ?? ""),
   );
+
+  const usageAvailability = createMemo<Availability>(() => {
+    const tab = activeTab();
+    if (tab) {
+      return rateLimitAvailability(
+        tab.statusBarOverlayInstalled,
+        snapshot(),
+        profileRateLimits(),
+      );
+    }
+    return preTabUsageAvailability(projectProfileFailed(), profileRateLimits());
+  });
 
   const gitSummary = createMemo(() =>
     git.summaryFor(activeTab()?.projectPath ?? props.projectPath),
@@ -238,7 +285,7 @@ function ProjectStatusBar(props: { projectPath: string; footerWidth: number }) {
           <Divider />
         </Show>
         <UsageClusterButton
-          activeProfileId={activeTab()?.profileId}
+          activeProfileId={effectiveProfileId()}
           overlayInstalled={activeTab()?.statusBarOverlayInstalled ?? false}
           availability={usageAvailability()}
           profileRateLimits={profileRateLimits()}
@@ -451,6 +498,7 @@ function UsageClusterButton(props: {
           onClose={() => setOpen(false)}
           activeProfileId={props.activeProfileId}
           overlayInstalled={props.overlayInstalled}
+          usageAvailability={props.availability}
           snapshot={props.snapshot}
           profileRateLimits={props.profileRateLimits}
         />
