@@ -5,12 +5,19 @@ export type StatusBarSections = {
   usageWeekly: boolean;
 };
 
+/** "auto": bars render only once the footer has enough width for them
+ *  (see `wideEnoughForUsageBars` in `status-bar-format.ts`). "always":
+ *  bars render whenever the usage section itself is visible, regardless
+ *  of width. "never": preserve the original text-only presentation. */
+export type UsageBarsPreference = "auto" | "always" | "never";
+
 export type StatusBarPrefs = {
   enabled: boolean;
   sections: StatusBarSections;
   usageIntegrationEnabled: boolean;
   showAsRemainingVsUsed: "used" | "remaining";
   resetDisplay: "countdown" | "timestamp";
+  usageBars: UsageBarsPreference;
   /** Keyed by profileId (e.g. "default", "custom:base64..."). Never derive
    *  or display the raw profileId itself in any UI — this map exists
    *  precisely so the UI can show a human name instead. */
@@ -30,6 +37,7 @@ const DEFAULTS: StatusBarPrefs = {
   usageIntegrationEnabled: true,
   showAsRemainingVsUsed: "used",
   resetDisplay: "countdown",
+  usageBars: "auto",
   profileAliases: {},
 };
 
@@ -70,6 +78,7 @@ export function getPrefs(): StatusBarPrefs {
       showAsRemainingVsUsed:
         parsed.showAsRemainingVsUsed ?? DEFAULTS.showAsRemainingVsUsed,
       resetDisplay: parsed.resetDisplay ?? DEFAULTS.resetDisplay,
+      usageBars: parsed.usageBars ?? DEFAULTS.usageBars,
       profileAliases: mergeProfileAliases(parsed.profileAliases),
     };
   } catch {

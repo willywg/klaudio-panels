@@ -32,6 +32,7 @@ const DEFAULTS: StatusBarPrefs = {
   usageIntegrationEnabled: true,
   showAsRemainingVsUsed: "used",
   resetDisplay: "countdown",
+  usageBars: "auto",
   profileAliases: {},
 };
 
@@ -113,6 +114,22 @@ describe("status-bar-prefs", () => {
       usage5h: false,
       usageWeekly: true,
     });
+  });
+
+  test("getPrefs default-fills usageBars to 'auto' when absent", () => {
+    localStorage.setItem(
+      "statusBarPrefs",
+      JSON.stringify({ enabled: false }),
+    );
+    expect(getPrefs().usageBars).toBe("auto");
+  });
+
+  test("setPrefs updates usageBars independently of other fields", () => {
+    setPrefs({ usageBars: "always" });
+    expect(getPrefs()).toEqual({ ...DEFAULTS, usageBars: "always" });
+
+    setPrefs({ usageBars: "never" });
+    expect(getPrefs().usageBars).toBe("never");
   });
 
   test("setPrefs merges profileAliases additively across calls", () => {

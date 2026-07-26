@@ -6,6 +6,8 @@
 // `Availability` union below is structurally identical to (and interops
 // freely with) context/status-bar's own exported type.
 
+import type { UsageBarsPreference } from "./status-bar-prefs";
+
 export type Availability = "waiting" | "available" | "unavailable";
 
 // ---------------------------------------------------------------------
@@ -108,6 +110,67 @@ export function formatUsagePart(
 ): string {
   const pct = displayPercentage(usedPercentage, mode);
   return mode === "remaining" ? `${label} ${pct}% left` : `${label} ${pct}%`;
+}
+
+// ---------------------------------------------------------------------
+// Usage progress bars (5-hour / weekly). Always represent percentage
+// USED — matching the popover's Rows, which already hardcode "used"
+// regardless of the showAsRemainingVsUsed preference (see
+// status-bar-popover.tsx's ProfileView) — so the bar's fill and the
+// preference toggle never disagree about which direction is "full".
+// ---------------------------------------------------------------------
+
+/** Defensive clamp for anything rendered as a percentage width or
+ *  aria-valuenow. Upstream data is expected to already be within range,
+ *  but nothing downstream should ever render a >100%-wide bar or a
+ *  negative one from a stray bad payload. */
+export function clampPercentage(value: number): number {
+  return Math.min(100, Math.max(0, value));
+}
+
+/** The single rounded, clamped 0-100 integer used for a bar's fill
+ *  width and its visible percentage text — NOT for severity color,
+ *  which must use the raw, unrounded percentage instead (see
+ *  `contextBarColorClass`'s own callers) so a borderline value like
+ *  90.4% can't round down into the wrong color bucket. Also backs
+ *  aria-valuenow, so width/text/aria-valuenow never drift apart.
+ *  Missing-window handling ("no data" must never render as a 0%-full
+ *  bar) is enforced by the `<Show>` guard each caller already wraps its
+ *  bar in — this function only ever receives an already-known-present
+ *  percentage. */
+export function usageBarValue(usedPercentage: number): number {
+  return Math.round(clampPercentage(usedPercentage));
+}
+
+/** e.g. "Weekly usage: 90 percent used" — `label` is the caller-supplied
+ *  full window name ("5-hour usage", "Weekly usage"). */
+export function usageBarAriaLabel(label: string, usedPercentage: number): string {
+  return `${label}: ${usageBarValue(usedPercentage)} percent used`;
+}
+
+/** Extra-wide breakpoint gating the "auto" progress-bar presentation —
+ *  deliberately wider than `narrowLevelForWidth`'s own full-width level
+ *  0 (>=560): a label + bar + percentage per window needs more room
+ *  than the plain "5h 31% · Week 12%" text it replaces. */
+export const USAGE_BARS_MIN_WIDTH = 640;
+
+export function wideEnoughForUsageBars(width: number): boolean {
+  return width >= USAGE_BARS_MIN_WIDTH;
+}
+
+/** Whether the usage cluster should render bars instead of its
+ *  text-only fallback, per the `usageBars` preference. Callers only
+ *  invoke this once the usage section itself is already known to be
+ *  visible (see `visibilityForLevel`/`showUsageSection`) — "always"
+ *  intentionally ignores `width` entirely, matching "show bars whenever
+ *  the usage section itself is visible". */
+export function shouldShowUsageBars(
+  preference: UsageBarsPreference,
+  width: number,
+): boolean {
+  if (preference === "never") return false;
+  if (preference === "always") return true;
+  return wideEnoughForUsageBars(width);
 }
 
 // ---------------------------------------------------------------------

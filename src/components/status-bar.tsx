@@ -31,7 +31,10 @@ import {
   narrowLevelForWidth,
   profileDisplayLabel,
   rateLimitUnavailableTooltip,
+  shouldShowUsageBars,
   usageAriaLabel,
+  usageBarAriaLabel,
+  usageBarValue,
   visibilityForLevel,
 } from "@/lib/status-bar-format";
 import { StatusBarPopover } from "@/components/status-bar-popover";
@@ -240,6 +243,10 @@ function ProjectStatusBar(props: { projectPath: string; footerWidth: number }) {
     visibilityForLevel(narrowLevelForWidth(props.footerWidth)),
   );
 
+  const showUsageBars = createMemo(() =>
+    shouldShowUsageBars(prefs().usageBars, props.footerWidth),
+  );
+
   const showModelSection = createMemo(
     () => prefs().enabled && prefs().sections.model,
   );
@@ -295,6 +302,7 @@ function ProjectStatusBar(props: { projectPath: string; footerWidth: number }) {
           showWeekly={prefs().sections.usageWeekly && visibility().weekly}
           mode={prefs().showAsRemainingVsUsed}
           aliases={prefs().profileAliases}
+          showBars={showUsageBars()}
         />
       </Show>
     </>
@@ -408,6 +416,7 @@ function UsageClusterButton(props: {
   showWeekly: boolean;
   mode: "used" | "remaining";
   aliases: Record<string, string>;
+  showBars: boolean;
 }) {
   const [open, setOpen] = createSignal(false);
   let wrapRef: HTMLDivElement | undefined;
@@ -430,7 +439,12 @@ function UsageClusterButton(props: {
         props.showFiveHour && fiveHour() ? fiveHour()!.used_percentage : null,
       weeklyUsedPercentage:
         props.showWeekly && weekly() ? weekly()!.used_percentage : null,
-      mode: props.mode,
+      // Bars always render percentage USED (see UsageBar) regardless of
+      // the remaining/used preference — when they're on screen, the
+      // button's own announced label must agree with what's drawn
+      // rather than continuing to honor `props.mode`, or a "remaining"
+      // user would see "90%" next to a bar while hearing "10% left".
+      mode: props.showBars ? "used" : props.mode,
     }),
   );
 
@@ -487,6 +501,7 @@ function UsageClusterButton(props: {
             weekly={props.showWeekly ? weekly() : undefined}
             mode={props.mode}
             hasAlias={!!alias()}
+            showBars={props.showBars}
           />
         </Show>
       </button>
@@ -512,7 +527,10 @@ function UsageNumbers(props: {
   weekly: { used_percentage: number; resets_at: number } | null | undefined;
   mode: "used" | "remaining";
   hasAlias: boolean;
+  showBars: boolean;
 }) {
+  const hasAny = createMemo(() => !!props.fiveHour || !!props.weekly);
+
   const parts = createMemo(() => {
     const out: string[] = [];
     if (props.fiveHour) out.push(formatUsagePart("5h", props.fiveHour.used_percentage, props.mode));
@@ -521,11 +539,62 @@ function UsageNumbers(props: {
   });
 
   return (
-    <Show when={parts().length > 0}>
+    <Show when={hasAny()}>
       <Show when={props.hasAlias}>
         <span class="text-neutral-600">·</span>
       </Show>
-      <span>{parts().join(" · ")}</span>
+      <Show
+        when={props.showBars}
+        fallback={<span>{parts().join(" · ")}</span>}
+      >
+        <span class="flex items-center gap-2 shrink-0">
+          <Show when={props.fiveHour}>
+            {(w) => <UsageBar shortLabel="5h" ariaLabel="5-hour usage" usedPercentage={w().used_percentage} />}
+          </Show>
+          <Show when={props.weekly}>
+            {(w) => <UsageBar shortLabel="Week" ariaLabel="Weekly usage" usedPercentage={w().used_percentage} />}
+          </Show>
+        </span>
+      </Show>
     </Show>
+  );
+}
+
+/** Compact "label + track + percentage" progress bar for the footer's
+ *  usage cluster. Fill width, the visible percentage text, and
+ *  aria-valuenow all derive from the same `usageBarValue` — see
+ *  status-bar-format.ts. The percentage always reads "X% used" (never a
+ *  bare number) since the bar's fill is always percentage-USED
+ *  regardless of the remaining/used preference — see the `label` memo
+ *  in UsageClusterButton for why the button's own aria-label follows
+ *  the same rule. Severity color is deliberately computed from the RAW
+ *  (unrounded) percentage, not `pct()` — same reasoning as
+ *  ModelContextSection's context bar above: rounding first could shift
+ *  a borderline value (e.g. 90.4%) into the wrong color bucket. Reuses
+ *  `contextBarColorClass`'s severity palette (the same tokens the
+ *  context-window bar above already uses) rather than introducing a new
+ *  color scale. */
+function UsageBar(props: { shortLabel: string; ariaLabel: string; usedPercentage: number }) {
+  const pct = createMemo(() => usageBarValue(props.usedPercentage));
+  const ariaLabel = createMemo(() => usageBarAriaLabel(props.ariaLabel, props.usedPercentage));
+
+  return (
+    <span class="flex items-center gap-1 shrink-0 font-mono">
+      <span class="text-neutral-500">{props.shortLabel}</span>
+      <span
+        role="progressbar"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct()}
+        aria-label={ariaLabel()}
+        class="w-9 h-[3px] rounded-full bg-neutral-800 overflow-hidden shrink-0"
+      >
+        <span
+          class={`block h-full rounded-full ${contextBarColorClass(props.usedPercentage)}`}
+          style={{ width: `${pct()}%` }}
+        />
+      </span>
+      <span class="tabular-nums">{pct()}% used</span>
+    </span>
   );
 }

@@ -18,6 +18,7 @@ import {
 } from "@/context/status-bar";
 import { relativeTime } from "@/lib/relative-time";
 import {
+  contextBarColorClass,
   contextSeverity,
   displayPercentage,
   formatResetTime,
@@ -25,7 +26,10 @@ import {
   profileDisplayLabel,
   profileRowLabel,
   rateLimitUnavailableTooltip,
+  usageBarAriaLabel,
+  usageBarValue,
 } from "@/lib/status-bar-format";
+import type { UsageBarsPreference } from "@/lib/status-bar-prefs";
 
 type View = "profile" | "settings";
 
@@ -179,6 +183,36 @@ function Waiting() {
   );
 }
 
+/** Larger sibling of the footer's compact usage bar (status-bar.tsx's
+ *  `UsageBar`) — no short label, since the popover's `Row` already
+ *  supplies one on the left. Reuses the same `contextBarColorClass`
+ *  severity palette and the same `usageBarValue` derivation for fill
+ *  width and aria-valuenow. Color deliberately keys off the RAW
+ *  (unrounded) percentage rather than the rounded `pct()` — same
+ *  reasoning as status-bar.tsx's context bar and its `UsageBar`
+ *  sibling: rounding first could shift a borderline value (e.g. 90.4%)
+ *  into the wrong color bucket. */
+function PopoverUsageBar(props: { ariaLabel: string; usedPercentage: number }) {
+  const pct = createMemo(() => usageBarValue(props.usedPercentage));
+  const ariaLabel = createMemo(() => usageBarAriaLabel(props.ariaLabel, props.usedPercentage));
+
+  return (
+    <span
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={pct()}
+      aria-label={ariaLabel()}
+      class="w-24 h-1 rounded-full bg-neutral-800 overflow-hidden block"
+    >
+      <span
+        class={`block h-full rounded-full ${contextBarColorClass(props.usedPercentage)}`}
+        style={{ width: `${pct()}%` }}
+      />
+    </span>
+  );
+}
+
 function ProfileView(props: {
   activeProfileId: string | undefined;
   overlayInstalled: boolean;
@@ -273,9 +307,15 @@ function ProfileView(props: {
             >
               <Show when={fiveHour()} fallback={<Muted text="n/a" />}>
                 {(w) => (
-                  <span class="font-mono">
-                    {displayPercentage(w().used_percentage, "used")}% used ·{" "}
-                    {formatResetTime(w().resets_at, prefs().resetDisplay, now())}
+                  <span class="flex flex-col items-end gap-1">
+                    <span class="font-mono">
+                      {displayPercentage(w().used_percentage, "used")}% used ·{" "}
+                      {formatResetTime(w().resets_at, prefs().resetDisplay, now())}
+                    </span>
+                    <PopoverUsageBar
+                      ariaLabel="5-hour usage"
+                      usedPercentage={w().used_percentage}
+                    />
                   </span>
                 )}
               </Show>
@@ -296,9 +336,15 @@ function ProfileView(props: {
             >
               <Show when={weekly()} fallback={<Muted text="n/a" />}>
                 {(w) => (
-                  <span class="font-mono">
-                    {displayPercentage(w().used_percentage, "used")}% used ·{" "}
-                    {formatResetTime(w().resets_at, prefs().resetDisplay, now())}
+                  <span class="flex flex-col items-end gap-1">
+                    <span class="font-mono">
+                      {displayPercentage(w().used_percentage, "used")}% used ·{" "}
+                      {formatResetTime(w().resets_at, prefs().resetDisplay, now())}
+                    </span>
+                    <PopoverUsageBar
+                      ariaLabel="Weekly usage"
+                      usedPercentage={w().used_percentage}
+                    />
                   </span>
                 )}
               </Show>
@@ -433,6 +479,21 @@ function SettingsView(props: { onBack: () => void }) {
               statusBar.updatePrefs({
                 showAsRemainingVsUsed: v as "used" | "remaining",
               })
+            }
+          />
+        </div>
+
+        <div class="pt-2 px-3">
+          <div class="text-[11px] text-neutral-500 mb-1.5">Usage bars</div>
+          <RadioPair
+            value={prefs().usageBars}
+            options={[
+              { value: "auto", label: "Auto" },
+              { value: "always", label: "Always" },
+              { value: "never", label: "Never" },
+            ]}
+            onChange={(v) =>
+              statusBar.updatePrefs({ usageBars: v as UsageBarsPreference })
             }
           />
         </div>

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  clampPercentage,
   contextBarColorClass,
   contextSeverity,
   displayPercentage,
@@ -13,8 +14,13 @@ import {
   profileDisplayLabel,
   profileRowLabel,
   rateLimitUnavailableTooltip,
+  shouldShowUsageBars,
   usageAriaLabel,
+  usageBarAriaLabel,
+  usageBarValue,
+  USAGE_BARS_MIN_WIDTH,
   visibilityForLevel,
+  wideEnoughForUsageBars,
 } from "./status-bar-format";
 
 describe("narrowLevelForWidth / visibilityForLevel", () => {
@@ -274,5 +280,93 @@ describe("usageAriaLabel", () => {
       mode: "remaining",
     });
     expect(label).toBe("Usage: 5 hour window 58% left");
+  });
+});
+
+describe("clampPercentage", () => {
+  test("passes values already within 0-100 through unchanged", () => {
+    expect(clampPercentage(0)).toBe(0);
+    expect(clampPercentage(9)).toBe(9);
+    expect(clampPercentage(90)).toBe(90);
+    expect(clampPercentage(100)).toBe(100);
+  });
+
+  test("clamps above-range values down to 100", () => {
+    expect(clampPercentage(150)).toBe(100);
+    expect(clampPercentage(100.1)).toBe(100);
+  });
+
+  test("clamps below-range (negative) values up to 0", () => {
+    expect(clampPercentage(-5)).toBe(0);
+    expect(clampPercentage(-0.1)).toBe(0);
+  });
+});
+
+describe("usageBarValue", () => {
+  test("renders 9% and 90% widths exactly, unrounded inputs included", () => {
+    expect(usageBarValue(9)).toBe(9);
+    expect(usageBarValue(90)).toBe(90);
+    expect(usageBarValue(9.4)).toBe(9);
+    expect(usageBarValue(89.6)).toBe(90);
+  });
+
+  test("clamps out-of-range values before rounding", () => {
+    expect(usageBarValue(150)).toBe(100);
+    expect(usageBarValue(-20)).toBe(0);
+  });
+});
+
+describe("usageBarAriaLabel", () => {
+  test("matches the required phrasing exactly", () => {
+    expect(usageBarAriaLabel("Weekly usage", 90)).toBe(
+      "Weekly usage: 90 percent used",
+    );
+    expect(usageBarAriaLabel("5-hour usage", 31.4)).toBe(
+      "5-hour usage: 31 percent used",
+    );
+  });
+
+  test("clamps before formatting", () => {
+    expect(usageBarAriaLabel("Weekly usage", 130)).toBe(
+      "Weekly usage: 100 percent used",
+    );
+  });
+
+  test("usageBarValue's rounded output must never be fed to contextBarColorClass — a borderline raw percentage would cross the severity threshold if rounded first", () => {
+    const raw = 90.4;
+    expect(contextSeverity(raw)).toBe("critical");
+    expect(contextBarColorClass(raw)).toBe("bg-rose-400");
+    // Rounding first (what usageBarValue produces, used for fill width
+    // and the visible "%") shifts this same value into the warning
+    // bucket — status-bar.tsx's UsageBar and status-bar-popover.tsx's
+    // PopoverUsageBar must call contextBarColorClass with the raw
+    // percentage, never with usageBarValue(raw).
+    const rounded = usageBarValue(raw);
+    expect(contextSeverity(rounded)).toBe("warning");
+  });
+});
+
+describe("wideEnoughForUsageBars / shouldShowUsageBars", () => {
+  test("wideEnoughForUsageBars is gated on USAGE_BARS_MIN_WIDTH, strictly wider than narrowLevelForWidth's own full-width level", () => {
+    expect(USAGE_BARS_MIN_WIDTH).toBeGreaterThan(560);
+    expect(wideEnoughForUsageBars(USAGE_BARS_MIN_WIDTH)).toBe(true);
+    expect(wideEnoughForUsageBars(USAGE_BARS_MIN_WIDTH - 1)).toBe(false);
+  });
+
+  test("'never' hides bars regardless of width", () => {
+    expect(shouldShowUsageBars("never", 10_000)).toBe(false);
+    expect(shouldShowUsageBars("never", 0)).toBe(false);
+  });
+
+  test("'always' shows bars regardless of width", () => {
+    expect(shouldShowUsageBars("always", 0)).toBe(true);
+    expect(shouldShowUsageBars("always", 10)).toBe(true);
+  });
+
+  test("'auto' shows bars only once wide enough — the responsive text-only fallback below that", () => {
+    expect(shouldShowUsageBars("auto", USAGE_BARS_MIN_WIDTH)).toBe(true);
+    expect(shouldShowUsageBars("auto", USAGE_BARS_MIN_WIDTH + 200)).toBe(true);
+    expect(shouldShowUsageBars("auto", USAGE_BARS_MIN_WIDTH - 1)).toBe(false);
+    expect(shouldShowUsageBars("auto", 300)).toBe(false);
   });
 });
