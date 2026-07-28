@@ -13,17 +13,26 @@
 // see `resolve_project_env`.
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, SystemTime};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use lru::LruCache;
 use serde_json::Value;
 
 use crate::debug_log;
 use crate::shell_env::{command_output_with_timeout, which_in_shell};
 
 const DIRENV_TIMEOUT: Duration = Duration::from_secs(5);
+
+// One entry per project that has ever resolved a config dir this run.
+// Bounded the same way `fs.rs`'s per-project watcher cache is (decision
+// #11) — a user working across a handful of projects at once is the
+// expected shape, not hundreds simultaneously.
+const CONFIG_DIR_CACHE_CAPACITY: usize = 64;
 
 /// Resolve the full child-process environment for `project_path`: the
 /// hydrated login-shell env (`shell_env`), then a `direnv export json` diff
@@ -62,18 +71,133 @@ pub fn resolve_project_env(
     Ok(env.into_iter().collect())
 }
 
+/// Cache invalidation key for a project's config-dir resolution: the
+/// nearest `.envrc`'s path and mtime, or `None` when no `.envrc` exists
+/// anywhere in the project's ancestor chain. A resolution is only reused
+/// while this still matches what's on disk — see `resolve_claude_config_dir`.
+type EnvrcFingerprint = Option<(PathBuf, SystemTime)>;
+
+struct ConfigDirCacheEntry {
+    fingerprint: EnvrcFingerprint,
+    config_dir: Option<PathBuf>,
+}
+
+/// Caches `resolve_claude_config_dir`'s result per project path. Only this
+/// read-heavy path is cached — `pty_open`'s own `resolve_project_env` call
+/// stays uncached (decision #13), since a stale env there would spawn a
+/// PTY under the wrong profile rather than merely show a stale-for-one-tick
+/// sidebar. Holding the lock across an actual cache-miss resolution (see
+/// below) is what makes concurrent calls for the same project collapse
+/// into a single probe instead of a storm — the trade-off is that a
+/// resolution for one project briefly blocks a concurrent call for a
+/// different one too, which is acceptable given how rarely this path
+/// actually misses (first call per project, or an `.envrc` change).
+static CONFIG_DIR_CACHE: LazyLock<Mutex<LruCache<String, ConfigDirCacheEntry>>> =
+    LazyLock::new(|| {
+        Mutex::new(LruCache::new(
+            NonZeroUsize::new(CONFIG_DIR_CACHE_CAPACITY).expect("cap > 0"),
+        ))
+    });
+
+/// Walks from `project_path` up through every ancestor directory looking
+/// for the nearest `.envrc` — the same directory direnv itself would find
+/// and load first, not just `project_path` itself. Returns its path and
+/// mtime, or `None` if no `.envrc` exists anywhere above `project_path`,
+/// all the way to the filesystem root. Cheap: this is a chain of `stat`
+/// calls, not a shell or direnv invocation, so it's safe to run on every
+/// `resolve_claude_config_dir` call — it's what lets that call detect an
+/// `.envrc` being created, deleted, or modified without spawning anything.
+fn nearest_envrc(project_path: &Path) -> EnvrcFingerprint {
+    let mut dir = if project_path.is_absolute() {
+        Some(project_path.to_path_buf())
+    } else {
+        std::env::current_dir()
+            .ok()
+            .map(|cwd| cwd.join(project_path))
+    };
+    while let Some(d) = dir {
+        let candidate = d.join(".envrc");
+        if let Ok(mtime) = std::fs::metadata(&candidate).and_then(|m| m.modified()) {
+            return Some((candidate, mtime));
+        }
+        dir = d.parent().map(Path::to_path_buf);
+    }
+    None
+}
+
 /// Resolve just `CLAUDE_CONFIG_DIR` for `project_path`, if direnv (or the
-/// login shell itself) sets one. Used by `sessions.rs` to read from
-/// `<config-dir>/projects` instead of always `~/.claude/projects`. Fails
-/// closed like `resolve_project_env` — see its docs.
+/// login shell itself) sets one. Used by `sessions.rs`'s session-list hot
+/// path (retriggered on every JSONL debounce tick — several times a second
+/// during an active session) and by `resolve_profile_id`, so unlike
+/// `resolve_project_env` this is cached, invalidated on the relevant
+/// `.envrc`'s mtime.
+///
+/// Short-circuits entirely — no login-shell probe, no direnv invocation —
+/// when no `.envrc` exists anywhere in `project_path`'s ancestor chain,
+/// since direnv could not possibly affect the project either way. This is
+/// the common case and the one that must be cheap.
+///
+/// Fails closed like `resolve_project_env` — see its docs. A failed
+/// resolution is deliberately never cached, so fixing the underlying
+/// `.envrc` (e.g. `direnv allow`) takes effect on the very next call
+/// instead of requiring an app restart.
 pub fn resolve_claude_config_dir(project_path: &str) -> Result<Option<PathBuf>, String> {
-    let shell = crate::shell_env::get_user_shell();
-    let shell_env = crate::shell_env::load_shell_env(&shell);
+    resolve_claude_config_dir_with(project_path, || {
+        let shell = crate::shell_env::get_user_shell();
+        crate::shell_env::load_shell_env(&shell)
+    })
+}
+
+/// Does the actual work for `resolve_claude_config_dir`, taking the
+/// login-shell hydration step as an injectable closure — called lazily,
+/// and only on an actual cache miss with a relevant `.envrc` present — so
+/// tests can count invocations instead of spawning a real shell.
+fn resolve_claude_config_dir_with(
+    project_path: &str,
+    load_shell_env: impl FnOnce() -> Option<HashMap<String, String>>,
+) -> Result<Option<PathBuf>, String> {
+    let fingerprint = nearest_envrc(Path::new(project_path));
+
+    let Some(fingerprint) = fingerprint else {
+        if let Ok(mut cache) = CONFIG_DIR_CACHE.lock() {
+            cache.put(
+                project_path.to_string(),
+                ConfigDirCacheEntry {
+                    fingerprint: None,
+                    config_dir: None,
+                },
+            );
+        }
+        return Ok(None);
+    };
+
+    let mut cache = CONFIG_DIR_CACHE
+        .lock()
+        .map_err(|_| "config dir cache lock poisoned".to_string())?;
+    if let Some(entry) = cache.get(project_path) {
+        if entry.fingerprint.as_ref() == Some(&fingerprint) {
+            return Ok(entry.config_dir.clone());
+        }
+    }
+
+    // Cache miss — no entry yet, or the relevant `.envrc` changed since the
+    // last resolution. Still holding `cache`'s lock for the actual probe
+    // below (see the struct doc comment on `CONFIG_DIR_CACHE`).
+    let shell_env = load_shell_env();
     let env = resolve_project_env(project_path, shell_env, Vec::new())?;
-    Ok(env
+    let config_dir = env
         .into_iter()
         .find(|(k, _)| k == "CLAUDE_CONFIG_DIR")
-        .map(|(_, v)| PathBuf::from(v)))
+        .map(|(_, v)| PathBuf::from(v));
+
+    cache.put(
+        project_path.to_string(),
+        ConfigDirCacheEntry {
+            fingerprint: Some(fingerprint),
+            config_dir: config_dir.clone(),
+        },
+    );
+    Ok(config_dir)
 }
 
 /// Derives a stable, opaque namespace for a resolved `CLAUDE_CONFIG_DIR`:
@@ -588,5 +712,179 @@ mod tests {
 
         let profile_id = profile_id_for_config_dir(config_dir.as_deref());
         assert!(profile_id.starts_with("custom:"));
+    }
+
+    fn write_envrc(dir: &Path, content: &str) {
+        fs::write(dir.join(".envrc"), content).unwrap();
+    }
+
+    #[test]
+    fn no_envrc_short_circuits_without_a_shell_probe() {
+        let project = TempDir::new("no-envrc-project");
+        let probes = std::sync::atomic::AtomicUsize::new(0);
+
+        let result = resolve_claude_config_dir_with(project.path().to_str().unwrap(), || {
+            probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            None
+        });
+
+        assert_eq!(result, Ok(None));
+        assert_eq!(
+            probes.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a project with no .envrc anywhere in its ancestor chain must never probe the shell"
+        );
+    }
+
+    #[test]
+    fn repeated_calls_with_unchanged_envrc_use_the_cached_resolution() {
+        let empty_bin = TempDir::new("cached-envrc-empty-bin");
+        let project = TempDir::new("cached-envrc-project");
+        write_envrc(project.path(), "export CLAUDE_CONFIG_DIR=/tmp/whatever\n");
+        let project_path = project.path().to_str().unwrap().to_string();
+        let probes = std::sync::atomic::AtomicUsize::new(0);
+
+        // A hermetic PATH (no direnv reachable, real or fake) — this test
+        // is about the cache, not about direnv's own behavior, and
+        // `which_in_shell` falls back to the real process PATH whenever the
+        // returned env has no PATH entry of its own.
+        let probe = || {
+            probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(base_env(empty_bin.path()))
+        };
+
+        resolve_claude_config_dir_with(&project_path, probe).unwrap();
+        resolve_claude_config_dir_with(&project_path, probe).unwrap();
+        resolve_claude_config_dir_with(&project_path, probe).unwrap();
+
+        assert_eq!(
+            probes.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "an unchanged .envrc must only be probed once, then served from cache"
+        );
+    }
+
+    #[test]
+    fn cache_invalidates_when_the_envrc_mtime_changes() {
+        let empty_bin = TempDir::new("invalidated-envrc-empty-bin");
+        let project = TempDir::new("invalidated-envrc-project");
+        write_envrc(project.path(), "export FOO=bar\n");
+        let project_path = project.path().to_str().unwrap().to_string();
+        let probes = std::sync::atomic::AtomicUsize::new(0);
+
+        let probe = || {
+            probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(base_env(empty_bin.path()))
+        };
+
+        resolve_claude_config_dir_with(&project_path, probe).unwrap();
+        resolve_claude_config_dir_with(&project_path, probe).unwrap();
+        assert_eq!(probes.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // Bump the .envrc's mtime forward deterministically (no reliance on
+        // wall-clock sleep or filesystem mtime granularity).
+        let envrc_path = project.path().join(".envrc");
+        let current_mtime = fs::metadata(&envrc_path).unwrap().modified().unwrap();
+        let f = fs::OpenOptions::new()
+            .write(true)
+            .open(&envrc_path)
+            .unwrap();
+        f.set_modified(current_mtime + std::time::Duration::from_secs(1))
+            .unwrap();
+
+        resolve_claude_config_dir_with(&project_path, probe).unwrap();
+        assert_eq!(
+            probes.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "a changed .envrc mtime must invalidate the cached resolution"
+        );
+    }
+
+    #[test]
+    fn cache_does_not_grow_without_bound() {
+        // Distinct no-.envrc projects are cheap (no shell probe) and still
+        // exercise the real, shared, bounded `CONFIG_DIR_CACHE` — inserting
+        // more than its capacity must never make it exceed that capacity,
+        // regardless of what other tests concurrently insert into the same
+        // process-wide cache.
+        for i in 0..(CONFIG_DIR_CACHE_CAPACITY + 20) {
+            let project = TempDir::new(&format!("bound-test-project-{i}"));
+            resolve_claude_config_dir_with(project.path().to_str().unwrap(), || None).unwrap();
+        }
+
+        let cache = CONFIG_DIR_CACHE.lock().unwrap();
+        assert!(
+            cache.len() <= CONFIG_DIR_CACHE_CAPACITY,
+            "cache grew to {} entries, past its {} capacity",
+            cache.len(),
+            CONFIG_DIR_CACHE_CAPACITY
+        );
+    }
+
+    #[test]
+    fn concurrent_calls_for_the_same_project_collapse_into_one_probe() {
+        let empty_bin = TempDir::new("concurrent-envrc-empty-bin");
+        let project = TempDir::new("concurrent-envrc-project");
+        write_envrc(project.path(), "export FOO=bar\n");
+        let project_path = std::sync::Arc::new(project.path().to_str().unwrap().to_string());
+        let probes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let empty_bin_path = std::sync::Arc::new(empty_bin.path().to_path_buf());
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let project_path = std::sync::Arc::clone(&project_path);
+                let probes = std::sync::Arc::clone(&probes);
+                let empty_bin_path = std::sync::Arc::clone(&empty_bin_path);
+                std::thread::spawn(move || {
+                    resolve_claude_config_dir_with(&project_path, || {
+                        // Stand in for a slow shell probe so overlapping
+                        // callers are actually likely to race here rather
+                        // than trivially serialize by finishing instantly.
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                        probes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        Some(base_env(&empty_bin_path))
+                    })
+                    .unwrap();
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        assert_eq!(
+            probes.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "8 concurrent callers for the same project must collapse into a single probe, not a storm"
+        );
+    }
+
+    #[test]
+    fn a_failed_resolution_is_not_cached() {
+        let bin = TempDir::new("failing-direnv-not-cached");
+        write_fake_direnv(bin.path());
+        let project = TempDir::new("failing-envrc-project");
+        write_envrc(project.path(), "broken\n");
+        let project_path = project.path().to_str().unwrap().to_string();
+
+        let mut env = base_env(bin.path());
+        env.insert("FAKE_DIRENV_EXIT".into(), "1".into());
+        let attempt = std::sync::atomic::AtomicUsize::new(0);
+
+        let result = resolve_claude_config_dir_with(&project_path, || {
+            attempt.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(env.clone())
+        });
+        assert!(result.is_err(), "a failing direnv must fail closed");
+
+        // Retrying immediately must probe again rather than serve a cached
+        // failure — nothing to cache a failure *as* anyway (see the
+        // function's doc comment).
+        let result2 = resolve_claude_config_dir_with(&project_path, || {
+            attempt.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(env.clone())
+        });
+        assert!(result2.is_err());
+        assert_eq!(attempt.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 }
