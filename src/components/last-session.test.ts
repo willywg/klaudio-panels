@@ -37,15 +37,15 @@ beforeEach(() => {
 
 describe("last-session", () => {
   test("default and custom profiles produce different storage keys", () => {
-    setLastSessionId("/proj", "default", "tina-session");
+    setLastSessionId("/proj", "default", "default-profile-session");
     setLastSessionId("/proj", "custom:abc123", "replace-session");
 
-    expect(getLastSessionId("/proj", "default")).toBe("tina-session");
+    expect(getLastSessionId("/proj", "default")).toBe("default-profile-session");
     expect(getLastSessionId("/proj", "custom:abc123")).toBe("replace-session");
   });
 
   test("clearing one profile's key does not touch the other's", () => {
-    setLastSessionId("/proj", "default", "tina-session");
+    setLastSessionId("/proj", "default", "default-profile-session");
     setLastSessionId("/proj", "custom:abc123", "replace-session");
 
     setLastSessionId("/proj", "default", null);
@@ -55,16 +55,16 @@ describe("last-session", () => {
   });
 
   test("the namespaced getter never falls back to the legacy key", () => {
-    localStorage.setItem(legacyLastSessionKey("/proj"), "old-tina-session");
+    localStorage.setItem(legacyLastSessionKey("/proj"), "old-default-profile-session");
 
     expect(getLastSessionId("/proj", "default")).toBeNull();
     expect(getLastSessionId("/proj", "custom:abc123")).toBeNull();
   });
 
   test("legacy pointer is readable and clearable independently", () => {
-    localStorage.setItem(legacyLastSessionKey("/proj"), "old-tina-session");
+    localStorage.setItem(legacyLastSessionKey("/proj"), "old-default-profile-session");
 
-    expect(getLegacyLastSessionId("/proj")).toBe("old-tina-session");
+    expect(getLegacyLastSessionId("/proj")).toBe("old-default-profile-session");
     clearLegacyLastSessionId("/proj");
     expect(getLegacyLastSessionId("/proj")).toBeNull();
   });
