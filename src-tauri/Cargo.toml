@@ -39,3 +39,10 @@ url = "2.5.8"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSDictionary"] }
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSImage", "NSBitmapImageRep"] }
+
+[dev-dependencies]
+# Only tauri's `test` feature (mock_app/mock_builder, gated in tauri itself
+# behind `cfg(any(test, feature = "test"))`) — dev-dependencies never take
+# part in a plain `cargo build`, so this cannot leak into the shipped
+# binary. Used by `pty`'s exit-cleanup wiring tests.
+tauri = { version = "2", features = ["macos-private-api", "devtools", "test"] }

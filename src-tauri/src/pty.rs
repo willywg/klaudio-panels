@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Listener, State};
 use tokio::sync::mpsc;
 
 use crate::debug_log;
@@ -503,6 +503,38 @@ fn kill_if_still_alive(child: &Mutex<Box<dyn Child + Send>>) -> bool {
     }
 }
 
+/// Deletes every path in `files`, tolerating any that are already missing.
+/// Called only after a PTY's exit is *confirmed* (its `pty:exit:<id>` event
+/// has fired) — never on a mere `pty_kill` request, which does not itself
+/// guarantee the child has actually exited yet (see `pty_kill`'s doc
+/// comment above). Generic over the file list so any feature that ties
+/// on-disk per-tab state to a PTY's lifetime (e.g. a helper process's
+/// context/output files) can reuse this wiring instead of each
+/// reimplementing it.
+pub fn cleanup_files_after_confirmed_exit(files: &[PathBuf]) {
+    for file in files {
+        let _ = std::fs::remove_file(file);
+    }
+}
+
+/// Registers the one-shot listener that wires a confirmed PTY exit to
+/// `cleanup_files_after_confirmed_exit`. The listener fires exactly once,
+/// only in reaction to `pty:exit:<id>` — the event `spawn_pty`'s
+/// exit-confirmation task emits (via the `try_wait` poll loop above), and
+/// the only place in this module that emits it. `pty_kill` never emits this
+/// event itself and has no way to guarantee the child has already been
+/// reaped by the time it returns, so cleanup must never be wired to a mere
+/// kill *request* — only to this confirmed event.
+///
+/// Generic over `R: Runtime` so it's exercisable against
+/// `tauri::test::mock_app`'s `MockRuntime` in tests, not just the real
+/// `Wry` runtime this app uses in production.
+pub fn register_exit_cleanup<R: tauri::Runtime>(app: &AppHandle<R>, id: &str, files: Vec<PathBuf>) {
+    app.once(format!("pty:exit:{id}"), move |_event| {
+        cleanup_files_after_confirmed_exit(&files);
+    });
+}
+
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
@@ -582,5 +614,139 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+
+    /// A directory under the OS temp dir, removed on drop.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let dir = std::env::temp_dir().join(format!(
+                "klaudio-pty-exit-cleanup-test-{label}-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn cleanup_files_after_confirmed_exit_removes_all_and_tolerates_missing_ones() {
+        let dir = TempDir::new("cleanup");
+        let a = dir.path().join("a.json");
+        let b = dir.path().join("b.json");
+        std::fs::write(&a, b"{}").unwrap();
+        std::fs::write(&b, b"{}").unwrap();
+
+        cleanup_files_after_confirmed_exit(&[a.clone(), b.clone()]);
+        assert!(!a.exists());
+        assert!(!b.exists());
+
+        // Second call: both files already gone — must not panic or error.
+        cleanup_files_after_confirmed_exit(&[a, b]);
+    }
+
+    /// Pins the wiring invariant this module exists to protect: **cleanup
+    /// must never happen merely because a tab was killed — only because
+    /// its exit was confirmed.**
+    ///
+    /// Exercises `register_exit_cleanup` itself — the exact
+    /// `app.once(format!("pty:exit:{id}"), ...)` registration — via
+    /// `tauri::test::mock_app`'s `MockRuntime`, not just
+    /// `cleanup_files_after_confirmed_exit` in isolation (already covered
+    /// above). `pty_kill`'s real implementation removes the session from
+    /// `PtyState`, drops the master/writer (SIGHUP), and force-kills the
+    /// child — but it never emits `pty:exit:<id>` itself; the only place
+    /// that does is `spawn_pty`'s `try_wait`-polling exit-confirmation
+    /// task, once the kill (whichever of its steps actually did it) is
+    /// reaped. So after registering the listener, with no `pty:exit`
+    /// emitted yet (standing in for "time passed, maybe someone even
+    /// called `pty_kill`, but no confirmed exit happened"), the files must
+    /// still be intact; only once `pty:exit:<id>` is actually emitted
+    /// should they disappear.
+    #[test]
+    fn cleanup_only_fires_on_the_confirmed_pty_exit_event_not_before() {
+        let dir = TempDir::new("exit-wiring");
+        let a = dir.path().join("a.json");
+        let b = dir.path().join("b.json");
+        std::fs::write(&a, b"{}").unwrap();
+        std::fs::write(&b, b"{}").unwrap();
+
+        let app = tauri::test::mock_app();
+        let handle = app.handle();
+
+        register_exit_cleanup(handle, "tab-exit-wiring", vec![a.clone(), b.clone()]);
+
+        // Nothing has fired `pty:exit:tab-exit-wiring` yet — this is the
+        // state `pty_kill` alone would leave things in forever, since it
+        // never emits that event.
+        assert!(
+            a.exists(),
+            "files must survive until pty:exit is actually confirmed"
+        );
+        assert!(
+            b.exists(),
+            "files must survive until pty:exit is actually confirmed"
+        );
+
+        // The real confirmed-exit event fires (as only spawn_pty's
+        // exit-confirmation task does in production).
+        handle
+            .emit("pty:exit:tab-exit-wiring", 0)
+            .expect("emit should succeed against the mock runtime");
+
+        assert!(
+            !a.exists(),
+            "files must be removed once pty:exit is confirmed"
+        );
+        assert!(
+            !b.exists(),
+            "files must be removed once pty:exit is confirmed"
+        );
+    }
+
+    /// A `pty:exit` event for a *different* tab id must not trigger this
+    /// tab's cleanup — `register_exit_cleanup` listens for the exact
+    /// `pty:exit:<id>` event name (one-shot), not a wildcard, so an
+    /// unrelated tab exiting must never reach into another tab's files.
+    #[test]
+    fn cleanup_ignores_pty_exit_events_for_a_different_tab_id() {
+        let dir = TempDir::new("exit-wiring-other-id");
+        let a = dir.path().join("a.json");
+        let b = dir.path().join("b.json");
+        std::fs::write(&a, b"{}").unwrap();
+        std::fs::write(&b, b"{}").unwrap();
+
+        let app = tauri::test::mock_app();
+        let handle = app.handle();
+
+        register_exit_cleanup(handle, "tab-a", vec![a.clone(), b.clone()]);
+
+        handle
+            .emit("pty:exit:tab-b", 0)
+            .expect("emit should succeed against the mock runtime");
+
+        assert!(
+            a.exists(),
+            "a different tab's confirmed exit must not remove this tab's files"
+        );
+        assert!(
+            b.exists(),
+            "a different tab's confirmed exit must not remove this tab's files"
+        );
     }
 }
