@@ -1,3 +1,4 @@
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
@@ -7,14 +8,55 @@ use std::path::{Path, PathBuf};
 const SCAN_LINES_FOR_CWD: usize = 50;
 const PREVIEW_MAX_CHARS: usize = 140;
 
+// Only the tail can hold "the most recent event", so every recency-related
+// scan (completion detection, `updated_at`) caps its read here — collecting
+// a multi-hundred-MB session (#60) into memory on every watcher tick was
+// pure churn. 4 MiB comfortably covers even an enormous assistant message
+// plus the trailing system/bookkeeping entries.
+const TAIL_BYTES: u64 = 4 * 1024 * 1024;
+
 #[derive(Serialize, Clone)]
 pub struct SessionMeta {
     pub id: String,
-    pub timestamp: Option<String>,
+    /// First real user message's timestamp. Never recomputed from later
+    /// activity — see `updated_at` for recency.
+    pub created_at: Option<String>,
+    /// Most recent meaningful activity: the latest valid timestamp found in
+    /// the JSONL tail, falling back to the file's mtime. This — not
+    /// `created_at` — is what the session list sorts by.
+    pub updated_at: Option<String>,
     pub first_message_preview: Option<String>,
     pub custom_title: Option<String>,
     pub summary: Option<String>,
     pub project_path: String,
+}
+
+/// Parses a Claude-written timestamp as RFC 3339, normalized to UTC.
+fn parse_rfc3339(ts: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+/// Re-serializes `ts` in one canonical UTC shape (fixed millisecond
+/// precision, `Z` suffix) so every `created_at`/`updated_at` value sorts
+/// correctly as a plain string and compares correctly once re-parsed —
+/// regardless of the offset or fractional-second precision the source line
+/// happened to use. A value that fails to parse is passed through as-is
+/// rather than discarded; it just won't participate meaningfully in sorting
+/// (see `ts_key`).
+pub(crate) fn canonicalize_rfc3339(ts: &str) -> String {
+    parse_rfc3339(ts)
+        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, true))
+        .unwrap_or_else(|| ts.to_string())
+}
+
+/// Sort key for a `created_at`/`updated_at` field: parses it back to a
+/// `DateTime<Utc>` so ordering is chronological, never lexicographic on the
+/// raw string (differing offsets or fractional-second widths would otherwise
+/// sort wrong). Missing or unparseable values sort last, same as before.
+fn ts_key(v: &Option<String>) -> Option<DateTime<Utc>> {
+    v.as_deref().and_then(parse_rfc3339)
 }
 
 fn claude_projects_dir() -> Option<PathBuf> {
@@ -180,25 +222,13 @@ pub(crate) struct AssistantComplete {
     pub preview: Option<String>,
 }
 
-/// Walks the JSONL **from the end** looking for the most recent
-/// `type: "assistant"` entry. Skips trailing `system`, `last-prompt`,
-/// `permission-mode`, etc. — those are appended after the assistant
-/// message and would mask the completion if we only looked at the very
-/// last line. Returns the assistant entry's uuid + stop_reason + first
-/// text block (truncated for notification display).
-///
-/// Only treats `end_turn`, `max_tokens`, `stop_sequence`, and `refusal`
-/// as terminal — `tool_use` means the assistant wants to keep going
-/// once the tool result comes back.
-pub(crate) fn last_assistant_complete(file: &Path) -> Option<AssistantComplete> {
-    const TERMINAL: &[&str] = &["end_turn", "max_tokens", "stop_sequence", "refusal"];
-
-    // Only the tail can hold "the most recent assistant entry", so cap the
-    // read — collecting a multi-hundred-MB session (#60) into memory on
-    // every watcher event was pure churn. 4 MiB comfortably covers even an
-    // enormous assistant message plus the trailing system entries.
-    const TAIL_BYTES: u64 = 4 * 1024 * 1024;
-
+/// Reads the last `TAIL_BYTES` of a JSONL and returns its lines in file
+/// order. Shared by every "what happened most recently" query —
+/// `last_assistant_complete_from_tail` and `latest_event_timestamp_from_tail`
+/// both only care about the tail, so a caller that needs both (see
+/// `session_watcher::emit_for_jsonl`) reads the file once and passes the
+/// same `lines` to each, instead of every helper doing its own read.
+pub(crate) fn read_tail_lines(file: &Path) -> Option<Vec<String>> {
     let mut f = fs::File::open(file).ok()?;
     let len = f.metadata().ok()?.len();
     let clipped = len > TAIL_BYTES;
@@ -211,6 +241,21 @@ pub(crate) fn last_assistant_complete(file: &Path) -> Option<AssistantComplete> 
         // would fail to parse anyway, but drop it explicitly.
         lines.remove(0);
     }
+    Some(lines)
+}
+
+/// Walks already-read tail `lines` **from the end** looking for the most
+/// recent `type: "assistant"` entry. Skips trailing `system`, `last-prompt`,
+/// `permission-mode`, etc. — those are appended after the assistant
+/// message and would mask the completion if we only looked at the very
+/// last line. Returns the assistant entry's uuid + stop_reason + first
+/// text block (truncated for notification display).
+///
+/// Only treats `end_turn`, `max_tokens`, `stop_sequence`, and `refusal`
+/// as terminal — `tool_use` means the assistant wants to keep going
+/// once the tool result comes back.
+pub(crate) fn last_assistant_complete_from_tail(lines: &[String]) -> Option<AssistantComplete> {
+    const TERMINAL: &[&str] = &["end_turn", "max_tokens", "stop_sequence", "refusal"];
 
     for line in lines.iter().rev() {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
@@ -242,6 +287,51 @@ pub(crate) fn last_assistant_complete(file: &Path) -> Option<AssistantComplete> 
     None
 }
 
+/// Convenience wrapper for call sites that only need the completion fact
+/// (e.g. `session_watcher::seed_seen`, which doesn't need `updated_at` too
+/// and so has no reason to hold onto the tail lines itself).
+pub(crate) fn last_assistant_complete(file: &Path) -> Option<AssistantComplete> {
+    last_assistant_complete_from_tail(&read_tail_lines(file)?)
+}
+
+/// Walks already-read tail `lines` **from the end** looking for the newest
+/// one that carries a top-level `timestamp` field. Lines with no such field
+/// at all — `last-prompt` and other trailing bookkeeping records — are
+/// skipped in search of an earlier, real event. But once a timestamp-bearing
+/// line is found, a malformed value stops the search immediately rather than
+/// falling through to a possibly much older valid timestamp further back:
+/// callers fall back to the file's mtime in that case, which is a more
+/// honest "we don't know" than silently understating how recent the session
+/// actually is.
+fn latest_event_timestamp_from_tail(lines: &[String]) -> Option<DateTime<Utc>> {
+    for line in lines.iter().rev() {
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(ts) = v.get("timestamp").and_then(|t| t.as_str()) else {
+            continue;
+        };
+        return parse_rfc3339(ts);
+    }
+    None
+}
+
+fn mtime_utc(file: &Path) -> Option<DateTime<Utc>> {
+    let modified = fs::metadata(file).ok()?.modified().ok()?;
+    Some(modified.into())
+}
+
+/// Canonical `updated_at` for a session: the latest valid timestamp in
+/// `lines` (see `latest_event_timestamp_from_tail`), falling back to the
+/// file's own mtime — both normalized through `canonicalize_rfc3339`'s
+/// format so recency comparisons never depend on differing offsets or
+/// fractional-second precision.
+pub(crate) fn session_updated_at(file: &Path, lines: &[String]) -> Option<String> {
+    latest_event_timestamp_from_tail(lines)
+        .or_else(|| mtime_utc(file))
+        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, true))
+}
+
 /// Async so Tauri dispatches it off the main thread — as a sync command
 /// this ran ON the main thread and a project with hundreds of MB of
 /// session JSONLs froze the whole UI for minutes (#60). `spawn_blocking`
@@ -260,14 +350,24 @@ fn list_sessions_for_project_sync(project_path: String) -> Result<Vec<SessionMet
     if !projects_dir.exists() {
         return Ok(vec![]);
     }
-    let target = canonical(&project_path);
+    Ok(scan_projects_dir(&projects_dir, &project_path))
+}
+
+/// Scans every encoded project dir under `projects_dir` for sessions whose
+/// recorded `cwd` matches `project_path`, sorted by recency (see the
+/// `sort_by` below). Pure and side-effect-free beyond reading
+/// `projects_dir`, so it's the unit under test for the recency ordering.
+fn scan_projects_dir(projects_dir: &Path, project_path: &str) -> Vec<SessionMeta> {
+    let target = canonical(project_path);
 
     let mut out: Vec<SessionMeta> = Vec::new();
 
     // Claude encodes project dirs by replacing "/" with "-". Since that's not
     // reversible for paths containing dashes, we scan every encoded dir and
     // match against `cwd` extracted from its JSONL files.
-    let entries = fs::read_dir(&projects_dir).map_err(|e| e.to_string())?;
+    let Ok(entries) = fs::read_dir(projects_dir) else {
+        return out;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_dir() {
@@ -308,9 +408,15 @@ fn list_sessions_for_project_sync(project_path: String) -> Result<Vec<SessionMet
                 if !scan.has_conversation {
                     continue;
                 }
+                // One bounded tail read feeds `updated_at` here; nothing else
+                // in this loop needs the tail, so there's no second helper to
+                // share it with (contrast `session_watcher::emit_for_jsonl`,
+                // which also needs `last_assistant_complete_from_tail`).
+                let tail_lines = read_tail_lines(&p).unwrap_or_default();
                 out.push(SessionMeta {
                     id,
-                    timestamp: scan.first_timestamp,
+                    created_at: scan.first_timestamp.map(|ts| canonicalize_rfc3339(&ts)),
+                    updated_at: session_updated_at(&p, &tail_lines),
                     first_message_preview: scan.first_preview,
                     custom_title: scan.custom_title,
                     summary: scan.summary,
@@ -320,7 +426,281 @@ fn list_sessions_for_project_sync(project_path: String) -> Result<Vec<SessionMet
         }
     }
 
-    // Newest first.
-    out.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-    Ok(out)
+    // Recency first: updated_at descending, then created_at descending, then
+    // session id ascending as a deterministic final tie-breaker (so two
+    // sessions with identical updated_at/created_at don't flip order between
+    // runs depending on directory-read order).
+    out.sort_by(|a, b| {
+        ts_key(&b.updated_at)
+            .cmp(&ts_key(&a.updated_at))
+            .then_with(|| ts_key(&b.created_at).cmp(&ts_key(&a.created_at)))
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    out
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// A directory under the OS temp dir, removed on drop.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(label: &str) -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let dir = std::env::temp_dir().join(format!(
+                "klaudio-sessions-test-{label}-{}-{nanos}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Encodes a project path the way Claude does: "/" -> "-".
+    fn encode(path: &str) -> String {
+        path.replace('/', "-")
+    }
+
+    /// Writes a minimal single-line JSONL that `scan_session_file` will
+    /// recognize as a real (resumable) session with the given `cwd` and
+    /// first-user `timestamp` (becomes `created_at`).
+    fn write_session_jsonl(project_dir: &Path, id: &str, cwd: &str, message: &str, timestamp: &str) {
+        fs::create_dir_all(project_dir).unwrap();
+        let escaped_cwd = cwd.replace('\\', "\\\\").replace('"', "\\\"");
+        let escaped_msg = message.replace('\\', "\\\\").replace('"', "\\\"");
+        let line = format!(
+            r#"{{"type":"user","cwd":"{escaped_cwd}","timestamp":"{timestamp}","message":{{"role":"user","content":"{escaped_msg}"}}}}"#
+        );
+        fs::write(project_dir.join(format!("{id}.jsonl")), format!("{line}\n")).unwrap();
+    }
+
+    /// Writes a minimal single-line JSONL with **no** top-level `timestamp`
+    /// field at all — simulates a malformed/legacy entry so `created_at` and
+    /// the tail scan both have nothing to find.
+    fn write_session_jsonl_without_timestamp(project_dir: &Path, id: &str, cwd: &str, message: &str) {
+        fs::create_dir_all(project_dir).unwrap();
+        let escaped_cwd = cwd.replace('\\', "\\\\").replace('"', "\\\"");
+        let escaped_msg = message.replace('\\', "\\\\").replace('"', "\\\"");
+        let line = format!(
+            r#"{{"type":"user","cwd":"{escaped_cwd}","message":{{"role":"user","content":"{escaped_msg}"}}}}"#
+        );
+        fs::write(project_dir.join(format!("{id}.jsonl")), format!("{line}\n")).unwrap();
+    }
+
+    /// Appends a raw JSONL line to a session file already created by
+    /// `write_session_jsonl` — simulates later activity (e.g. a resumed
+    /// session picking up a fresh turn) without touching the first line's
+    /// `created_at`.
+    fn append_jsonl_line(project_dir: &Path, id: &str, line: &str) {
+        use std::io::Write as _;
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .open(project_dir.join(format!("{id}.jsonl")))
+            .unwrap();
+        writeln!(f, "{line}").unwrap();
+    }
+
+    /// Asserts `ts` parses as RFC 3339 and lands within `tolerance_secs` of
+    /// now — used to check an mtime-derived `updated_at` without depending
+    /// on exact timing.
+    fn assert_close_to_now(ts: &str, tolerance_secs: i64) {
+        let parsed = DateTime::parse_from_rfc3339(ts)
+            .expect("mtime fallback must still be a valid RFC 3339 timestamp")
+            .with_timezone(&Utc);
+        let delta = (Utc::now() - parsed).num_seconds().abs();
+        assert!(
+            delta <= tolerance_secs,
+            "expected {ts} to be within {tolerance_secs}s of now, delta={delta}s"
+        );
+    }
+
+    #[test]
+    fn resumed_old_session_with_recent_activity_sorts_above_inactive_newer_session() {
+        let root = TempDir::new("projects-root-recency");
+        let project = TempDir::new("project-recency");
+        let project_path = project.path().to_str().unwrap().to_string();
+        let project_dir = root.path().join(encode(&project_path));
+
+        // Created in 2020, but a later turn was recorded far more recently —
+        // e.g. resumed today and used again, exactly the reported bug.
+        write_session_jsonl(
+            &project_dir,
+            "old-but-active",
+            &project_path,
+            "hi",
+            "2020-01-01T00:00:00.000Z",
+        );
+        append_jsonl_line(
+            &project_dir,
+            "old-but-active",
+            r#"{"type":"assistant","timestamp":"2026-07-21T11:00:00.000Z","message":{"role":"assistant","content":"still here"}}"#,
+        );
+
+        // Created more recently than the session above, but never touched
+        // again — its only timestamp is its own creation.
+        write_session_jsonl(
+            &project_dir,
+            "new-but-inactive",
+            &project_path,
+            "hi",
+            "2025-06-01T00:00:00.000Z",
+        );
+
+        let sessions = scan_projects_dir(root.path(), &project_path);
+
+        assert_eq!(
+            sessions.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["old-but-active", "new-but-inactive"],
+            "recent activity must outrank a newer but stale creation time"
+        );
+        assert_eq!(
+            sessions[0].updated_at.as_deref(),
+            Some("2026-07-21T11:00:00.000Z")
+        );
+        assert_eq!(
+            sessions[0].created_at.as_deref(),
+            Some("2020-01-01T00:00:00.000Z"),
+            "created_at must still reflect the first user message, not the later activity"
+        );
+    }
+
+    #[test]
+    fn created_at_is_never_overwritten_by_later_activity() {
+        let root = TempDir::new("projects-root-created-at");
+        let project = TempDir::new("project-created-at");
+        let project_path = project.path().to_str().unwrap().to_string();
+        let project_dir = root.path().join(encode(&project_path));
+
+        write_session_jsonl(
+            &project_dir,
+            "session",
+            &project_path,
+            "hi",
+            "2020-01-01T00:00:00.000Z",
+        );
+        append_jsonl_line(
+            &project_dir,
+            "session",
+            r#"{"type":"assistant","timestamp":"2026-07-21T11:00:00.000Z","message":{"role":"assistant","content":"still here"}}"#,
+        );
+        append_jsonl_line(
+            &project_dir,
+            "session",
+            r#"{"type":"last-prompt","lastPrompt":"more","leafUuid":"x","sessionId":"session"}"#,
+        );
+
+        let sessions = scan_projects_dir(root.path(), &project_path);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].created_at.as_deref(),
+            Some("2020-01-01T00:00:00.000Z")
+        );
+        assert_eq!(
+            sessions[0].updated_at.as_deref(),
+            Some("2026-07-21T11:00:00.000Z")
+        );
+    }
+
+    #[test]
+    fn updated_at_falls_back_to_mtime_when_the_newest_event_timestamp_is_malformed_or_missing() {
+        let root = TempDir::new("projects-root-fallback");
+        let project = TempDir::new("project-fallback");
+        let project_path = project.path().to_str().unwrap().to_string();
+        let project_dir = root.path().join(encode(&project_path));
+
+        // The newest timestamp-bearing line is malformed. An earlier line
+        // (the creation line) has a perfectly valid — but much older —
+        // timestamp; a correct implementation must NOT fall through to it.
+        write_session_jsonl(
+            &project_dir,
+            "malformed-tail",
+            &project_path,
+            "hi",
+            "2020-01-01T00:00:00.000Z",
+        );
+        append_jsonl_line(
+            &project_dir,
+            "malformed-tail",
+            r#"{"type":"assistant","timestamp":"not-a-real-timestamp","message":{"role":"assistant","content":"oops"}}"#,
+        );
+
+        // No line in the file carries a timestamp field at all.
+        write_session_jsonl_without_timestamp(
+            &project_dir,
+            "missing-timestamps",
+            &project_path,
+            "hi",
+        );
+
+        let sessions = scan_projects_dir(root.path(), &project_path);
+
+        let malformed = sessions
+            .iter()
+            .find(|s| s.id == "malformed-tail")
+            .expect("malformed-tail session must still be listed");
+        assert_close_to_now(malformed.updated_at.as_deref().unwrap(), 30);
+        assert_ne!(
+            malformed.updated_at.as_deref(),
+            Some("2020-01-01T00:00:00.000Z"),
+            "must not fall through to the older valid creation timestamp"
+        );
+
+        let missing = sessions
+            .iter()
+            .find(|s| s.id == "missing-timestamps")
+            .expect("missing-timestamps session must still be listed");
+        assert_close_to_now(missing.updated_at.as_deref().unwrap(), 30);
+        assert_eq!(missing.created_at, None);
+    }
+
+    #[test]
+    fn equal_updated_at_breaks_ties_by_session_id_ascending() {
+        let root = TempDir::new("projects-root-tie");
+        let project = TempDir::new("project-tie");
+        let project_path = project.path().to_str().unwrap().to_string();
+        let project_dir = root.path().join(encode(&project_path));
+
+        // Both sessions share the exact same (and only) timestamp, so
+        // updated_at and created_at are identical between them — only the
+        // session id tie-break can produce a stable, deterministic order.
+        write_session_jsonl(
+            &project_dir,
+            "session-b",
+            &project_path,
+            "hi",
+            "2026-01-01T00:00:00.000Z",
+        );
+        write_session_jsonl(
+            &project_dir,
+            "session-a",
+            &project_path,
+            "hi",
+            "2026-01-01T00:00:00.000Z",
+        );
+
+        let sessions = scan_projects_dir(root.path(), &project_path);
+
+        assert_eq!(
+            sessions.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            vec!["session-a", "session-b"],
+            "identical updated_at/created_at must still produce a deterministic order via session id"
+        );
+    }
 }
