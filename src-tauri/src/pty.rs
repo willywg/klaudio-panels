@@ -101,6 +101,11 @@ fn spawn_pty(
     // process env. Clear it so the child gets exactly `env` (the fully
     // resolved shell + direnv env) — otherwise a variable direnv removed
     // could still leak in if Klaudio's own process happened to carry it.
+    // Safe to clear unconditionally: every caller builds `env` from
+    // `shell_env::load_shell_env`, which always returns a real env (the
+    // hydrated shell env, or — when that probe fails, e.g. nushell or a
+    // timeout — a sanitized fallback with `CLAUDE_CONFIG_DIR` stripped and
+    // `PATH`/`HOME` intact), never an empty map.
     cmd.env_clear();
     for (k, v) in env {
         cmd.env(k, v);

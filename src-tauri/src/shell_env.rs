@@ -89,9 +89,42 @@ fn probe_shell_env(shell: &str, mode: &str) -> ShellEnvProbe {
     ShellEnvProbe::Loaded(env)
 }
 
+/// Variables that must never enter the fallback baseline (see
+/// `safe_baseline_env`), pulled out as a pure filter so it's testable
+/// without touching the real process env: `CLAUDE_CONFIG_DIR` must only
+/// ever enter a spawned child's env via a project's own direnv diff (see
+/// `project_env.rs`) — inheriting whatever Klaudio's own process happened
+/// to carry would silently break per-project profile isolation the moment
+/// shell hydration fails, which is exactly the case this fallback exists
+/// for.
+fn strip_unsafe_baseline_vars(
+    env: impl Iterator<Item = (String, String)>,
+) -> HashMap<String, String> {
+    env.filter(|(k, _)| k != "CLAUDE_CONFIG_DIR").collect()
+}
+
+/// A degraded-but-safe substitute for a failed shell-env probe: Klaudio's
+/// own process env (still a real `PATH`/`HOME` — a macOS GUI app gets *a*
+/// PATH from launchd, just not the shell-hydrated one) with the variables
+/// `strip_unsafe_baseline_vars` excludes removed. An empty env is not a
+/// safe fallback: the child would spawn with no `PATH` and no `HOME` at
+/// all (non-negotiable #3).
+fn safe_baseline_env() -> HashMap<String, String> {
+    strip_unsafe_baseline_vars(std::env::vars())
+}
+
+/// Resolves the login-shell-hydrated env, always returning *something*
+/// usable — never an env a caller could mistake for "safe to spawn with"
+/// when it isn't. The two probe attempts (`-il`, then `-l`) are the actual
+/// hydration; nushell (no POSIX-style env dump) and either attempt failing
+/// or timing out all fall back to `safe_baseline_env` rather than `None`,
+/// so every caller (`merge_shell_env`, `project_env::resolve_project_env`)
+/// inherits the guarantee instead of each having to remember to handle a
+/// missing env itself.
 pub fn load_shell_env(shell: &str) -> Option<HashMap<String, String>> {
     if is_nushell(shell) {
-        return None;
+        crate::debug_log::write("shell_env", "nushell detected, using safe baseline env");
+        return Some(safe_baseline_env());
     }
     if let ShellEnvProbe::Loaded(env) = probe_shell_env(shell, "-il") {
         return Some(env);
@@ -99,7 +132,11 @@ pub fn load_shell_env(shell: &str) -> Option<HashMap<String, String>> {
     if let ShellEnvProbe::Loaded(env) = probe_shell_env(shell, "-l") {
         return Some(env);
     }
-    None
+    crate::debug_log::write(
+        "shell_env",
+        &format!("shell probe failed for {shell}, using safe baseline env"),
+    );
+    Some(safe_baseline_env())
 }
 
 /// Merge shell env with explicit overrides; overrides win.
@@ -197,5 +234,94 @@ mod tests {
         assert!(is_nushell("nu"));
         assert!(is_nushell("/opt/homebrew/bin/nu"));
         assert!(!is_nushell("/bin/zsh"));
+    }
+
+    #[test]
+    fn baseline_fallback_strips_claude_config_dir_but_keeps_everything_else() {
+        let synthetic_env = vec![
+            ("PATH".to_string(), "/usr/bin:/bin".to_string()),
+            ("HOME".to_string(), "/home/someone".to_string()),
+            (
+                "CLAUDE_CONFIG_DIR".to_string(),
+                "/some/other/projects/leaked/config".to_string(),
+            ),
+        ];
+
+        let stripped = strip_unsafe_baseline_vars(synthetic_env.into_iter());
+
+        assert_eq!(stripped.get("PATH"), Some(&"/usr/bin:/bin".to_string()));
+        assert_eq!(stripped.get("HOME"), Some(&"/home/someone".to_string()));
+        assert!(
+            !stripped.contains_key("CLAUDE_CONFIG_DIR"),
+            "CLAUDE_CONFIG_DIR must never leak into the fallback baseline — it must only ever \
+             come from a project's own resolved direnv diff"
+        );
+    }
+
+    /// `load_shell_env` must never return `None` — a nushell user (no
+    /// POSIX-style `env -0` dump) is exactly the documented, reachable case
+    /// where the real hydration can't run at all, and the fallback baseline
+    /// must still carry a real PATH/HOME rather than leaving spawn_pty with
+    /// nothing to install (see pty.rs's `spawn_pty`, which clears the
+    /// child's env unconditionally and installs only what this returns).
+    #[test]
+    fn nushell_falls_back_to_a_real_baseline_env_not_none() {
+        let env = load_shell_env("nu").expect("must fall back to Some, never None");
+        assert!(
+            env.contains_key("PATH"),
+            "fallback baseline must retain PATH so the child (and its Bash tool) can find binaries"
+        );
+        assert!(
+            env.contains_key("HOME"),
+            "fallback baseline must retain HOME so the child can find ~/.claude"
+        );
+        assert!(
+            !env.contains_key("CLAUDE_CONFIG_DIR"),
+            "the fallback baseline must never carry CLAUDE_CONFIG_DIR"
+        );
+    }
+
+    /// Same as the nushell case, but through the "probe failed" path
+    /// instead of the "recognized as nushell" one — a nonexistent shell
+    /// binary reliably fails `command_output_with_timeout`'s `spawn()`.
+    #[test]
+    fn unavailable_shell_falls_back_to_a_real_baseline_env_not_none() {
+        let env = load_shell_env("/nonexistent/definitely-not-a-real-shell-binary")
+            .expect("must fall back to Some, never None");
+        assert!(env.contains_key("PATH"));
+        assert!(env.contains_key("HOME"));
+    }
+
+    /// Mirrors exactly what `pty_open_shell`/`pty_open_editor` do to build
+    /// the env `spawn_pty` installs (`merge_shell_env(load_shell_env(shell),
+    /// overrides)`) for a shell that can't be hydrated. Proves the shell
+    /// dock and embedded-editor PTYs still get a real, spawnable env —
+    /// `PATH`/`HOME` present — under the fallback, rather than only the
+    /// override keys (`TERM`/`COLORTERM`/...) `spawn_pty`'s unconditional
+    /// `env_clear()` would otherwise leave a nushell/failed-probe child
+    /// with.
+    #[test]
+    fn shell_and_editor_ptys_still_get_a_spawnable_env_under_the_fallback() {
+        let shell_env = load_shell_env("nu");
+        let env: HashMap<_, _> = merge_shell_env(
+            shell_env,
+            vec![
+                ("TERM".into(), "xterm-256color".into()),
+                ("COLORTERM".into(), "truecolor".into()),
+                ("KLAUDIO_SHELL".into(), "1".into()),
+            ],
+        )
+        .into_iter()
+        .collect();
+
+        assert!(
+            env.contains_key("PATH"),
+            "shell/editor PTY env must have PATH"
+        );
+        assert!(
+            env.contains_key("HOME"),
+            "shell/editor PTY env must have HOME"
+        );
+        assert_eq!(env.get("TERM"), Some(&"xterm-256color".to_string()));
     }
 }
