@@ -417,15 +417,37 @@ pub async fn pty_kill(state: State<'_, PtyState>, id: String) -> Result<(), Stri
         // `register_exit_cleanup`'s doc comment for why any cleanup tied to
         // a PTY's lifetime must wait for the confirmed `pty:exit` event
         // rather than assuming this call finished the job.
+        //
+        // Guarded by `try_wait` under the same lock: closing a tab always
+        // calls `pty_kill`, including for a tab whose child already exited
+        // on its own (`/exit`, Ctrl+D, a crash) and was already reaped by
+        // `spawn_pty`'s exit-confirmation poll loop above. portable-pty's
+        // `Child::kill` sends SIGHUP unconditionally, with no "already
+        // reaped" check of its own — calling it on a reaped child would
+        // signal whatever PID the OS has since recycled to a new,
+        // unrelated process. Holding the lock across both calls closes
+        // that race: the poll loop can't reap in between.
         let child = session.child;
-        let _ = tokio::task::spawn_blocking(move || {
-            if let Ok(mut child) = child.lock() {
-                let _ = child.kill();
-            }
-        })
-        .await;
+        let _ = tokio::task::spawn_blocking(move || kill_if_still_alive(&child)).await;
     }
     Ok(())
+}
+
+/// Signals `child` only if `try_wait` confirms it has not already exited.
+/// See `pty_kill`'s doc comment for why the check and the signal must
+/// happen under the same lock. Returns whether a kill was actually
+/// attempted, so tests can assert on it directly.
+fn kill_if_still_alive(child: &Mutex<Box<dyn Child + Send>>) -> bool {
+    match child.lock() {
+        Ok(mut child) => match child.try_wait() {
+            Ok(None) => {
+                let _ = child.kill();
+                true
+            }
+            _ => false,
+        },
+        Err(_) => false,
+    }
 }
 
 /// Deletes every path in `files`, tolerating any that are already missing.
@@ -464,8 +486,84 @@ pub fn register_exit_cleanup<R: tauri::Runtime>(app: &AppHandle<R>, id: &str, fi
 #[cfg(unix)]
 mod tests {
     use super::*;
+    use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tauri::Emitter;
+
+    /// Spawns a real child (`std::process::Child`, which portable-pty's
+    /// `Child`/`ChildKiller` impls target directly — see `lib.rs:271` and
+    /// `:340` of the vendored `portable-pty` 0.9.0 source) and boxes it the
+    /// same way `spawn_pty` boxes the PTY-slave-spawned child.
+    fn spawn_boxed(mut cmd: Command) -> Box<dyn Child + Send> {
+        Box::new(cmd.spawn().expect("failed to spawn test child"))
+    }
+
+    /// Reproduces William's report exactly: the child exits on its own
+    /// first (standing in for `/exit`, Ctrl+D, or a crash), *then*
+    /// `pty_kill`'s guarded path runs. Before the fix, `Child::kill` ran
+    /// unconditionally and issued `libc::kill` at the recorded PID
+    /// regardless of whether anything was still listening there — the
+    /// exposure window for signalling a PID the OS has since recycled.
+    /// `kill_if_still_alive` must detect the child is already reaped via
+    /// `try_wait` and skip calling `kill()` altogether.
+    #[test]
+    fn does_not_signal_a_child_that_already_exited_on_its_own() {
+        let child = spawn_boxed(Command::new("true"));
+        let guarded: Mutex<Box<dyn Child + Send>> = Mutex::new(child);
+
+        // Reap it ourselves first, exactly like `spawn_pty`'s
+        // exit-confirmation poll loop would before a user gets around to
+        // closing the tab.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let reaped = matches!(guarded.lock().unwrap().try_wait(), Ok(Some(_)));
+            if reaped {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "test child did not exit in time"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        // The PTY entry's cleanup (removing it from `PtyState`) happens in
+        // `pty_kill` itself regardless of this outcome — what this guards
+        // is strictly whether a signal goes out to the now-stale PID.
+        assert!(
+            !kill_if_still_alive(&guarded),
+            "must not attempt to signal a child that already exited"
+        );
+    }
+
+    /// The complementary case: a child that is genuinely still running
+    /// must still be killed — the fix must not turn into "never kill
+    /// anything".
+    #[test]
+    fn signals_and_reaps_a_child_that_is_still_alive() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30");
+        let child = spawn_boxed(cmd);
+        let guarded: Mutex<Box<dyn Child + Send>> = Mutex::new(child);
+
+        assert!(
+            kill_if_still_alive(&guarded),
+            "must attempt to signal a child that is still running"
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let reaped = matches!(guarded.lock().unwrap().try_wait(), Ok(Some(_)));
+            if reaped {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "kill_if_still_alive did not actually terminate the child"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
 
     /// A directory under the OS temp dir, removed on drop.
     struct TempDir(PathBuf);
