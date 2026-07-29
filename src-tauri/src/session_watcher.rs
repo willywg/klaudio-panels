@@ -8,7 +8,10 @@ use notify_debouncer_full::{new_debouncer, DebounceEventResult};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::sessions::{last_assistant_complete, read_cwd, scan_session_file, SessionMeta};
+use crate::sessions::{
+    canonicalize_rfc3339, last_assistant_complete, last_assistant_complete_from_tail, read_cwd,
+    read_tail_lines, scan_session_file, session_updated_at, SessionMeta,
+};
 
 const DEBOUNCE_MS: u64 = 200;
 
@@ -79,6 +82,10 @@ fn emit_for_jsonl(app: &AppHandle, path: &Path) {
     let Some(session_id) = session_id_of(path) else { return };
 
     let scan = scan_session_file(path);
+    // Read the tail once and hand it to both `updated_at` and
+    // `session:complete` detection below — each doing its own bounded read
+    // would double the I/O this call site does per debounce tick.
+    let tail_lines = read_tail_lines(path).unwrap_or_default();
 
     // First sighting → session:new (FIFO correlation happens on the FE).
     let is_new = {
@@ -101,7 +108,8 @@ fn emit_for_jsonl(app: &AppHandle, path: &Path) {
 
     let meta = SessionMeta {
         id: session_id.clone(),
-        timestamp: scan.first_timestamp,
+        created_at: scan.first_timestamp.map(|ts| canonicalize_rfc3339(&ts)),
+        updated_at: session_updated_at(path, &tail_lines),
         first_message_preview: scan.first_preview,
         custom_title: scan.custom_title,
         summary: scan.summary,
@@ -113,7 +121,7 @@ fn emit_for_jsonl(app: &AppHandle, path: &Path) {
     // assistant uuid for this session. Dedup by (session_id, uuid) so
     // multiple debouncer ticks against the same end_turn don't repeat
     // the chime + notification.
-    if let Some(complete) = last_assistant_complete(path) {
+    if let Some(complete) = last_assistant_complete_from_tail(&tail_lines) {
         let should_emit = {
             let mut last = match LAST_COMPLETED.lock() {
                 Ok(g) => g,

@@ -5,7 +5,8 @@ import { displayLabel } from "@/lib/session-label";
 
 export type SessionMeta = {
   id: string;
-  timestamp: string | null;
+  created_at: string | null;
+  updated_at: string | null;
   first_message_preview: string | null;
   custom_title: string | null;
   summary: string | null;
@@ -104,7 +105,7 @@ export function SessionsList(props: {
                 />
                 <span class="flex-1 min-w-0">
                   <div class="text-[11px] text-neutral-500 font-mono">
-                    {formatTs(s.timestamp)}
+                    {formatTs(s.updated_at ?? s.created_at)}
                   </div>
                   <div class="text-xs text-neutral-200 line-clamp-2 mt-0.5">
                     {label()}
