@@ -4,6 +4,50 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.9.1] — 2026-07-29
+
+### Fixed
+- **Closing a tab now actually terminates the Claude process**
+  ([#63](https://github.com/willywg/klaudio-panels/pull/63)). `pty_kill`
+  only dropped the PTY master and trusted the resulting SIGHUP to be fatal,
+  but Claude Code installs its own SIGHUP handler — so closing a tab could
+  leave `claude` running indefinitely in the background, invisible to the
+  user and holding its memory. One machine was found carrying six such
+  processes parented to a running app, two of them two days old. The child
+  is now force-terminated (SIGHUP, ~250ms grace, then an unconditional
+  SIGKILL). The kill is guarded by a `try_wait` check under the same lock,
+  so closing a tab whose process already exited on its own can never signal
+  a PID the OS has since recycled to an unrelated process. Note that only
+  the direct child is reaped; MCP servers and Bash-tool grandchildren
+  survive until a process-group kill lands.
+- **Sessions list sorts by last activity, not creation time**
+  ([#65](https://github.com/willywg/klaudio-panels/pull/65)). `SessionMeta`
+  carried a single timestamp — the first user message — so a months-old
+  session you resumed and worked on today sorted *below* one created
+  yesterday and never touched again. It now tracks `created_at` (first
+  message, immutable) and `updated_at` (latest event in the JSONL tail,
+  falling back to file mtime) separately, and the list sorts by
+  `updated_at`, with `created_at` and the session id as deterministic
+  tie-breakers so equal timestamps don't reshuffle between refreshes.
+  Timestamps are canonicalized to UTC before comparison — sessions written
+  under different offsets or fractional-second precision previously sorted
+  wrong when compared as raw strings. The watcher also shares one bounded
+  tail read between `updated_at` and completion detection instead of
+  reading the file twice per tick.
+- **`cargo clippy -- -D warnings` passes on Linux**
+  ([#62](https://github.com/willywg/klaudio-panels/pull/62)).
+  `std::process::Command` was imported unconditionally in `open_in.rs` but
+  only used from macOS-gated code, so the unused-import lint failed the
+  build on Linux. The import is now gated to macOS alongside its only use.
+  No behavior change on macOS.
+
+### Tracked work
+- PRs: [#62](https://github.com/willywg/klaudio-panels/pull/62),
+  [#63](https://github.com/willywg/klaudio-panels/pull/63),
+  [#65](https://github.com/willywg/klaudio-panels/pull/65) — the project's
+  first external contributions, all by
+  [@reissaavedra](https://github.com/reissaavedra).
+
 ## [1.9.0] — 2026-07-20
 
 ### Added
