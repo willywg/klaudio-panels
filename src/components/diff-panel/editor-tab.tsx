@@ -61,8 +61,25 @@ export function EditorTab(props: Props) {
   // left wondering why a saved file is asking to be saved.
   let savingPromise: Promise<void> | null = null;
 
+  // Snapshot the identity of this tab at creation instead of reading
+  // `props.*` later. Two reasons, both bugs we hit:
+  //   1. `props.projectPath` ultimately resolves to the accessor that
+  //      `<Show>` hands its callback child in App.tsx, and that accessor
+  //      THROWS ("Stale read from <Show>.") once the condition turns falsy.
+  //      onCleanup runs exactly then, and a throw inside the teardown batch
+  //      makes Solid drop every effect still queued behind it — leaving the
+  //      panel's DOM on screen with no way to close it (#66).
+  //   2. DiffPanel is reused across project switches, so by the time this
+  //      tab is disposed `props.projectPath` may already point at the NEXT
+  //      project and we'd unregister the buffer under the wrong key.
+  // The pair is immutable for a given tab: the panel keys tabs by
+  // `edit:<relPath>` per project, so a different file or project is a
+  // different component instance.
+  const ownProjectPath = props.projectPath;
+  const ownRelPath = props.relPath;
+
   function projectAndRel(): { p: string; r: string } {
-    return { p: props.projectPath, r: props.relPath };
+    return { p: ownProjectPath, r: ownRelPath };
   }
 
   function currentDoc(): string {
@@ -79,8 +96,8 @@ export function EditorTab(props: Props) {
     setErrorMsg(null);
     try {
       const payload = await invoke<FilePayload>("read_file_bytes", {
-        projectPath: props.projectPath,
-        relPath: props.relPath,
+        projectPath: ownProjectPath,
+        relPath: ownRelPath,
       });
       if (disposed) return;
       if (payload.too_large) {
@@ -95,7 +112,7 @@ export function EditorTab(props: Props) {
       }
       baseline = payload.contents;
       baselineMtime = payload.mtime_ms;
-      buffers.register(props.projectPath, props.relPath, baseline, baselineMtime);
+      buffers.register(ownProjectPath, ownRelPath, baseline, baselineMtime);
       await mountEditor(payload.contents);
       if (disposed) return;
       setStatus("ready");
@@ -108,7 +125,7 @@ export function EditorTab(props: Props) {
 
   async function mountEditor(initial: string) {
     cmCore = await loadCMCore();
-    const langExt = await languageExtensionFor(props.relPath);
+    const langExt = await languageExtensionFor(ownRelPath);
     if (disposed || !host) return;
 
     const exts = baseExtensions(cmCore, {
@@ -211,19 +228,19 @@ export function EditorTab(props: Props) {
   async function reload() {
     try {
       const payload = await invoke<FilePayload>("read_file_bytes", {
-        projectPath: props.projectPath,
-        relPath: props.relPath,
+        projectPath: ownProjectPath,
+        relPath: ownRelPath,
       });
       if (payload.is_binary || payload.contents === null) {
         toast("File is no longer text — closing editor.", "error");
-        void panel.closeTab(props.projectPath, `edit:${props.relPath}`);
+        void panel.closeTab(ownProjectPath, `edit:${ownRelPath}`);
         return;
       }
       baseline = payload.contents;
       baselineMtime = payload.mtime_ms;
       buffers.updateBaseline(
-        props.projectPath,
-        props.relPath,
+        ownProjectPath,
+        ownRelPath,
         payload.contents,
         payload.mtime_ms,
       );
@@ -338,7 +355,7 @@ export function EditorTab(props: Props) {
 
   onMount(() => {
     unregisterGuard = panel.registerCloseGuard(
-      `edit:${props.relPath}`,
+      `edit:${ownRelPath}`,
       closeGuard,
     );
     void load();
@@ -361,7 +378,7 @@ export function EditorTab(props: Props) {
     disposed = true;
     if (unregisterGuard) unregisterGuard();
     if (unlistenFs) unlistenFs();
-    buffers.unregister(props.projectPath, props.relPath);
+    buffers.unregister(ownProjectPath, ownRelPath);
     if (view) {
       view.destroy();
       view = null;

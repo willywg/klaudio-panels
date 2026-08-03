@@ -74,8 +74,8 @@ export function DiffPanel(props: Props) {
               <div
                 class="absolute inset-0 flex flex-col"
                 style={{
-                  visibility: isActive() ? "visible" : "hidden",
-                  "pointer-events": isActive() ? "auto" : "none",
+                  visibility: isActive() ? undefined : "hidden",
+                  "pointer-events": isActive() ? undefined : "none",
                   "z-index": isActive() ? 2 : 0,
                 }}
               >
@@ -101,8 +101,8 @@ export function DiffPanel(props: Props) {
               <div
                 class="absolute inset-0 flex flex-col"
                 style={{
-                  visibility: isActive() ? "visible" : "hidden",
-                  "pointer-events": isActive() ? "auto" : "none",
+                  visibility: isActive() ? undefined : "hidden",
+                  "pointer-events": isActive() ? undefined : "none",
                   "z-index": isActive() ? 2 : 0,
                 }}
               >
