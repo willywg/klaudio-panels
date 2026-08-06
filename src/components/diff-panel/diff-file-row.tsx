@@ -12,6 +12,11 @@ import {
 type Props = {
   projectPath: string;
   status: FileStatus;
+  /** Owning repo's project-relative path. Trimmed off the displayed folder
+   *  so a submodule group doesn't repeat `backend/` on every row — the group
+   *  header already says it. Keys (expand, focus, diff fetch) keep the full
+   *  project-relative path. */
+  stripPrefix?: string;
 };
 
 function basename(rel: string): string {
@@ -35,6 +40,16 @@ export function DiffFileRow(props: Props) {
   const git = useGit();
 
   const expanded = () => panel.isExpanded(props.status.path);
+
+  /** Path as shown to the user: repo-relative inside a submodule group,
+   *  project-relative otherwise. */
+  const shownPath = () => {
+    const prefix = props.stripPrefix;
+    if (!prefix) return props.status.path;
+    return props.status.path.startsWith(prefix + "/")
+      ? props.status.path.slice(prefix.length + 1)
+      : props.status.path;
+  };
 
   function disposeDiff() {
     fd?.cleanUp();
@@ -158,11 +173,11 @@ export function DiffFileRow(props: Props) {
           {BADGE_LETTER[props.status.kind]}
         </span>
         <span class="text-[12px] text-neutral-200 truncate">
-          {basename(props.status.path)}
+          {basename(shownPath())}
         </span>
-        <Show when={dirname(props.status.path)}>
+        <Show when={dirname(shownPath())}>
           <span class="text-[11px] text-neutral-500 truncate">
-            {dirname(props.status.path)}
+            {dirname(shownPath())}
           </span>
         </Show>
         <span class="ml-auto text-[10px] font-mono flex items-center gap-1.5 shrink-0">

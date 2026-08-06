@@ -6,6 +6,26 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
 ## [Unreleased]
 
+### Changed
+- **The Git panel now shows what actually changed inside submodules**
+  ([#71](https://github.com/willywg/klaudio-panels/issues/71)). A project whose
+  children are separate repos rendered as `M backend +1 −1` — the gitlink
+  delta, i.e. the superproject's one-line view of which commit the pointer
+  names — so however many files really changed inside the child were
+  invisible. The scan now descends into each nested repo (submodule or
+  checked-in clone, three levels deep) and splices its own status in under a
+  `backend/…` prefix, and the panel groups those rows by child project with a
+  header carrying the repo name, its branch (`detached @ <sha>` when
+  detached, which submodules usually are) and its own counts. The pointer row
+  survives only when the child's worktree is clean, since then the moved
+  pointer *is* the change. `git_diff_file` resolves the owning repo instead of
+  the project, so a submodule file diffs against the child's object database
+  rather than rendering as freshly added. Single-repo projects look exactly as
+  before — group headers appear only when there's more than one repo.
+- **`git_summary` folded into `git_status`.** The panel invoked both on every
+  refresh and each one ran the full status walk, so a project with submodules
+  opened every repo twice per keystroke-triggered debounce.
+
 ### Fixed
 - **Dropped paths with spaces no longer reach Claude backslash-escaped**
   ([#69](https://github.com/willywg/klaudio-panels/issues/69)).

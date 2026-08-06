@@ -7,12 +7,29 @@ export type FileStatusKind =
   | "conflicted";
 
 export type FileStatus = {
+  /** Project-relative, submodule prefix included (`backend/app/user.rb`). */
   path: string;
+  /** Owning repo as a project-relative path; `""` for the project itself. */
+  repo: string;
   kind: FileStatusKind;
   staged: boolean;
   adds: number;
   dels: number;
   is_binary: boolean;
+};
+
+/** A repo contributing to the status: the project plus any nested repo
+ *  (submodule or checked-in clone) the scan descended into. */
+export type RepoInfo = {
+  path: string;
+  /** Branch name, or `detached @ <short sha>`. */
+  branch: string | null;
+};
+
+export type StatusPayload = {
+  files: FileStatus[];
+  repos: RepoInfo[];
+  summary: GitSummary;
 };
 
 export type GitSummary = {

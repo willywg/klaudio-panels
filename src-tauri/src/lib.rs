@@ -133,7 +133,6 @@ pub fn run() {
             fs::fs_create_dir,
             fs::fs_delete,
             git::git_status,
-            git::git_summary,
             git::git_diff_file,
             open_in::check_app_exists,
             open_in::open_path_with,
