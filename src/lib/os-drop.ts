@@ -1,15 +1,29 @@
 // Translates a set of absolute file paths + a drop position into a
-// payload ready for Claude Code's prompt. Paths inside the active
-// project become `@rel`; paths outside stay absolute. Multiple paths
-// are space-joined and the result ends with a trailing space so the
-// cursor sits past the insertion, ready for a follow-up message.
+// payload ready for the drop target. Paths inside the active project
+// become `@rel`; paths outside stay absolute. Multiple paths are
+// space-joined and the result ends with a trailing space so the cursor
+// sits past the insertion, ready for a follow-up message.
 //
 // Returned payload is `null` when nothing useful can be written
 // (empty paths, or caller decides the drop missed a target).
 
+/** Where the payload is being typed. Decides how (and whether) a path
+ *  with spaces or shell metacharacters gets quoted. */
+export type DropTargetKind = "claude" | "shell";
+
+/** POSIX-safe quoting for a shell prompt: leave boring paths bare, wrap
+ *  anything else in single quotes (`'` itself becomes `'\''`). Broader
+ *  than the old escape-spaces-only rule, which still handed the shell a
+ *  broken word for names like `CAMBIOS (1).docx`. */
+function shellQuote(token: string): string {
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(token)) return token;
+  return `'${token.replace(/'/g, `'\\''`)}'`;
+}
+
 export function buildDropPayload(
   absPaths: string[],
   projectPath: string,
+  kind: DropTargetKind = "claude",
 ): string | null {
   const trimmed = absPaths.filter((p) => p && p.length > 0);
   if (trimmed.length === 0) return null;
@@ -25,10 +39,14 @@ export function buildDropPayload(
     // whether to prefix with @ or paste into a tool argument.
     return abs;
   });
-  // Escape spaces with a backslash so shells / Claude's prompt parser
-  // treat each multi-word path as a single token.
-  const escaped = tokens.map((t) => t.replace(/ /g, "\\ "));
-  return `${escaped.join(" ")} `;
+  // Claude's prompt is prose, not a command line: a backslash there is a
+  // literal character, so `CAMBIOS\ 5\ AGOSTO.docx` names a file that
+  // doesn't exist and every subsequent read fails. Only the shell wants
+  // quoting. (Trade-off: dropping several space-containing paths into
+  // Claude at once is ambiguous — the model still reads it fine, and
+  // that beats every single-file drop being broken.)
+  const out = kind === "shell" ? tokens.map(shellQuote) : tokens;
+  return `${out.join(" ")} `;
 }
 
 // Resolves a drop target from the Tauri event's *physical* pixel

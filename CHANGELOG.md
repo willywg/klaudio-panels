@@ -7,6 +7,15 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 ## [Unreleased]
 
 ### Fixed
+- **Dropped paths with spaces no longer reach Claude backslash-escaped**
+  ([#69](https://github.com/willywg/klaudio-panels/issues/69)).
+  `buildDropPayload` escaped spaces for every drop target, so dragging
+  `CAMBIOS 5 AGOSTO.docx` onto a Claude tab typed `CAMBIOS\ 5\ AGOSTO.docx` —
+  and Claude's prompt is prose, not a command line, so the backslash is a
+  literal character and the path names a file that doesn't exist. Quoting is
+  now chosen by target: Claude gets the raw path, the shell gets POSIX
+  single-quoting (which also fixes `CAMBIOS (1).docx` and `it's here.txt`,
+  broken words that escaping spaces alone never covered).
 - **Terminal editor no longer comes back blank after a project switch**
   ([#68](https://github.com/willywg/klaudio-panels/issues/68)). `EditorPtyView`
   is mounted from a per-project list, so switching project unmounted it while

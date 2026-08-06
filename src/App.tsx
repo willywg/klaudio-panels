@@ -546,7 +546,7 @@ function Shell() {
         if (!p) return;
         const target = findDropTarget(event.payload.position);
         if (!target) return;
-        const payload = buildDropPayload(event.payload.paths, p);
+        const payload = buildDropPayload(event.payload.paths, p, target.kind);
         if (!payload) return;
         const bytes = encoder.encode(payload);
         if (target.kind === "claude") {
@@ -564,7 +564,7 @@ function Shell() {
       const detail = (e as CustomEvent<InternalDropDetail>).detail;
       const p = activeProjectPath();
       if (!p || !detail) return;
-      const payload = buildDropPayload([detail.path], p);
+      const payload = buildDropPayload([detail.path], p, detail.ptyKind);
       if (!payload) return;
       const bytes = encoder.encode(payload);
       if (detail.ptyKind === "claude") {
