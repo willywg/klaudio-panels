@@ -11,10 +11,13 @@ import type {
   DiffPayload,
   FileStatus,
   GitSummary,
+  RepoInfo,
+  StatusPayload,
 } from "@/lib/git-status";
 
 type ProjectGitState = {
   status: FileStatus[];
+  repos: RepoInfo[];
   summary: GitSummary;
   loading: boolean;
   lastFetch: number;
@@ -34,6 +37,7 @@ const REFRESH_DEBOUNCE_MS = 300;
 function emptyState(): ProjectGitState {
   return {
     status: [],
+    repos: [],
     summary: { ...EMPTY_SUMMARY },
     loading: false,
     lastFetch: 0,
@@ -57,15 +61,15 @@ function makeGitContext() {
   async function fetchNow(projectPath: string) {
     setStore(projectPath, "loading", true);
     try {
-      const [status, summary] = await Promise.all([
-        invoke<FileStatus[]>("git_status", { projectPath }),
-        invoke<GitSummary>("git_summary", { projectPath }),
-      ]);
+      // One call, not two: the summary is a fold over this same file list,
+      // and asking for it separately re-walked every repo in the project.
+      const status = await invoke<StatusPayload>("git_status", { projectPath });
       setStore(
         projectPath,
         produce((s: ProjectGitState) => {
-          s.status = status;
-          s.summary = summary;
+          s.status = status.files;
+          s.repos = status.repos;
+          s.summary = status.summary;
           s.loading = false;
           s.lastFetch = Date.now();
         }),
@@ -116,6 +120,12 @@ function makeGitContext() {
     return store[projectPath]?.summary ?? EMPTY_SUMMARY;
   }
 
+  /** Repos that contributed to the last status — the project plus any nested
+   *  repo. Consumed by the panel to label each group with its branch. */
+  function reposFor(projectPath: string): RepoInfo[] {
+    return store[projectPath]?.repos ?? [];
+  }
+
   /** Map repo-relative path → kind, keyed by absolute path so file-tree nodes
    *  (which use absolute paths) can look up their badge cheaply. */
   function statusByAbsPath(projectPath: string): Map<string, FileStatus> {
@@ -160,6 +170,7 @@ function makeGitContext() {
     refresh,
     statusFor,
     summaryFor,
+    reposFor,
     statusByAbsPath,
     fetchDiff,
     store,

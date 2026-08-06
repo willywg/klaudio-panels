@@ -20,9 +20,11 @@ import { useOpenIn } from "@/context/open-in";
 import { useEditorPty } from "@/context/editor-pty";
 import { ContextMenu, type ContextMenuItem } from "@/components/context-menu";
 import { createInternalDrag } from "@/lib/use-internal-drag";
+import type { FileStatus } from "@/lib/git-status";
 import { focusTerminal } from "@/lib/terminal-focus-bus";
 import { looksBinaryByExtension } from "@/lib/cm-language";
 import { DiffFileRow } from "./diff-file-row";
+import { createFileOpener } from "./use-file-opener";
 import { FilePreview } from "./file-preview";
 import { EditorPtyView } from "./editor-pty-view";
 import { EditorTab } from "./editor-tab";
@@ -45,6 +47,38 @@ export function DiffPanel(props: Props) {
   const tabs = () => panel.tabsFor(props.projectPath);
   const activeKey = () => panel.activeKeyFor(props.projectPath);
   const activeTab = () => tabs().find((t) => tabKey(t) === activeKey());
+
+  /** Files bucketed by owning repo, in path order (which the Rust-side sort
+   *  already makes contiguous per repo). A project with no submodules yields
+   *  a single group and renders exactly as before — headers only appear once
+   *  there is more than one repo to tell apart. */
+  const groups = createMemo(() => {
+    const branchOf = new Map(
+      git.reposFor(props.projectPath).map((r) => [r.path, r.branch]),
+    );
+    const order: string[] = [];
+    const byRepo = new Map<string, FileStatus[]>();
+    for (const row of statuses()) {
+      let list = byRepo.get(row.repo);
+      if (!list) {
+        list = [];
+        byRepo.set(row.repo, list);
+        order.push(row.repo);
+      }
+      list.push(row);
+    }
+    return order.map((repo) => {
+      const files = byRepo.get(repo)!;
+      return {
+        repo,
+        label: repo || basename(props.projectPath),
+        branch: branchOf.get(repo) ?? null,
+        files,
+        adds: files.reduce((n, f) => n + f.adds, 0),
+        dels: files.reduce((n, f) => n + f.dels, 0),
+      };
+    });
+  });
 
   const anyExpanded = () =>
     statuses().some((s) => panel.isExpanded(s.path));
@@ -194,12 +228,44 @@ export function DiffPanel(props: Props) {
                     </div>
                   }
                 >
-                  <For each={statuses()}>
-                    {(status) => (
-                      <DiffFileRow
-                        projectPath={props.projectPath}
-                        status={status}
-                      />
+                  <For each={groups()}>
+                    {(group) => (
+                      <>
+                        <Show when={groups().length > 1}>
+                          <div class="sticky top-0 z-10 flex items-center gap-2 px-3 py-1.5 bg-neutral-900/95 backdrop-blur-sm border-y border-neutral-800">
+                            <GitBranch
+                              size={11}
+                              strokeWidth={2}
+                              class="shrink-0 text-neutral-600"
+                            />
+                            <span class="text-[11px] font-medium text-neutral-300 truncate">
+                              {group.label}
+                            </span>
+                            <Show when={group.branch}>
+                              <span class="text-[10px] font-mono text-neutral-500 truncate">
+                                {group.branch}
+                              </span>
+                            </Show>
+                            <span class="ml-auto text-[10px] font-mono text-neutral-500 shrink-0">
+                              {group.files.length} file
+                              {group.files.length === 1 ? "" : "s"}
+                            </span>
+                            <span class="text-[10px] font-mono flex items-center gap-1.5 shrink-0">
+                              <span class="text-emerald-400">+{group.adds}</span>
+                              <span class="text-rose-400">−{group.dels}</span>
+                            </span>
+                          </div>
+                        </Show>
+                        <For each={group.files}>
+                          {(status) => (
+                            <DiffFileRow
+                              projectPath={props.projectPath}
+                              status={status}
+                              stripPrefix={group.repo}
+                            />
+                          )}
+                        </For>
+                      </>
                     )}
                   </For>
                 </Show>
@@ -274,52 +340,8 @@ function TabStrip(props: { projectPath: string }) {
       .catch((err) => console.warn("clipboard write failed", err));
   }
 
-  function absFor(rel: string): string {
-    const base = props.projectPath.endsWith("/")
-      ? props.projectPath.slice(0, -1)
-      : props.projectPath;
-    return `${base}/${rel}`;
-  }
-
-  function dispatchAppOpen(app: import("@/lib/open-in").OpenInApp, rel: string) {
-    if (app.terminalEditor) {
-      openIn.setDefaultEditor(app.id);
-      const existing = panel.findEditorTabKey(
-        props.projectPath,
-        app.terminalEditor,
-        rel,
-      );
-      if (existing) {
-        panel.setActiveTab(props.projectPath, existing);
-        panel.openPanel(props.projectPath);
-        const existingTab = panel
-          .tabsFor(props.projectPath)
-          .find((t) => tabKey(t) === existing);
-        if (existingTab && existingTab.kind === "editor") {
-          focusTerminal(existingTab.ptyId);
-        }
-        return;
-      }
-      try {
-        const editorId = app.terminalEditor;
-        const ptyId = editorPty.openEditor(
-          props.projectPath,
-          absFor(rel),
-          rel,
-          editorId,
-        );
-        panel.addEditorTab(props.projectPath, editorId, rel, ptyId);
-        // User-action focus: explicit "Open in <editor>" — queue focus so
-        // the keystroke they make next lands in the editor PTY, not the
-        // file tree or wherever they triggered the menu from.
-        focusTerminal(ptyId);
-      } catch (err) {
-        console.warn("openEditor failed", err);
-      }
-    } else {
-      void openIn.openPath(absFor(rel), app.id);
-    }
-  }
+  const opener = createFileOpener(() => props.projectPath);
+  const absFor = opener.absFor;
 
   function sendCtrl(ptyId: string, byte: number) {
     void editorPty.write(ptyId, new Uint8Array([byte]));
@@ -396,7 +418,7 @@ function TabStrip(props: { projectPath: string }) {
       iconUrl: openIn.iconUrlFor(app.id) ?? undefined,
       iconClass: app.color,
       checked: !!app.terminalEditor && app.id === defaultEditor,
-      onClick: () => dispatchAppOpen(app, m.rel),
+      onClick: () => opener.openWith(app, m.rel),
     }));
     items.push({
       kind: "submenu",

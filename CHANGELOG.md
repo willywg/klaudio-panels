@@ -6,6 +6,43 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
 ## [Unreleased]
 
+### Changed
+- **The Git panel now shows what actually changed inside submodules**
+  ([#71](https://github.com/willywg/klaudio-panels/issues/71)). A project whose
+  children are separate repos rendered as `M backend +1 −1` — the gitlink
+  delta, i.e. the superproject's one-line view of which commit the pointer
+  names — so however many files really changed inside the child were
+  invisible. The scan now descends into each nested repo (submodule or
+  checked-in clone, three levels deep) and splices its own status in under a
+  `backend/…` prefix, and the panel groups those rows by child project with a
+  header carrying the repo name, its branch (`detached @ <sha>` when
+  detached, which submodules usually are) and its own counts. The pointer row
+  survives only when the child's worktree is clean, since then the moved
+  pointer *is* the change. `git_diff_file` resolves the owning repo instead of
+  the project, so a submodule file diffs against the child's object database
+  rather than rendering as freshly added. Single-repo projects look exactly as
+  before — group headers appear only when there's more than one repo.
+- **A submodule whose pointer moved renders the move, not a broken diff.**
+  That row is a gitlink, so its path is a *directory* — expanding it went
+  looking for a blob that never existed and landed on "File not found on disk
+  or in HEAD". It now shows `abc1234 → def5678` plus the new commit's subject
+  line, in place of the `+1 −1` that only ever counted the pointer file.
+- **New files now show their contents in the diff panel.** Expanding an added
+  or untracked file rendered an empty box, and its row always read `+0 −0`.
+  Two separate causes: libgit2 emits the delta for an untracked file but not
+  its content unless `show_untracked_content` is set, so nothing was ever
+  counted; and `@pierre/diffs` only computes a diff when *both* sides are
+  non-null, so handing it a file with no HEAD side left it with nothing to
+  draw. Deleted files had the mirror-image problem. Both sides now fall back
+  to an empty file, giving the all-added / all-deleted rendering.
+- **Diff rows that can't render one now offer a way out.** Binary, over
+  512 KB, or missing used to be a dead-end line of grey text; it now sits
+  next to a button per installed app, so a file too big to diff is one click
+  from opening in nvim, VS Code or Finder.
+- **`git_summary` folded into `git_status`.** The panel invoked both on every
+  refresh and each one ran the full status walk, so a project with submodules
+  opened every repo twice per keystroke-triggered debounce.
+
 ### Fixed
 - **Dropped paths with spaces no longer reach Claude backslash-escaped**
   ([#69](https://github.com/willywg/klaudio-panels/issues/69)).
