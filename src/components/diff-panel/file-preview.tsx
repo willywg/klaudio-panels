@@ -4,6 +4,7 @@ import { BookOpenText, Code2, Maximize2 } from "lucide-solid";
 import {
   formatBytes,
   imageDataUrl,
+  isAbsoluteish,
   isImagePath,
   loadImage,
   type ImagePayload,
@@ -66,7 +67,11 @@ export function FilePreview(props: Props) {
     isMd() && !forceSource() ? markdownPreviewMode() : "source";
   const isImage = () => isImagePath(props.relPath);
 
+  /** Image tabs can carry an absolute path: Claude's screenshots routinely
+   *  live outside the open project, and those can't be expressed relative to
+   *  it. Text files are always project-relative, as before. */
   function absPath(): string {
+    if (isAbsoluteish(props.relPath)) return props.relPath;
     const base = props.projectPath.endsWith("/")
       ? props.projectPath.slice(0, -1)
       : props.projectPath;

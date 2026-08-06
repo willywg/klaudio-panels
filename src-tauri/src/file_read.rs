@@ -132,6 +132,65 @@ pub fn read_image(path: String) -> Result<ImagePayload, String> {
     })
 }
 
+/// Most matches we'll bother reporting for a bare filename. Beyond a handful
+/// the name is too ambiguous to guess from anyway.
+const MAX_IMAGE_MATCHES: usize = 8;
+
+/// Locate an image inside a project by bare filename.
+///
+/// Claude lists images by name alone (`logo.png`, `logo-turismoi-small.png`)
+/// far more often than by full path. Joining such a name onto the project
+/// root produces `<project>/logo.png`, which almost never exists — that was
+/// the `No such file or directory` the user hit (#73). Searching the project
+/// finds the real one.
+///
+/// Results are sorted shortest-path-first, so a top-level `public/images/x.png`
+/// beats something buried six directories deep. Gitignored files and dotdirs
+/// are skipped, which is also what keeps this cheap: no `node_modules`, no
+/// build output.
+#[tauri::command]
+pub fn resolve_project_image(
+    project_path: String,
+    name: String,
+) -> Result<Vec<String>, String> {
+    let root = Path::new(&project_path);
+    if !root.is_dir() {
+        return Err("project path is not a directory".into());
+    }
+    // Guard against a "name" that is really a path, and against traversal.
+    if name.contains('/') || name.is_empty() || name == ".." {
+        return Err("expected a bare filename".into());
+    }
+    let ext = Path::new(&name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if !IMAGE_EXTENSIONS.contains(&ext.as_str()) {
+        return Err(format!("not an image extension: {ext}"));
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    let walker = ignore::WalkBuilder::new(root)
+        .filter_entry(|e| e.file_name() != ".git")
+        .build();
+    for entry in walker.flatten() {
+        if !entry.file_type().is_some_and(|t| t.is_file()) {
+            continue;
+        }
+        if entry.file_name() != std::ffi::OsStr::new(&name) {
+            continue;
+        }
+        out.push(entry.path().to_string_lossy().into_owned());
+        if out.len() >= MAX_IMAGE_MATCHES * 4 {
+            break;
+        }
+    }
+    out.sort_by_key(|p| (p.matches('/').count(), p.len()));
+    out.truncate(MAX_IMAGE_MATCHES);
+    Ok(out)
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct FilePayload {
     pub path: String,
@@ -318,6 +377,33 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
 
         assert!(read_image(dir.to_string_lossy().into_owned()).is_err());
+    }
+
+    #[test]
+    fn finds_a_bare_filename_anywhere_in_the_project() {
+        let tmp = TempDir::new("resolve");
+        let root = tmp.path();
+        fs::create_dir_all(root.join("app/assets/images/deep")).unwrap();
+        fs::create_dir_all(root.join("public/images")).unwrap();
+        fs::write(root.join("public/images/logo.png"), PNG_HEADER).unwrap();
+        fs::write(root.join("app/assets/images/deep/logo.png"), PNG_HEADER).unwrap();
+
+        let hits =
+            resolve_project_image(root.to_string_lossy().into_owned(), "logo.png".into()).unwrap();
+
+        assert_eq!(hits.len(), 2);
+        // Shallowest first — a bare name is a guess, so guess the likelier one.
+        assert!(hits[0].ends_with("public/images/logo.png"), "got {hits:?}");
+    }
+
+    #[test]
+    fn resolve_refuses_a_path_or_a_non_image() {
+        let tmp = TempDir::new("resolve-guard");
+        let root = tmp.path().to_string_lossy().into_owned();
+
+        assert!(resolve_project_image(root.clone(), "../etc/passwd.png".into()).is_err());
+        assert!(resolve_project_image(root.clone(), "a/b.png".into()).is_err());
+        assert!(resolve_project_image(root, "notes.txt".into()).is_err());
     }
 
     #[test]

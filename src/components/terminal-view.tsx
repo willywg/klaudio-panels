@@ -29,8 +29,9 @@ import {
   imageDataUrl,
   isImagePath,
   loadImage,
+  relativizeToProject,
+  resolveImagePath,
 } from "@/lib/image-files";
-import { openImageLightbox } from "@/lib/image-lightbox-bus";
 
 const THEME = {
   background: "#0b0b0c",
@@ -308,15 +309,22 @@ export function TerminalView(props: Props) {
     const linkProvider = makeFileLinkProvider(
       term,
       ({ rel, line }) => {
-        // Images go to the lightbox, not to a preview tab — and they're
-        // routinely written outside the open project (Claude's screenshots),
-        // so they can't go through the project-relative path either.
-        if (isImagePath(rel)) {
-          openImageLightbox(absOrHomePath(rel));
-          return;
-        }
         const tab = ctx.getTab(props.id);
         if (!tab) return;
+        // Images land in the same preview tab as every other file — one view
+        // for an image, wherever you opened it from. They just need the path
+        // resolved first, since Claude usually names them without a
+        // directory and they may live outside the project.
+        if (isImagePath(rel)) {
+          void resolveImagePath(tab.projectPath, rel).then((abs) => {
+            if (!abs) return;
+            diffPanel.openFile(
+              tab.projectPath,
+              relativizeToProject(tab.projectPath, abs),
+            );
+          });
+          return;
+        }
         diffPanel.openFile(tab.projectPath, normalizeRel(rel), line);
       },
       {
@@ -419,19 +427,6 @@ export function TerminalView(props: Props) {
     return rel;
   }
 
-  /** Resolve a matched token to something `read_image` can open. `~/` and
-   *  `/` are already absolute (Rust expands the tilde); anything else is
-   *  project-relative. */
-  function absOrHomePath(rel: string): string {
-    if (rel.startsWith("~/") || rel.startsWith("/")) return rel;
-    const tab = ctx.getTab(props.id);
-    if (!tab) return rel;
-    const base = tab.projectPath.endsWith("/")
-      ? tab.projectPath.slice(0, -1)
-      : tab.projectPath;
-    return `${base}/${normalizeRel(rel)}`;
-  }
-
   function hideThumbnail() {
     // Bump the token so a read still in flight drops its result instead of
     // popping a thumbnail for a link the pointer already left.
@@ -467,10 +462,16 @@ export function TerminalView(props: Props) {
     if (!isImagePath(rel)) return;
     const el = term?.element;
     if (!el) return;
-    const path = absOrHomePath(rel);
+    const tab = ctx.getTab(props.id);
+    if (!tab) return;
     const token = ++thumbToken;
-    void loadImage(path)
+    void resolveImagePath(tab.projectPath, rel)
+      .then((path) => {
+        if (!path || token !== thumbToken) return null;
+        return loadImage(path);
+      })
       .then((payload) => {
+        if (!payload) return;
         if (token !== thumbToken || !term?.element) return;
         const host = document.createElement("div");
         // `xterm-hover` is xterm's contract for overlays inside

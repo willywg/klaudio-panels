@@ -13,8 +13,12 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   the image, with dimensions, size and a checkerboard behind transparency.
   And because Claude Code is a TUI, it can only print image references as
   text (`[image] ~/proyectos/…/qa2278-01.jpeg`) — hovering one of those paths
-  now floats a thumbnail over the grid, and ⌘-clicking it opens a full-screen
-  lightbox. True inline thumbnails aren't possible: xterm renders a
+  now floats a thumbnail over the grid, and ⌘-clicking it opens the same
+  preview tab the file tree uses — one view per image, wherever you came
+  from, with the full-screen lightbox one button away. Bare filenames are
+  resolved by searching the project (Claude lists `logo.png` far more often
+  than `public/images/logo.png`, and the latter is where it actually lives).
+  True inline thumbnails aren't possible: xterm renders a
   fixed-height character grid and nothing in its API can make a row taller,
   so an image occupying rows would paint over the output below it. A new
   `read_image` command is allowed outside the project root — narrowed to

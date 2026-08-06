@@ -122,9 +122,28 @@ Ordering matters — the bare-URL provider must keep priority over this one
 ### 5. Hover thumbnail + lightbox in `terminal-view.tsx`
 
 The link provider gains `hover`/`leave` for links whose path passes
-`isImagePath`. Hover fetches (cached per path+mtime) and positions a small
-overlay near the link's range, clamped to the terminal's bounds. Leave
-tears it down. ⌘-click opens `ImageLightbox`.
+`isImagePath`. Hover fetches (cached) and positions a small overlay near the
+pointer, clamped to the terminal's bounds. Leave tears it down.
+
+⌘-click opens the **same preview tab** every other file opens in, rather
+than a separate viewer — one view per image, wherever you came from. The
+lightbox stays reachable from the preview's expand button, as a zoom of that
+view rather than a competing one.
+
+### 5b. Resolving what the link matched
+
+Claude names images by bare filename (`logo.png`) far more often than by
+path. Joining that onto the project root yields `<project>/logo.png`, which
+almost never exists — the real file is several directories down. So a token
+is resolved before it's read:
+
+- `~/…` or `/…` — already absolute.
+- contains a `/` — project-relative, joined.
+- bare name — `resolve_project_image` walks the project (gitignore-aware,
+  `.git` skipped) for a matching basename, shallowest path first, and the
+  result is memoised per project+name.
+
+Unresolved tokens stay silent: hover shows nothing, ⌘-click does nothing.
 
 `terminal-view.tsx` mounts the overlay inside `Terminal.element` with the
 `xterm-hover` class, which the typings note is required so the hover
