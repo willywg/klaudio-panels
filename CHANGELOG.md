@@ -6,6 +6,23 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
 ## [Unreleased]
 
+### Added
+- **Images are visible now, in the preview and from the terminal**
+  ([#73](https://github.com/willywg/klaudio-panels/issues/73), PRP 021).
+  Opening a `.png` used to render `Binary file — not shown.`; it now shows
+  the image, with dimensions, size and a checkerboard behind transparency.
+  And because Claude Code is a TUI, it can only print image references as
+  text (`[image] ~/proyectos/…/qa2278-01.jpeg`) — hovering one of those paths
+  now floats a thumbnail over the grid, and ⌘-clicking it opens a full-screen
+  lightbox. True inline thumbnails aren't possible: xterm renders a
+  fixed-height character grid and nothing in its API can make a row taller,
+  so an image occupying rows would paint over the output below it. A new
+  `read_image` command is allowed outside the project root — narrowed to
+  allowlisted extensions whose magic bytes agree with the name, size-capped,
+  read-only — because those screenshots routinely live under a different
+  project. `read_file_bytes` keeps its project-root restriction for
+  everything else.
+
 ### Changed
 - **The Git panel now shows what actually changed inside submodules**
   ([#71](https://github.com/willywg/klaudio-panels/issues/71)). A project whose

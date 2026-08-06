@@ -1,6 +1,14 @@
 import { createEffect, createSignal, onCleanup, onMount, Show, on } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import { BookOpenText, Code2 } from "lucide-solid";
+import { BookOpenText, Code2, Maximize2 } from "lucide-solid";
+import {
+  formatBytes,
+  imageDataUrl,
+  isImagePath,
+  loadImage,
+  type ImagePayload,
+} from "@/lib/image-files";
+import { openImageLightbox } from "@/lib/image-lightbox-bus";
 import { useDiffPanel } from "@/context/diff-panel";
 import { detectLangFromPath, ensureHighlighter, ensureLangLoaded } from "@/lib/shiki-singleton";
 import {
@@ -41,6 +49,10 @@ export function FilePreview(props: Props) {
   const [renderedHtml, setRenderedHtml] = createSignal<string>("");
   const [error, setError] = createSignal<string | null>(null);
   const [payload, setPayload] = createSignal<FilePayload | null>(null);
+  const [image, setImage] = createSignal<ImagePayload | null>(null);
+  const [natural, setNatural] = createSignal<{ w: number; h: number } | null>(
+    null,
+  );
   const [loading, setLoading] = createSignal<boolean>(true);
   // Line jumps (Cmd+click on file:line) land in Source mode regardless of
   // the global preference — Rendered has no line numbers to scroll to. The
@@ -52,12 +64,36 @@ export function FilePreview(props: Props) {
   const isMd = () => isMarkdownPath(props.relPath);
   const mode = () =>
     isMd() && !forceSource() ? markdownPreviewMode() : "source";
+  const isImage = () => isImagePath(props.relPath);
+
+  function absPath(): string {
+    const base = props.projectPath.endsWith("/")
+      ? props.projectPath.slice(0, -1)
+      : props.projectPath;
+    return `${base}/${props.relPath}`;
+  }
 
   async function load() {
     setLoading(true);
     setError(null);
     setHtml("");
     setRenderedHtml("");
+    setImage(null);
+
+    // Images never go through read_file_bytes: it reports them as binary and
+    // returns no content, which is why the preview used to dead-end on
+    // "Binary file — not shown." (#73).
+    if (isImage()) {
+      try {
+        setImage(await loadImage(absPath()));
+      } catch (err) {
+        setError(String(err));
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     try {
       const p = await invoke<FilePayload>("read_file_bytes", {
         projectPath: props.projectPath,
@@ -170,6 +206,8 @@ export function FilePreview(props: Props) {
   onCleanup(() => {
     setHtml("");
     setRenderedHtml("");
+    // base64 payloads are fat — don't keep one alive behind a closed tab.
+    setImage(null);
   });
 
   function toggleMode() {
@@ -193,6 +231,46 @@ export function FilePreview(props: Props) {
 
   return (
     <div class="relative h-full w-full flex flex-col min-h-0">
+      <Show when={image()}>
+        {(img) => (
+          <>
+            <button
+              class="absolute top-2 right-3 z-10 w-7 h-7 rounded-md flex items-center justify-center bg-neutral-900/90 border border-neutral-700 text-neutral-400 hover:text-neutral-100 hover:border-neutral-500 transition"
+              title="View full screen"
+              onClick={() => openImageLightbox(img().path)}
+            >
+              <Maximize2 size={14} strokeWidth={2} />
+            </button>
+            <div
+              class="flex-1 min-h-0 overflow-auto flex items-center justify-center p-4 cursor-zoom-in preview-checkerboard"
+              onClick={() => openImageLightbox(img().path)}
+            >
+              <img
+                src={imageDataUrl(img())}
+                alt={props.relPath}
+                class="max-w-full max-h-full object-contain"
+                onLoad={(e) =>
+                  setNatural({
+                    w: e.currentTarget.naturalWidth,
+                    h: e.currentTarget.naturalHeight,
+                  })
+                }
+              />
+            </div>
+            <div class="h-7 shrink-0 border-t border-neutral-800 flex items-center gap-2 px-3 text-[10px] font-mono text-neutral-500">
+              <Show when={natural()}>
+                {(n) => (
+                  <span>
+                    {n().w}×{n().h}
+                  </span>
+                )}
+              </Show>
+              <span>{formatBytes(img().bytes)}</span>
+              <span class="text-neutral-600">{img().mime}</span>
+            </div>
+          </>
+        )}
+      </Show>
       <Show when={!loading() && payload()?.too_large}>
         <Placeholder text="File exceeds 1 MiB — open externally to view." />
       </Show>
@@ -207,7 +285,12 @@ export function FilePreview(props: Props) {
           Loading…
         </div>
       </Show>
-      <Show when={!loading() && !error() && payload()?.contents !== null}>
+      {/* `payload()` stays null for images, and `undefined !== null` is true,
+          so this branch needs the explicit image guard or it would mount an
+          empty code host underneath the picture. */}
+      <Show
+        when={!loading() && !error() && !isImage() && payload()?.contents !== null}
+      >
         <Show when={isMd()}>
           <button
             class="absolute top-2 right-3 z-10 w-7 h-7 rounded-md flex items-center justify-center bg-neutral-900/90 border border-neutral-700 text-neutral-400 hover:text-neutral-100 hover:border-neutral-500 transition"

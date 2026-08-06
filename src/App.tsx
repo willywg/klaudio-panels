@@ -25,6 +25,7 @@ import { TabStrip } from "@/components/tab-strip";
 import { SidebarPanel } from "@/components/sidebar-panel";
 import { Titlebar } from "@/components/titlebar";
 import { NotificationToastStack } from "@/components/notification-toast";
+import { ImageLightbox } from "@/components/image-lightbox";
 import { FileTree } from "@/components/file-tree/file-tree";
 import {
   getLastSessionId,
@@ -947,6 +948,10 @@ function Shell() {
         activeProjectPath={activeProjectPath()}
       />
       <NotificationToastStack />
+      {/* Mounted once at the root and driven by `image-lightbox-bus` — the
+          openers (terminal link provider, file preview) are scattered, and
+          threading a prop to all of them would buy nothing. */}
+      <ImageLightbox />
       <main class="flex-1 flex min-h-0 overflow-hidden">
       <ProjectsSidebar
         activePath={activeProjectPath()}

@@ -63,6 +63,50 @@ button:not(:disabled) {
   background: rgba(99, 102, 241, 0.18);
   transition: background 400ms ease-out;
 }
+/* Hover thumbnail for image paths in the terminal. Absolutely positioned
+   inside `Terminal.element`, which is why it also carries xterm's
+   `.xterm-hover` class — that's what keeps it from swallowing the mouse
+   events the terminal needs to keep tracking the link. */
+.terminal-thumb {
+  position: absolute;
+  z-index: 20;
+  pointer-events: none;
+  padding: 4px;
+  border-radius: 8px;
+  background: rgba(15, 15, 17, 0.97);
+  border: 1px solid #333;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+}
+.terminal-thumb img {
+  display: block;
+  max-width: 320px;
+  max-height: 240px;
+  border-radius: 4px;
+}
+.terminal-thumb-caption {
+  padding: 4px 2px 1px;
+  font-size: 10px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: #6b6b6b;
+  text-align: center;
+}
+
+/* Behind image previews: a transparent PNG on a flat dark panel is
+   indistinguishable from an opaque dark one, so give transparency somewhere
+   to show. */
+.preview-checkerboard {
+  background-image:
+    linear-gradient(45deg, #1a1a1c 25%, transparent 25%),
+    linear-gradient(-45deg, #1a1a1c 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #1a1a1c 75%),
+    linear-gradient(-45deg, transparent 75%, #1a1a1c 75%);
+  background-size: 16px 16px;
+  background-position:
+    0 0,
+    0 8px,
+    8px -8px,
+    -8px 0;
+}
 /* Soft wrap for prose files (.preview-wrap set by FilePreview). Shiki emits
    `\n` text nodes between .line spans; `white-space: normal` on `code` makes
    those whitespace-only boxes collapse once each .line becomes a block, so
