@@ -539,6 +539,7 @@ function Shell() {
   onMount(() => {
     const encoder = new TextEncoder();
     let unlisten: (() => void) | undefined;
+    let stopped = false;
     void getCurrentWebview()
       .onDragDropEvent((event) => {
         if (event.payload.type !== "drop") return;
@@ -556,6 +557,16 @@ function Shell() {
         }
       })
       .then((u) => {
+        // `onDragDropEvent` resolves a turn or two after onMount, so
+        // onCleanup can already have run by the time we get the handle.
+        // Storing it then would leave the listener attached forever, and
+        // the next mount adds another on top: one drop, N copies of the
+        // path typed into the terminal. Visible under HMR (a remount per
+        // save), which is also why the copies disagreed about escaping.
+        if (stopped) {
+          u();
+          return;
+        }
         unlisten = u;
       })
       .catch((err) => console.warn("drag-drop listen failed", err));
@@ -576,6 +587,7 @@ function Shell() {
     window.addEventListener(INTERNAL_DROP_EVENT, onInternalDrop);
 
     onCleanup(() => {
+      stopped = true;
       unlisten?.();
       window.removeEventListener(INTERNAL_DROP_EVENT, onInternalDrop);
     });
