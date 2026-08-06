@@ -4,7 +4,7 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
-## [Unreleased]
+## [1.9.2] — 2026-08-06
 
 ### Added
 - **Images are visible now, in the preview and from the terminal**
@@ -119,6 +119,20 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   project path read from the signal instead of the accessor, and the
   overlays now leave `visibility`/`pointer-events` unset when active so a
   hidden ancestor always wins.
+
+### Tracked work
+- PRP: [`PRPs/021--image-preview-and-terminal-thumbnails.md`](PRPs/021--image-preview-and-terminal-thumbnails.md)
+- PRs: [#67](https://github.com/willywg/klaudio-panels/pull/67),
+  [#70](https://github.com/willywg/klaudio-panels/pull/70),
+  [#72](https://github.com/willywg/klaudio-panels/pull/72),
+  [#74](https://github.com/willywg/klaudio-panels/pull/74),
+  [#76](https://github.com/willywg/klaudio-panels/pull/76)
+- Issues: [#66](https://github.com/willywg/klaudio-panels/issues/66),
+  [#68](https://github.com/willywg/klaudio-panels/issues/68),
+  [#69](https://github.com/willywg/klaudio-panels/issues/69),
+  [#71](https://github.com/willywg/klaudio-panels/issues/71),
+  [#73](https://github.com/willywg/klaudio-panels/issues/73),
+  [#75](https://github.com/willywg/klaudio-panels/issues/75)
 
 ## [1.9.1] — 2026-07-29
 
