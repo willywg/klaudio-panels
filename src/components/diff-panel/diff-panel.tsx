@@ -24,6 +24,7 @@ import type { FileStatus } from "@/lib/git-status";
 import { focusTerminal } from "@/lib/terminal-focus-bus";
 import { looksBinaryByExtension } from "@/lib/cm-language";
 import { DiffFileRow } from "./diff-file-row";
+import { createFileOpener } from "./use-file-opener";
 import { FilePreview } from "./file-preview";
 import { EditorPtyView } from "./editor-pty-view";
 import { EditorTab } from "./editor-tab";
@@ -339,52 +340,8 @@ function TabStrip(props: { projectPath: string }) {
       .catch((err) => console.warn("clipboard write failed", err));
   }
 
-  function absFor(rel: string): string {
-    const base = props.projectPath.endsWith("/")
-      ? props.projectPath.slice(0, -1)
-      : props.projectPath;
-    return `${base}/${rel}`;
-  }
-
-  function dispatchAppOpen(app: import("@/lib/open-in").OpenInApp, rel: string) {
-    if (app.terminalEditor) {
-      openIn.setDefaultEditor(app.id);
-      const existing = panel.findEditorTabKey(
-        props.projectPath,
-        app.terminalEditor,
-        rel,
-      );
-      if (existing) {
-        panel.setActiveTab(props.projectPath, existing);
-        panel.openPanel(props.projectPath);
-        const existingTab = panel
-          .tabsFor(props.projectPath)
-          .find((t) => tabKey(t) === existing);
-        if (existingTab && existingTab.kind === "editor") {
-          focusTerminal(existingTab.ptyId);
-        }
-        return;
-      }
-      try {
-        const editorId = app.terminalEditor;
-        const ptyId = editorPty.openEditor(
-          props.projectPath,
-          absFor(rel),
-          rel,
-          editorId,
-        );
-        panel.addEditorTab(props.projectPath, editorId, rel, ptyId);
-        // User-action focus: explicit "Open in <editor>" — queue focus so
-        // the keystroke they make next lands in the editor PTY, not the
-        // file tree or wherever they triggered the menu from.
-        focusTerminal(ptyId);
-      } catch (err) {
-        console.warn("openEditor failed", err);
-      }
-    } else {
-      void openIn.openPath(absFor(rel), app.id);
-    }
-  }
+  const opener = createFileOpener(() => props.projectPath);
+  const absFor = opener.absFor;
 
   function sendCtrl(ptyId: string, byte: number) {
     void editorPty.write(ptyId, new Uint8Array([byte]));
@@ -461,7 +418,7 @@ function TabStrip(props: { projectPath: string }) {
       iconUrl: openIn.iconUrlFor(app.id) ?? undefined,
       iconClass: app.color,
       checked: !!app.terminalEditor && app.id === defaultEditor,
-      onClick: () => dispatchAppOpen(app, m.rel),
+      onClick: () => opener.openWith(app, m.rel),
     }));
     items.push({
       kind: "submenu",

@@ -22,6 +22,18 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   the project, so a submodule file diffs against the child's object database
   rather than rendering as freshly added. Single-repo projects look exactly as
   before — group headers appear only when there's more than one repo.
+- **New files now show their contents in the diff panel.** Expanding an added
+  or untracked file rendered an empty box, and its row always read `+0 −0`.
+  Two separate causes: libgit2 emits the delta for an untracked file but not
+  its content unless `show_untracked_content` is set, so nothing was ever
+  counted; and `@pierre/diffs` only computes a diff when *both* sides are
+  non-null, so handing it a file with no HEAD side left it with nothing to
+  draw. Deleted files had the mirror-image problem. Both sides now fall back
+  to an empty file, giving the all-added / all-deleted rendering.
+- **Diff rows that can't render one now offer a way out.** Binary, over
+  512 KB, or missing used to be a dead-end line of grey text; it now sits
+  next to a button per installed app, so a file too big to diff is one click
+  from opening in nvim, VS Code or Finder.
 - **`git_summary` folded into `git_status`.** The panel invoked both on every
   refresh and each one ran the full status walk, so a project with submodules
   opened every repo twice per keystroke-triggered debounce.

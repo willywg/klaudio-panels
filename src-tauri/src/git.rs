@@ -126,6 +126,11 @@ fn raw_status(repo: &Repository) -> Result<Vec<FileStatus>, String> {
     diff_opts
         .include_untracked(true)
         .recurse_untracked_dirs(true)
+        // Without this libgit2 emits the delta for an untracked file but
+        // never its content, so the line callback below never fires and
+        // every new file reported `+0 −0`. Ignored files are still excluded,
+        // so this doesn't wander into node_modules.
+        .show_untracked_content(true)
         .context_lines(0);
 
     let diff = repo
@@ -538,6 +543,31 @@ mod tests {
         // the superproject would return None and render the file as new.
         assert_eq!(payload.old_contents.as_deref(), Some("one\n"));
         assert_eq!(payload.new_contents.as_deref(), Some("two\n"));
+    }
+
+    #[test]
+    fn untracked_files_count_their_lines() {
+        let tmp = TempDir::new("untracked");
+        let root = tmp.path().join("plain");
+        init_repo(&root);
+        fs::write(root.join("kept.txt"), "one\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-qm", "init"]);
+        fs::write(root.join("new.md"), "a\nb\nc\n").unwrap();
+
+        let payload = build_status(root.to_str().unwrap());
+        let row = payload
+            .files
+            .iter()
+            .find(|f| f.path == "new.md")
+            .expect("untracked file missing");
+
+        // libgit2 emits the delta but not the content unless asked, which is
+        // how every new file used to report `+0 -0`.
+        assert!(matches!(row.kind, FileStatusKind::Untracked));
+        assert_eq!(row.adds, 3);
+        assert_eq!(row.dels, 0);
+        assert_eq!(payload.summary.adds, 3);
     }
 
     #[test]
