@@ -1,9 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   CENTER_MIN,
-  DIFF_MAX,
   DIFF_MIN,
-  SIDEBAR_MAX,
   SIDEBAR_MIN,
   computePanelLayout,
 } from "./panel-layout";
@@ -30,7 +28,7 @@ describe("computePanelLayout", () => {
       sidebarStored: 700,
       diffStored: 640,
     });
-    expect(r.sidebarEff).toBeLessThanOrEqual(SIDEBAR_MAX);
+    expect(r.sidebarEff).toBe(900 - CENTER_MIN);
     expect(r.diffEff).toBe(0);
     expect(r.diffVisible).toBe(false);
   });
@@ -44,8 +42,7 @@ describe("computePanelLayout", () => {
       diffStored: 900,
     });
     expect(r.sidebarEff).toBe(0);
-    expect(r.diffEff).toBeLessThanOrEqual(DIFF_MAX);
-    expect(r.diffEff).toBe(Math.min(DIFF_MAX, 900 - CENTER_MIN));
+    expect(r.diffEff).toBe(900 - CENTER_MIN);
     expect(r.diffVisible).toBe(true);
   });
 
@@ -108,19 +105,55 @@ describe("computePanelLayout", () => {
     expect(r.diffEff).toBeGreaterThanOrEqual(DIFF_MIN);
   });
 
-  test("both visible on wide window: respects absolute maxes, center gets leftover", () => {
+  // #75: these used to be capped at SIDEBAR_MAX=500 / DIFF_MAX=800 here,
+  // where the drag handle couldn't see the cap — you dragged, the stored
+  // width grew, and the panel didn't move. Only the geometry constrains it
+  // now, so a wide window hands the panels what they ask for.
+  test("both visible on a wide window: honours widths past the old px caps", () => {
     const rowWidth = 2400;
     const r = computePanelLayout({
       rowWidth,
       sidebarVisible: true,
       diffOpen: true,
-      sidebarStored: SIDEBAR_MAX + 200, // asks for more than cap
-      diffStored: DIFF_MAX + 200,
+      sidebarStored: 700,
+      diffStored: 1000,
     });
-    expect(r.sidebarEff).toBeLessThanOrEqual(SIDEBAR_MAX);
-    expect(r.diffEff).toBeLessThanOrEqual(DIFF_MAX);
-    const center = rowWidth - r.sidebarEff - r.diffEff;
-    expect(center).toBeGreaterThanOrEqual(CENTER_MIN);
+    expect(r.sidebarEff).toBe(700);
+    expect(r.diffEff).toBe(1000);
+    expect(rowWidth - r.sidebarEff - r.diffEff).toBeGreaterThanOrEqual(
+      CENTER_MIN,
+    );
+  });
+
+  test("one panel may take most of the row while the other stays at its min", () => {
+    const rowWidth = 2000;
+    const r = computePanelLayout({
+      rowWidth,
+      sidebarVisible: true,
+      diffOpen: true,
+      sidebarStored: SIDEBAR_MIN,
+      diffStored: 1400, // 70% of the row — allowed, center still fits
+    });
+    expect(r.diffEff).toBe(1400);
+    expect(rowWidth - r.sidebarEff - r.diffEff).toBeGreaterThanOrEqual(
+      CENTER_MIN,
+    );
+  });
+
+  test("a panel asking for everything still leaves the other its minimum", () => {
+    const rowWidth = 2000;
+    const r = computePanelLayout({
+      rowWidth,
+      sidebarVisible: true,
+      diffOpen: true,
+      sidebarStored: SIDEBAR_MIN,
+      diffStored: 99999,
+    });
+    expect(r.sidebarEff).toBeGreaterThanOrEqual(SIDEBAR_MIN);
+    expect(r.diffEff).toBe(rowWidth - CENTER_MIN - SIDEBAR_MIN);
+    expect(rowWidth - r.sidebarEff - r.diffEff).toBeGreaterThanOrEqual(
+      CENTER_MIN,
+    );
   });
 
   test("both visible: sum never exceeds rowWidth - CENTER_MIN", () => {

@@ -28,6 +28,19 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   everything else.
 
 ### Changed
+- **Side panels resize freely now**
+  ([#75](https://github.com/willywg/klaudio-panels/issues/75)). The diff/preview
+  panel and the sidebar stopped growing partway across the window — a quarter
+  of it on a wide display — and kept ignoring the mouse after that. Two
+  ceilings existed in two places and disagreed: `computePanelLayout` clamped
+  to hard `SIDEBAR_MAX = 500` / `DIFF_MAX = 800` pixels at projection time,
+  which the drag handle couldn't see, so a drag past the cap updated and
+  persisted a width the render then threw away. Both constants are gone. The
+  only limits left are geometric — each panel's own minimum and `CENTER_MIN`
+  for the terminal column — and the drag clamp and the layout projection now
+  derive their maximum from the same arithmetic. Content re-wraps on resize
+  as before: the preview is CSS-driven, the diff renderer carries its own
+  `ResizeObserver`, and the terminal refits from its own.
 - **The Git panel now shows what actually changed inside submodules**
   ([#71](https://github.com/willywg/klaudio-panels/issues/71)). A project whose
   children are separate repos rendered as `M backend +1 −1` — the gitlink

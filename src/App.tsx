@@ -1018,7 +1018,6 @@ function Shell() {
                 minOther={
                   CENTER_MIN + (panelLayout().diffVisible ? DIFF_MIN : 0)
                 }
-                maxFraction={0.5}
               />
             }
           </Show>
@@ -1100,7 +1099,6 @@ function Shell() {
                     minOther={
                       CENTER_MIN + (sidebarVisible() ? SIDEBAR_MIN : 0)
                     }
-                    maxFraction={0.5}
                   />
                   <div
                     class="shrink-0 min-h-0 flex flex-col overflow-hidden"

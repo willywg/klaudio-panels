@@ -11,10 +11,19 @@
  */
 
 export const SIDEBAR_MIN = 200;
-export const SIDEBAR_MAX = 500;
 export const DIFF_MIN = 300;
-export const DIFF_MAX = 800;
 export const CENTER_MIN = 360;
+
+// There is deliberately no SIDEBAR_MAX / DIFF_MAX. Those used to be hard
+// pixel ceilings (500 / 800) applied here, at projection time, where the
+// drag handle couldn't see them: you could drag past the cap, the stored
+// width grew, and the rendered panel didn't move. On a wide display that
+// made the panel feel stuck at a fraction of the window (#75).
+//
+// The only real constraints are geometric — each panel's own minimum, and
+// CENTER_MIN for the terminal column — so those are the only ones left.
+// Both the drag clamp and this projection derive their maximum from the
+// same arithmetic, which is what keeps them agreeing.
 
 export type PanelLayoutInput = {
   rowWidth: number;
@@ -60,30 +69,27 @@ export function computePanelLayout(input: PanelLayoutInput): PanelLayout {
   }
 
   if (sidebarVisible && !diffFits) {
-    const maxSelf = Math.min(SIDEBAR_MAX, rowWidth - CENTER_MIN);
-    const sidebarEff = clamp(sidebarStored, SIDEBAR_MIN, maxSelf);
-    return { sidebarEff, diffEff: 0, diffVisible: false };
+    const sidebarEff = clamp(sidebarStored, SIDEBAR_MIN, rowWidth - CENTER_MIN);
+    return { sidebarEff: Math.floor(sidebarEff), diffEff: 0, diffVisible: false };
   }
 
   if (!sidebarVisible && diffFits) {
-    const maxSelf = Math.min(DIFF_MAX, rowWidth - CENTER_MIN);
-    const diffEff = clamp(diffStored, DIFF_MIN, maxSelf);
-    return { sidebarEff: 0, diffEff, diffVisible: true };
+    const diffEff = clamp(diffStored, DIFF_MIN, rowWidth - CENTER_MIN);
+    return { sidebarEff: 0, diffEff: Math.floor(diffEff), diffVisible: true };
   }
 
-  // Both visible. First compute each panel's "preferred" width respecting
-  // its own absolute max and the 50%-of-row cap. Then if the sum exceeds
-  // rowWidth - CENTER_MIN, scale both down proportionally but never below
-  // their individual mins.
-  const half = rowWidth * 0.5;
-  const sidebarPref = Math.min(sidebarStored, SIDEBAR_MAX, half);
-  const diffPref = Math.min(diffStored, DIFF_MAX, half);
+  // Both visible. Each panel may grow until it would push the other below
+  // its minimum or eat into CENTER_MIN. If the two stored widths still add
+  // up to more than the row can give, scale both down proportionally —
+  // never below their individual mins.
   const available = rowWidth - CENTER_MIN;
+  const sidebarPref = Math.min(sidebarStored, available - DIFF_MIN);
+  const diffPref = Math.min(diffStored, available - SIDEBAR_MIN);
 
   if (sidebarPref + diffPref <= available) {
     return {
-      sidebarEff: Math.max(SIDEBAR_MIN, sidebarPref),
-      diffEff: Math.max(DIFF_MIN, diffPref),
+      sidebarEff: Math.floor(Math.max(SIDEBAR_MIN, sidebarPref)),
+      diffEff: Math.floor(Math.max(DIFF_MIN, diffPref)),
       diffVisible: true,
     };
   }
