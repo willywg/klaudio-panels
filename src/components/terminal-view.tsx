@@ -24,6 +24,14 @@ import {
   unregisterTerminalFocus,
 } from "@/lib/terminal-focus-bus";
 import { ScrollToBottomButton } from "@/components/scroll-to-bottom-button";
+import {
+  formatBytes,
+  imageDataUrl,
+  isImagePath,
+  loadImage,
+  relativizeToProject,
+  resolveImagePath,
+} from "@/lib/image-files";
 
 const THEME = {
   background: "#0b0b0c",
@@ -70,6 +78,10 @@ export function TerminalView(props: Props) {
   let bareUrlDisposable: { dispose: () => void } | undefined;
   let scrollDisposable: { dispose: () => void } | undefined;
   let fitDebounce: number | undefined;
+  /** Hover thumbnail overlay + a generation counter so a slow read can't
+   *  resurrect a thumbnail for a link the pointer already left. */
+  let thumbEl: HTMLDivElement | undefined;
+  let thumbToken = 0;
 
   // Drives the floating scroll-to-bottom button + reflects whether the user
   // is currently reading scrollback. Updated from xterm's onScroll event.
@@ -294,11 +306,32 @@ export function TerminalView(props: Props) {
     // Cmd/Ctrl+click on `src/foo.ts` or `src/foo.ts:42` opens a preview tab.
     // Uses xterm's native link provider API so we never parse the PTY buffer
     // ourselves beyond extracting the text under the cursor.
-    const linkProvider = makeFileLinkProvider(term, ({ rel, line }) => {
-      const tab = ctx.getTab(props.id);
-      if (!tab) return;
-      diffPanel.openFile(tab.projectPath, normalizeRel(rel), line);
-    });
+    const linkProvider = makeFileLinkProvider(
+      term,
+      ({ rel, line }) => {
+        const tab = ctx.getTab(props.id);
+        if (!tab) return;
+        // Images land in the same preview tab as every other file — one view
+        // for an image, wherever you opened it from. They just need the path
+        // resolved first, since Claude usually names them without a
+        // directory and they may live outside the project.
+        if (isImagePath(rel)) {
+          void resolveImagePath(tab.projectPath, rel).then((abs) => {
+            if (!abs) return;
+            diffPanel.openFile(
+              tab.projectPath,
+              relativizeToProject(tab.projectPath, abs),
+            );
+          });
+          return;
+        }
+        diffPanel.openFile(tab.projectPath, normalizeRel(rel), line);
+      },
+      {
+        onHover: (path, event) => showThumbnail(path, event),
+        onLeave: () => hideThumbnail(),
+      },
+    );
     linkDisposable = term.registerLinkProvider(linkProvider);
 
     resizeObs = new ResizeObserver(() => {
@@ -371,6 +404,7 @@ export function TerminalView(props: Props) {
   });
 
   onCleanup(() => {
+    hideThumbnail();
     resizeObs?.disconnect();
     if (fitDebounce) window.clearTimeout(fitDebounce);
     detachData?.();
@@ -391,6 +425,80 @@ export function TerminalView(props: Props) {
   function normalizeRel(rel: string): string {
     if (rel.startsWith("./")) return rel.slice(2);
     return rel;
+  }
+
+  function hideThumbnail() {
+    // Bump the token so a read still in flight drops its result instead of
+    // popping a thumbnail for a link the pointer already left.
+    thumbToken++;
+    thumbEl?.remove();
+    thumbEl = undefined;
+  }
+
+  function positionThumbnail(host: HTMLElement, event: MouseEvent) {
+    const el = term?.element;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const w = host.offsetWidth;
+    const h = host.offsetHeight;
+    let left = event.clientX - rect.left + 12;
+    let top = event.clientY - rect.top + 16;
+    // Flip/clamp so the thumbnail never spills outside the terminal.
+    if (left + w > rect.width - 8) left = Math.max(8, rect.width - w - 8);
+    if (top + h > rect.height - 8) {
+      top = Math.max(8, event.clientY - rect.top - h - 12);
+    }
+    host.style.left = `${left}px`;
+    host.style.top = `${top}px`;
+  }
+
+  /** Float a thumbnail above the grid while an image path is hovered.
+   *
+   *  A real inline thumbnail is impossible here: xterm renders a fixed
+   *  character grid and nothing in its API can make a row taller, so an
+   *  8-row image would paint over the output below it. An overlay leaves the
+   *  buffer untouched. See PRP 021. */
+  function showThumbnail(rel: string, event: MouseEvent) {
+    if (!isImagePath(rel)) return;
+    const el = term?.element;
+    if (!el) return;
+    const tab = ctx.getTab(props.id);
+    if (!tab) return;
+    const token = ++thumbToken;
+    void resolveImagePath(tab.projectPath, rel)
+      .then((path) => {
+        if (!path || token !== thumbToken) return null;
+        return loadImage(path);
+      })
+      .then((payload) => {
+        if (!payload) return;
+        if (token !== thumbToken || !term?.element) return;
+        const host = document.createElement("div");
+        // `xterm-hover` is xterm's contract for overlays inside
+        // `Terminal.element`: without it the element swallows the mouse
+        // events the terminal needs to keep tracking the link.
+        host.className = "xterm-hover terminal-thumb";
+        const img = document.createElement("img");
+        img.src = imageDataUrl(payload);
+        img.alt = "";
+        // Data URLs still decode asynchronously, so the first measurement
+        // can be zero-sized — place it again once we know the real box.
+        img.onload = () => {
+          if (thumbEl === host) positionThumbnail(host, event);
+        };
+        host.appendChild(img);
+        const caption = document.createElement("div");
+        caption.className = "terminal-thumb-caption";
+        caption.textContent = `${formatBytes(payload.bytes)} · ⌘-click to open`;
+        host.appendChild(caption);
+        term.element.appendChild(host);
+        thumbEl = host;
+        positionThumbnail(host, event);
+      })
+      .catch(() => {
+        // Deleted, unreadable, or not actually an image — leave the link
+        // inert rather than popping an error box over the terminal.
+      });
   }
 
   const isDragOver = () => hoverPtyId() === props.id;
