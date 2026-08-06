@@ -173,16 +173,11 @@ fn resolve_claude_config_dir_with(
 ) -> Result<Option<PathBuf>, String> {
     let fingerprint = nearest_envrc(Path::new(project_path));
 
+    // No `.envrc` anywhere in the ancestor chain: nothing for the cache to
+    // key off, and this branch runs before ever reaching the lookup below —
+    // whose comparison against `Some(&fingerprint)` a `None` fingerprint
+    // could never match anyway — so there's nothing to store here.
     let Some(fingerprint) = fingerprint else {
-        if let Ok(mut cache) = CONFIG_DIR_CACHE.lock() {
-            cache.put(
-                project_path.to_string(),
-                ConfigDirCacheEntry {
-                    fingerprint: None,
-                    config_dir: None,
-                },
-            );
-        }
         return Ok(None);
     };
 
@@ -817,14 +812,21 @@ mod tests {
 
     #[test]
     fn cache_does_not_grow_without_bound() {
-        // Distinct no-.envrc projects are cheap (no shell probe) and still
-        // exercise the real, shared, bounded `CONFIG_DIR_CACHE` — inserting
-        // more than its capacity must never make it exceed that capacity,
+        // Only projects with an `.envrc` reach the cache at all (the
+        // no-`.envrc` branch short-circuits before ever touching it), so
+        // this must actually give each project one to insert real entries
+        // into the real, shared, bounded `CONFIG_DIR_CACHE` — inserting more
+        // than its capacity must never make it exceed that capacity,
         // regardless of what other tests concurrently insert into the same
         // process-wide cache.
+        let empty_bin = TempDir::new("bound-test-empty-bin");
         for i in 0..(CONFIG_DIR_CACHE_CAPACITY + 20) {
             let project = TempDir::new(&format!("bound-test-project-{i}"));
-            resolve_claude_config_dir_with(project.path().to_str().unwrap(), || None).unwrap();
+            write_envrc(project.path(), "export FOO=bar\n");
+            resolve_claude_config_dir_with(project.path().to_str().unwrap(), || {
+                Some(base_env(empty_bin.path()))
+            })
+            .unwrap();
         }
 
         let cache = CONFIG_DIR_CACHE.lock().unwrap();
@@ -833,6 +835,25 @@ mod tests {
             "cache grew to {} entries, past its {} capacity",
             cache.len(),
             CONFIG_DIR_CACHE_CAPACITY
+        );
+    }
+
+    #[test]
+    fn no_envrc_resolution_does_not_touch_the_cache() {
+        // The dead write this branch used to make cost a mutex acquisition
+        // and an LRU insertion on the hottest path in the module, and could
+        // evict a real entry for a project that does have an `.envrc`. It's
+        // gone now — confirm a no-`.envrc` project never appears in the
+        // cache at all.
+        let project = TempDir::new("no-envrc-cache-check-project");
+        let project_path = project.path().to_str().unwrap().to_string();
+
+        resolve_claude_config_dir_with(&project_path, || None).unwrap();
+
+        let cache = CONFIG_DIR_CACHE.lock().unwrap();
+        assert!(
+            !cache.contains(&project_path),
+            "a project with no .envrc must never be written into the cache"
         );
     }
 
