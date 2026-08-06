@@ -539,6 +539,7 @@ function Shell() {
   onMount(() => {
     const encoder = new TextEncoder();
     let unlisten: (() => void) | undefined;
+    let stopped = false;
     void getCurrentWebview()
       .onDragDropEvent((event) => {
         if (event.payload.type !== "drop") return;
@@ -546,7 +547,7 @@ function Shell() {
         if (!p) return;
         const target = findDropTarget(event.payload.position);
         if (!target) return;
-        const payload = buildDropPayload(event.payload.paths, p);
+        const payload = buildDropPayload(event.payload.paths, p, target.kind);
         if (!payload) return;
         const bytes = encoder.encode(payload);
         if (target.kind === "claude") {
@@ -556,6 +557,16 @@ function Shell() {
         }
       })
       .then((u) => {
+        // `onDragDropEvent` resolves a turn or two after onMount, so
+        // onCleanup can already have run by the time we get the handle.
+        // Storing it then would leave the listener attached forever, and
+        // the next mount adds another on top: one drop, N copies of the
+        // path typed into the terminal. Visible under HMR (a remount per
+        // save), which is also why the copies disagreed about escaping.
+        if (stopped) {
+          u();
+          return;
+        }
         unlisten = u;
       })
       .catch((err) => console.warn("drag-drop listen failed", err));
@@ -564,7 +575,7 @@ function Shell() {
       const detail = (e as CustomEvent<InternalDropDetail>).detail;
       const p = activeProjectPath();
       if (!p || !detail) return;
-      const payload = buildDropPayload([detail.path], p);
+      const payload = buildDropPayload([detail.path], p, detail.ptyKind);
       if (!payload) return;
       const bytes = encoder.encode(payload);
       if (detail.ptyKind === "claude") {
@@ -576,6 +587,7 @@ function Shell() {
     window.addEventListener(INTERNAL_DROP_EVENT, onInternalDrop);
 
     onCleanup(() => {
+      stopped = true;
       unlisten?.();
       window.removeEventListener(INTERNAL_DROP_EVENT, onInternalDrop);
     });
