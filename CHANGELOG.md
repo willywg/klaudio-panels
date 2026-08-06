@@ -7,6 +7,19 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 ## [Unreleased]
 
 ### Fixed
+- **Terminal editor no longer comes back blank after a project switch**
+  ([#68](https://github.com/willywg/klaudio-panels/issues/68)). `EditorPtyView`
+  is mounted from a per-project list, so switching project unmounted it while
+  `nvim` kept running — and its `onCleanup` disposed the terminal and dropped
+  the PTY subscription, discarding every byte the editor emitted while you were
+  away. Worse, the remount re-ran `spawnPty` on the *same* id: neither side
+  guarded it, `sessions.insert` replaced the entry without killing the previous
+  child, and two (then three) editors interleaved bytes into one
+  `pty:data:<id>` channel — the garbled pane. Editor terminals now live in
+  `editor-terminal-store`, keyed by ptyId, outliving the view and staying
+  subscribed for the PTY's whole lifetime; the view only owns the DOM slot and
+  repaints from the intact buffer on re-attach. Both `spawnPty` and Rust's
+  `spawn_pty` now refuse a duplicate id.
 - **Editor panel no longer gets stuck on screen after you close it**
   ([#66](https://github.com/willywg/klaudio-panels/issues/66)). With an
   inline-edit tab open, closing the panel (or going Home, or switching
