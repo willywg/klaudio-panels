@@ -257,10 +257,22 @@ fn is_default_claude_root(dir: &Path) -> bool {
 /// when no env has already been resolved for this project (contrast with
 /// `pty_open`, which derives it from the env it already resolved for the
 /// spawn instead of evaluating direnv a second time).
+///
+/// Async so Tauri dispatches it off the main thread — as a sync command
+/// this ran ON the main thread, and `App.tsx` calls it before every
+/// `openTab` including the auto-resume that fires on project open. A cache
+/// miss (or a blocked `.envrc`, which is never cached) froze the whole UI
+/// for the duration. Same treatment as `sessions.rs`'s
+/// `list_sessions_for_project` (#60). No frontend change needed — every
+/// call site already `await`s it.
 #[tauri::command]
-pub fn resolve_profile_id(project_path: String) -> Result<String, String> {
-    let config_dir = resolve_claude_config_dir(&project_path)?;
-    Ok(profile_id_for_config_dir(config_dir.as_deref()))
+pub async fn resolve_profile_id(project_path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let config_dir = resolve_claude_config_dir(&project_path)?;
+        Ok(profile_id_for_config_dir(config_dir.as_deref()))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Runs `direnv export json` with `project_path` as cwd. `Ok(None)` means
