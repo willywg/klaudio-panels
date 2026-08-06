@@ -134,6 +134,19 @@ function Shell() {
   const sidebarVisible = () =>
     !sidebar.collapsed() && activeProjectPath() !== null;
 
+  /** Project path for everything rendered under the `<Show>`s below.
+   *
+   *  Deliberately NOT the accessor `<Show>` hands its callback child: that
+   *  one throws "Stale read from <Show>." the instant the condition turns
+   *  falsy, and children read it during teardown (EditorTab unregisters its
+   *  buffer in onCleanup). A throw inside the teardown batch makes Solid
+   *  null out its queues and rethrow, so every effect still pending — the
+   *  `visibility: hidden` we set on the project layer included — is silently
+   *  dropped and the panel stays painted on screen with no way to close it
+   *  (#66). Reading the signal instead just yields "" once the project is
+   *  gone, which every consumer treats as a harmless no-op key. */
+  const panelProject = () => activeProjectPath() ?? "";
+
   // Combined layout: we compute BOTH panels' effective widths together
   // because the interaction between them matters. Each panel capped
   // independently at row*0.5 lets them both reach 50%, leaving nothing
@@ -950,13 +963,13 @@ function Shell() {
           }}
         >
           <Show when={activeProjectPath()}>
-            {(p) => (
+            {
               <SidebarPanel
-                projectPath={p()}
+                projectPath={panelProject()}
                 width={panelLayout().sidebarEff}
                 sessionsContent={
                   <SessionsList
-                    projectPath={p()}
+                    projectPath={panelProject()}
                     activeSessionId={activeSessionId()}
                     openSessionIds={openSessionIds()}
                     openingSessionIds={openingSessionIds()}
@@ -966,9 +979,9 @@ function Shell() {
                     refreshKey={sessionsRefresh()}
                   />
                 }
-                filesContent={<FileTree projectPath={p()} />}
+                filesContent={<FileTree projectPath={panelProject()} />}
               />
-            )}
+            }
           </Show>
           <Show
             when={
@@ -977,12 +990,12 @@ function Shell() {
                 : null
             }
           >
-            {(p) => (
+            {
               <SplitDivider
                 edge="left"
                 width={panelLayout().sidebarEff}
-                onResize={(w) => sidebar.setWidth(p(), w)}
-                onResizeEnd={(w) => sidebar.setWidth(p(), w)}
+                onResize={(w) => sidebar.setWidth(panelProject(), w)}
+                onResizeEnd={(w) => sidebar.setWidth(panelProject(), w)}
                 getParentRect={() => sidebarRowRef.getBoundingClientRect()}
                 minSelf={SIDEBAR_MIN}
                 minOther={
@@ -990,7 +1003,7 @@ function Shell() {
                 }
                 maxFraction={0.5}
               />
-            )}
+            }
           </Show>
 
           {/* Central column: Claude terminal + diff panel (row) on top,
@@ -1023,8 +1036,8 @@ function Shell() {
                       <div
                         class="absolute inset-0 flex flex-col"
                         style={{
-                          visibility: visible() ? "visible" : "hidden",
-                          "pointer-events": visible() ? "auto" : "none",
+                          visibility: visible() ? undefined : "hidden",
+                          "pointer-events": visible() ? undefined : "none",
                           "z-index": visible() ? 1 : 0,
                         }}
                       >
@@ -1057,12 +1070,12 @@ function Shell() {
                 panelLayout().diffVisible ? activeProjectPath() : null
               }
             >
-              {(p) => (
+              {
                 <>
                   <SplitDivider
                     width={panelLayout().diffEff}
-                    onResize={(w) => diffPanel.setWidth(p(), w)}
-                    onResizeEnd={(w) => diffPanel.setWidth(p(), w)}
+                    onResize={(w) => diffPanel.setWidth(panelProject(), w)}
+                    onResizeEnd={(w) => diffPanel.setWidth(panelProject(), w)}
                     getParentRect={() =>
                       splitContainerRef.getBoundingClientRect()
                     }
@@ -1076,10 +1089,10 @@ function Shell() {
                     class="shrink-0 min-h-0 flex flex-col overflow-hidden"
                     style={{ width: `${panelLayout().diffEff}px` }}
                   >
-                    <DiffPanel projectPath={p()} />
+                    <DiffPanel projectPath={panelProject()} />
                   </div>
                 </>
-              )}
+              }
             </Show>
           </div>
           {/* Shell dock. Mount a ShellTerminalPanel for every project that
@@ -1111,8 +1124,8 @@ function Shell() {
                   <div
                     class="absolute inset-0"
                     style={{
-                      visibility: visible() ? "visible" : "hidden",
-                      "pointer-events": visible() ? "auto" : "none",
+                      visibility: visible() ? undefined : "hidden",
+                      "pointer-events": visible() ? undefined : "none",
                     }}
                   >
                     <ShellTerminalPanel

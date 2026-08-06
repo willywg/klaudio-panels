@@ -4,6 +4,42 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [Unreleased]
+
+### Fixed
+- **Terminal editor no longer comes back blank after a project switch**
+  ([#68](https://github.com/willywg/klaudio-panels/issues/68)). `EditorPtyView`
+  is mounted from a per-project list, so switching project unmounted it while
+  `nvim` kept running — and its `onCleanup` disposed the terminal and dropped
+  the PTY subscription, discarding every byte the editor emitted while you were
+  away. Worse, the remount re-ran `spawnPty` on the *same* id: neither side
+  guarded it, `sessions.insert` replaced the entry without killing the previous
+  child, and two (then three) editors interleaved bytes into one
+  `pty:data:<id>` channel — the garbled pane. Editor terminals now live in
+  `editor-terminal-store`, keyed by ptyId, outliving the view and staying
+  subscribed for the PTY's whole lifetime; the view only owns the DOM slot and
+  repaints from the intact buffer on re-attach. Both `spawnPty` and Rust's
+  `spawn_pty` now refuse a duplicate id.
+- **Editor panel no longer gets stuck on screen after you close it**
+  ([#66](https://github.com/willywg/klaudio-panels/issues/66)). With an
+  inline-edit tab open, closing the panel (or going Home, or switching
+  project) could leave the editor painted on top of everything — no tab
+  strip, no close button, surviving project switches until the app was
+  restarted. `<Show>`'s callback child receives an accessor that *throws*
+  `Stale read from <Show>.` once the condition turns falsy; `App.tsx` passed
+  it down as `DiffPanel`'s `projectPath`, and `EditorTab` read it back in
+  `onCleanup` to unregister its edit buffer — i.e. exactly during teardown.
+  Solid answers a throw inside an update batch by discarding every effect
+  still queued behind it, so the `visibility: hidden` meant for the project
+  layer never landed and the panel was never detached. The orphan stayed
+  *visible* because the tab overlays hardcoded `visibility: visible`, which
+  overrides a hidden ancestor. Three changes: `EditorTab` snapshots its
+  `(projectPath, relPath)` at creation (which also stops it unregistering
+  under the *next* project's key after a switch), `App.tsx` passes the
+  project path read from the signal instead of the accessor, and the
+  overlays now leave `visibility`/`pointer-events` unset when active so a
+  hidden ancestor always wins.
+
 ## [1.9.1] — 2026-07-29
 
 ### Fixed

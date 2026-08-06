@@ -65,6 +65,22 @@ fn spawn_pty(
     initial_cols: Option<u16>,
     initial_rows: Option<u16>,
 ) -> Result<(), String> {
+    // Ids are minted by the frontend (crypto.randomUUID), so a collision is
+    // always a caller bug — and a costly one: `sessions.insert` would replace
+    // the entry, orphaning the previous child (nothing kills it) while its
+    // reader thread keeps emitting on the SAME `pty:data:<id>` channel. Two
+    // nvim processes interleaving bytes into one xterm is exactly the garbled
+    // editor reported in #68. Refuse instead.
+    if state
+        .sessions
+        .lock()
+        .map_err(|_| "pty state poisoned".to_string())?
+        .contains_key(&id)
+    {
+        debug_log::write("pty", &format!("id={id} refused: id already in use"));
+        return Err(format!("pty id already in use: {id}"));
+    }
+
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {

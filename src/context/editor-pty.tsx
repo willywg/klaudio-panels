@@ -8,6 +8,7 @@ import { createStore, produce } from "solid-js/store";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { findTerminalEditor } from "@/lib/terminal-editors";
+import { destroyEditorTerminal } from "@/lib/editor-terminal-store";
 
 export type EditorPtyStatus = "opening" | "running" | "exited" | "error";
 
@@ -117,6 +118,12 @@ function makeEditorPtyContext() {
   async function spawnPty(ptyId: string, cols: number, rows: number): Promise<void> {
     const tab = store.tabs.find((t) => t.ptyId === ptyId);
     if (!tab) return;
+    // Enforce the once-per-ptyId contract here rather than trusting callers.
+    // A second `pty_open_editor` on a live id used to spawn a second editor
+    // whose bytes interleaved with the first one's on the shared
+    // `pty:data:<id>` channel — the garbled pane in #68. Rust refuses the
+    // duplicate too; this just avoids the round-trip and the error toast.
+    if (tab.status !== "opening") return;
     const editor = findTerminalEditor(tab.editorId);
     if (!editor) return;
     try {
@@ -158,6 +165,9 @@ function makeEditorPtyContext() {
       console.warn("pty_kill (editor) failed", err);
     }
     detachListeners(ptyId);
+    // The editor process is gone, so the terminal that was outliving its
+    // view has nothing left to receive. This is its only funeral.
+    destroyEditorTerminal(ptyId);
     setStore(
       produce((s) => {
         const idx = s.tabs.findIndex((t) => t.ptyId === ptyId);

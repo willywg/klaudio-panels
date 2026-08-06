@@ -1,94 +1,15 @@
 import { createEffect, onCleanup, onMount, Show } from "solid-js";
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { WebLinksAddon } from "@xterm/addon-web-links";
-import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { WebglAddon } from "@xterm/addon-webgl";
-import "@xterm/xterm/css/xterm.css";
-import {
-  readText as readClipboardText,
-} from "@tauri-apps/plugin-clipboard-manager";
 import { useEditorPty } from "@/context/editor-pty";
-import { openUrlInSystemBrowser } from "@/lib/open-url";
-import { makeBareUrlLinkProvider } from "@/lib/xterm-bare-url-links";
+import {
+  acquireEditorTerminal,
+  releaseEditorTerminal,
+  type EditorTerminal,
+} from "@/lib/editor-terminal-store";
 import {
   recordTerminalFocus,
   registerTerminalFocus,
   unregisterTerminalFocus,
 } from "@/lib/terminal-focus-bus";
-
-const THEME = {
-  background: "#0b0b0c",
-  foreground: "#e5e5e5",
-  cursor: "#e5e5e5",
-  cursorAccent: "#0b0b0c",
-  selectionBackground: "#3b3b3f",
-  black: "#1e1e1e",
-  red: "#f38ba8",
-  green: "#a6e3a1",
-  yellow: "#f9e2af",
-  blue: "#89b4fa",
-  magenta: "#cba6f7",
-  cyan: "#94e2d5",
-  white: "#cdd6f4",
-  brightBlack: "#585b70",
-  brightRed: "#f38ba8",
-  brightGreen: "#a6e3a1",
-  brightYellow: "#f9e2af",
-  brightBlue: "#89b4fa",
-  brightMagenta: "#cba6f7",
-  brightCyan: "#94e2d5",
-  brightWhite: "#ffffff",
-};
-
-const FONT_FAMILY =
-  "ui-monospace, 'SF Mono', 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace";
-
-/** Strip `ESC [ ? Pn (; Pn)* $ p` DECRQM sequences from the byte stream.
- *  xterm.js 6.x's requestMode handler throws on some of these under prod
- *  minification, so we drop them before they reach the parser. */
-function stripDecrqm(bytes: Uint8Array): Uint8Array {
-  const ESC = 0x1b;
-  const LBR = 0x5b;
-  const QST = 0x3f;
-  const DLR = 0x24;
-  const P = 0x70;
-  let matched = false;
-  for (let i = 0; i < bytes.length - 2; i++) {
-    if (bytes[i] === ESC && bytes[i + 1] === LBR && bytes[i + 2] === QST) {
-      matched = true;
-      break;
-    }
-  }
-  if (!matched) return bytes;
-  const out: number[] = [];
-  let i = 0;
-  while (i < bytes.length) {
-    if (
-      i + 2 < bytes.length &&
-      bytes[i] === ESC &&
-      bytes[i + 1] === LBR &&
-      bytes[i + 2] === QST
-    ) {
-      let j = i + 3;
-      let found = false;
-      while (j + 1 < bytes.length && j - i < 64) {
-        if (bytes[j] === DLR && bytes[j + 1] === P) {
-          found = true;
-          break;
-        }
-        j++;
-      }
-      if (found) {
-        i = j + 2;
-        continue;
-      }
-    }
-    out.push(bytes[i]);
-    i++;
-  }
-  return new Uint8Array(out);
-}
 
 type Props = {
   ptyId: string;
@@ -98,85 +19,67 @@ type Props = {
   onExit?: (code: number) => void;
 };
 
+/** The visible half of an editor PTY. The `Terminal` itself lives in
+ *  `editor-terminal-store` and outlives this component — see the note there
+ *  for why. This owns the DOM slot, the fit/resize plumbing, and the exit
+ *  banner. */
 export function EditorPtyView(props: Props) {
   const editorPty = useEditorPty();
   let container: HTMLDivElement | undefined;
-  let term: Terminal | undefined;
-  let fit: FitAddon | undefined;
+  let entry: EditorTerminal | undefined;
   let resizeObs: ResizeObserver | undefined;
-  let detachData: (() => void) | undefined;
   let detachExit: (() => void) | undefined;
   let fitDebounce: number | undefined;
-  let bareUrlDisposable: { dispose: () => void } | undefined;
+  let onTextareaFocus: (() => void) | undefined;
   let disposed = false;
 
-  const encoder = new TextEncoder();
-
-  let spawnKicked = false;
-
   function maybeSpawn(_source: string) {
-    if (spawnKicked || disposed || !term) return;
-    const cols = term.cols;
-    const rows = term.rows;
+    if (!entry || entry.spawned || disposed) return;
+    const cols = entry.term.cols;
+    const rows = entry.term.rows;
     // Don't spawn until fit has expanded past the xterm 80x24 default. A
     // first-paint spawn at 80x24 is exactly what caused nvim to freeze its
     // layout under the E5422 press-enter prompt: the first SIGWINCH was
     // delivered while nvim was still in a press-enter modal and dropped.
     if (cols < 2 || rows < 2) return;
-    spawnKicked = true;
+    entry.spawned = true;
     void editorPty.spawnPty(props.ptyId, cols, rows);
   }
 
   function safeFit(source: string) {
     // Racy: ResizeObserver/setTimeout callbacks can fire after onCleanup has
-    // disposed the Terminal. Calling fit.fit() on a disposed term crashes
-    // WebGL's internal state fast enough to take the whole webview with it.
-    if (disposed || !fit || !container) return;
+    // released the terminal. Fitting against a detached host measures 0 and
+    // would reflow the editor to a garbage size, so bail on both.
+    if (disposed || !entry || !container || !entry.host.isConnected) return;
     const rect = container.getBoundingClientRect();
     if (rect.width < 1 || rect.height < 1) return;
     try {
-      fit.fit();
+      entry.fit.fit();
       maybeSpawn(source);
     } catch (err) {
       console.warn("editor fit failed", source, err);
     }
   }
 
-  onMount(() => {
-    term = new Terminal({
-      fontFamily: FONT_FAMILY,
-      fontSize: 13,
-      lineHeight: 1.0,
-      letterSpacing: 0,
-      theme: THEME,
-      cursorBlink: true,
-      allowProposedApi: true,
-      scrollback: 10_000,
-      convertEol: false,
-    });
-    fit = new FitAddon();
-    const unicode11 = new Unicode11Addon();
-    term.loadAddon(fit);
-    term.loadAddon(unicode11);
-    term.loadAddon(new WebLinksAddon(openUrlInSystemBrowser));
-
-    term.open(container!);
-    term.unicode.activeVersion = "11";
-
-    // Bare-URL provider (see xterm-bare-url-links.ts). Editor PTYs (nvim/
-    // helix) don't have file-link match conflicts to worry about — this is
-    // purely for the convenience of clicking a bare domain that appears in
-    // an editor buffer.
-    bareUrlDisposable = term.registerLinkProvider(makeBareUrlLinkProvider(term));
-
-    let webgl: WebglAddon | undefined;
+  /** Repaint the visible rows from the (always complete) buffer. Needed
+   *  after every re-attach: the WebGL renderer paints nothing while the host
+   *  is detached, so without this the pane comes back blank. */
+  function repaint() {
+    if (disposed || !entry) return;
     try {
-      webgl = new WebglAddon();
-      webgl.onContextLoss(() => webgl?.dispose());
-      term.loadAddon(webgl);
-    } catch (err) {
-      console.warn("WebGL renderer unavailable for editor; using canvas.", err);
+      entry.term.refresh(0, entry.term.rows - 1);
+    } catch {
+      // ignore
     }
+  }
+
+  onMount(() => {
+    const acquired = acquireEditorTerminal(props.ptyId, container!, {
+      onData: editorPty.onData,
+      write: editorPty.write,
+      resize: editorPty.resize,
+    });
+    entry = acquired.entry;
 
     // Fit twice: once on the next frame (usually enough), and once more
     // after 200ms in case the diff panel was still animating open and the
@@ -193,7 +96,10 @@ export function EditorPtyView(props: Props) {
         safeFit("fonts-ready");
       })
       .catch(() => {});
-    requestAnimationFrame(() => safeFit("onMount-raf"));
+    requestAnimationFrame(() => {
+      safeFit("onMount-raf");
+      repaint();
+    });
     window.setTimeout(() => safeFit("onMount-220ms"), 220);
     window.setTimeout(() => safeFit("onMount-600ms"), 600);
 
@@ -205,79 +111,15 @@ export function EditorPtyView(props: Props) {
     } else {
       registerTerminalFocus(props.ptyId, projectPath, () => {
         try {
-          term?.focus();
+          entry?.term.focus();
         } catch {
           // ignore
         }
       });
-      const onTextareaFocus = () => recordTerminalFocus(props.ptyId);
-      term.textarea?.addEventListener("focus", onTextareaFocus);
-      onCleanup(() => {
-        term?.textarea?.removeEventListener("focus", onTextareaFocus);
-      });
+      onTextareaFocus = () => recordTerminalFocus(props.ptyId);
+      entry.term.textarea?.addEventListener("focus", onTextareaFocus);
     }
 
-    term.onData((data) => {
-      void editorPty.write(props.ptyId, encoder.encode(data));
-    });
-    term.onResize(({ cols, rows }) => {
-      void editorPty.resize(props.ptyId, cols, rows);
-    });
-
-    term.attachCustomKeyEventHandler((e) => {
-      if (e.type !== "keydown") return true;
-      // App-level tab-switch combos — bubble to the window handler, but
-      // keep xterm from forwarding \t / a layout dead-char to the editor.
-      if (e.key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) {
-        return false;
-      }
-      if (e.metaKey && e.altKey && /^Digit[1-9]$/.test(e.code)) {
-        return false;
-      }
-      const mac = navigator.platform.toUpperCase().includes("MAC");
-      const meta = mac ? e.metaKey : e.ctrlKey && e.shiftKey;
-      if (!meta) return true;
-      const key = e.key.toLowerCase();
-      if (key === "c" && term!.hasSelection()) {
-        navigator.clipboard
-          .writeText(term!.getSelection())
-          .catch((err) => console.warn("clipboard write failed", err));
-        return false;
-      }
-      if (key === "v") {
-        // Tauri plugin avoids WebKit's "Paste" permission popup.
-        // term.paste() wraps in bracketed-paste markers so nvim/helix get a
-        // clean paste instead of char-by-char typing (which would trigger
-        // indentation + autocomplete on every line).
-        readClipboardText()
-          .then((text) => {
-            if (text) term!.paste(text);
-          })
-          .catch((err) => console.warn("clipboard read failed", err));
-        return false;
-      }
-      // Swallow Cmd+W so the app-level handler closes the editor tab cleanly
-      // instead of xterm.js seeing the keydown.
-      if (key === "w") return false;
-      return true;
-    });
-
-    detachData = editorPty.onData(props.ptyId, (bytes) => {
-      if (disposed) return;
-      // nvim probes terminal capabilities with DECRQM (CSI ? Pn $ p) sequences
-      // at startup (modes 2026/2027/2031/2048). xterm.js 6.x's requestMode()
-      // handler throws on some of these, killing the render pipeline in the
-      // minified production bundle. Strip them before handing bytes to xterm
-      // — they're purely advisory probes nvim uses to detect modern terminal
-      // features; losing the reply just means nvim falls back to legacy
-      // behavior (same as running inside iTerm a few years ago).
-      const clean = stripDecrqm(bytes);
-      try {
-        term?.write(clean);
-      } catch (err) {
-        console.warn("xterm write failed (non-fatal)", err);
-      }
-    });
     detachExit = editorPty.onExit(props.ptyId, (code) => {
       // DON'T writeln here — writing into xterm while the child's final
       // burst of ANSI is still being parsed races with the dispose that
@@ -306,13 +148,8 @@ export function EditorPtyView(props: Props) {
   createEffect(() => {
     if (!props.active) return;
     requestAnimationFrame(() => {
-      if (disposed) return;
       safeFit("active-change");
-      try {
-        if (term) term.refresh(0, term.rows - 1);
-      } catch {
-        // ignore
-      }
+      repaint();
     });
   });
 
@@ -330,14 +167,13 @@ export function EditorPtyView(props: Props) {
     unregisterTerminalFocus(props.ptyId);
     resizeObs?.disconnect();
     if (fitDebounce) window.clearTimeout(fitDebounce);
-    detachData?.();
     detachExit?.();
-    bareUrlDisposable?.dispose();
-    try {
-      term?.dispose();
-    } catch (err) {
-      console.warn("editor term dispose failed", err);
+    if (onTextareaFocus) {
+      entry?.term.textarea?.removeEventListener("focus", onTextareaFocus);
     }
+    // Detach the host, keep the terminal: the editor process is still alive
+    // and its output must keep landing in the buffer.
+    releaseEditorTerminal(props.ptyId);
   });
 
   const tab = () => editorPty.getTab(props.ptyId);
