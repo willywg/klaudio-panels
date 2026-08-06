@@ -22,6 +22,11 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   the project, so a submodule file diffs against the child's object database
   rather than rendering as freshly added. Single-repo projects look exactly as
   before — group headers appear only when there's more than one repo.
+- **A submodule whose pointer moved renders the move, not a broken diff.**
+  That row is a gitlink, so its path is a *directory* — expanding it went
+  looking for a blob that never existed and landed on "File not found on disk
+  or in HEAD". It now shows `abc1234 → def5678` plus the new commit's subject
+  line, in place of the `+1 −1` that only ever counted the pointer file.
 - **New files now show their contents in the diff panel.** Expanding an added
   or untracked file rendered an empty box, and its row always read `+0 −0`.
   Two separate causes: libgit2 emits the delta for an untracked file but not

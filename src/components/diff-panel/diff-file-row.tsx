@@ -7,6 +7,7 @@ import { useOpenIn } from "@/context/open-in";
 import {
   BADGE_COLOR,
   BADGE_LETTER,
+  shortSha,
   type FileStatus,
 } from "@/lib/git-status";
 import { createFileOpener } from "./use-file-opener";
@@ -74,6 +75,9 @@ export function DiffFileRow(props: Props) {
 
   async function ensureRendered() {
     if (!contentRef) return;
+    // A submodule gitlink has no blob on either side — its expanded body is
+    // the pointer move, rendered straight from the status row.
+    if (props.status.submodule) return;
     const style = panel.diffStyle();
     if (rendered && lastStyle === style) return;
 
@@ -184,12 +188,48 @@ export function DiffFileRow(props: Props) {
           </span>
         </Show>
         <span class="ml-auto text-[10px] font-mono flex items-center gap-1.5 shrink-0">
-          <span class="text-emerald-400">+{props.status.adds}</span>
-          <span class="text-rose-400">−{props.status.dels}</span>
+          {/* A gitlink's `+1 −1` counts the one line of the pointer file and
+              says nothing about the change. Show where the pointer went. */}
+          <Show
+            when={props.status.submodule}
+            fallback={
+              <>
+                <span class="text-emerald-400">+{props.status.adds}</span>
+                <span class="text-rose-400">−{props.status.dels}</span>
+              </>
+            }
+          >
+            {(sub) => (
+              <span class="text-neutral-500">
+                {shortSha(sub().old_sha)} → {shortSha(sub().new_sha)}
+              </span>
+            )}
+          </Show>
         </span>
       </button>
       <Show when={expanded()}>
         <div class="bg-neutral-950 border-t border-neutral-800/60">
+          <Show when={props.status.submodule}>
+            {(sub) => (
+              <div class="px-4 py-3 flex flex-col gap-2">
+                <span class="text-[12px] text-neutral-400">
+                  Submodule pointer moved — the checkout is clean, so there is
+                  no file diff here.
+                </span>
+                <span class="text-[11px] font-mono text-neutral-500">
+                  {shortSha(sub().old_sha)} → {shortSha(sub().new_sha)}
+                  <Show when={sub().new_summary}>
+                    {(summary) => (
+                      <span class="text-neutral-400"> {summary()}</span>
+                    )}
+                  </Show>
+                </span>
+                <span class="text-[11px] text-neutral-600">
+                  Open the child project to see its history.
+                </span>
+              </div>
+            )}
+          </Show>
           <Show when={notice()}>
             {(msg) => (
               <div class="px-4 py-3 flex items-center gap-2 flex-wrap">

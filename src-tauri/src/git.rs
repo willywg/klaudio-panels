@@ -39,6 +39,22 @@ pub struct FileStatus {
     pub adds: usize,
     pub dels: usize,
     pub is_binary: bool,
+    /// Set when this row is a submodule gitlink rather than a file — the
+    /// child's worktree is clean and the only change is which commit the
+    /// pointer names. There is no file to diff (the path is a directory), so
+    /// the panel renders the commit move instead.
+    pub submodule: Option<SubmoduleMove>,
+}
+
+/// A submodule pointer that moved between HEAD and the working tree.
+#[derive(Debug, Serialize, Clone)]
+pub struct SubmoduleMove {
+    /// Commit the superproject's HEAD still points at.
+    pub old_sha: Option<String>,
+    /// Commit the child repo is actually checked out at.
+    pub new_sha: Option<String>,
+    /// Subject line of the new commit, when the child can resolve it.
+    pub new_summary: Option<String>,
 }
 
 /// One repo contributing to the status: the project itself plus any nested
@@ -175,6 +191,7 @@ fn raw_status(repo: &Repository) -> Result<Vec<FileStatus>, String> {
                     adds: 0,
                     dels: 0,
                     is_binary,
+                    submodule: None,
                 },
             );
             true
@@ -222,6 +239,41 @@ fn head_label(repo: &Repository) -> Option<String> {
 /// An uninitialised submodule has neither, so it correctly stays a plain row.
 fn is_nested_repo(dir: &Path) -> bool {
     dir.join(".git").exists()
+}
+
+/// Describe a moved submodule pointer: where the superproject still thinks
+/// the child is, versus where it actually is. Returns `None` when neither
+/// side resolves — an untracked nested clone, say, which was never a gitlink
+/// and so has no pointer to have moved.
+fn submodule_move(parent: &Repository, rel: &str, child_abs: &Path) -> Option<SubmoduleMove> {
+    let old_sha = parent
+        .head()
+        .ok()
+        .and_then(|h| h.peel_to_tree().ok())
+        .and_then(|t| t.get_path(Path::new(rel)).ok())
+        .map(|e| e.id().to_string());
+
+    let child = Repository::open(child_abs).ok();
+    let new_oid = child
+        .as_ref()
+        .and_then(|c| c.head().ok())
+        .and_then(|h| h.target());
+
+    if old_sha.is_none() && new_oid.is_none() {
+        return None;
+    }
+
+    let new_summary = child.as_ref().zip(new_oid).and_then(|(c, oid)| {
+        c.find_commit(oid)
+            .ok()
+            .and_then(|commit| commit.summary().map(String::from))
+    });
+
+    Some(SubmoduleMove {
+        old_sha,
+        new_sha: new_oid.map(|o| o.to_string()),
+        new_summary,
+    })
 }
 
 /// Walk `root`'s status, descending into any nested repo it reports.
@@ -279,6 +331,11 @@ fn scan_repo(
             if files.len() > before {
                 continue;
             }
+            // Child is clean, so the moved pointer IS the change. Keep the
+            // row, but tag it: the path is a directory, and letting the panel
+            // treat it as a file means expanding it goes looking for a blob
+            // that was never there.
+            row.submodule = submodule_move(&repo, &child_rel, &child_abs);
         }
         row.path = format!("{prefix}{}", row.path);
         row.repo = repo_key.clone();
@@ -528,6 +585,28 @@ mod tests {
         // and dropping the row would hide it entirely.
         assert_eq!(paths, vec!["backend"], "got {paths:?}");
         assert_eq!(payload.files[0].repo, "");
+
+        // …and it's tagged as a gitlink, because the path is a directory and
+        // treating it as a file sends the panel looking for a blob that was
+        // never there.
+        let sub = payload.files[0]
+            .submodule
+            .as_ref()
+            .expect("gitlink row not tagged as a submodule");
+        assert!(sub.old_sha.is_some());
+        assert!(sub.new_sha.is_some());
+        assert_ne!(sub.old_sha, sub.new_sha);
+        assert_eq!(sub.new_summary.as_deref(), Some("bump"));
+    }
+
+    #[test]
+    fn a_dirty_submodules_files_are_not_tagged_as_gitlinks() {
+        let tmp = TempDir::new("no-false-gitlink");
+        let (root, _) = fixture(&tmp);
+        fs::write(root.join("backend/a.txt"), "two\n").unwrap();
+
+        let payload = build_status(root.to_str().unwrap());
+        assert!(payload.files.iter().all(|f| f.submodule.is_none()));
     }
 
     #[test]
