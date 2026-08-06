@@ -19,12 +19,14 @@ type Props = {
   /** Minimum width for the pane this divider controls. */
   minSelf?: number;
   /** Minimum width reserved for the pane on the OTHER side (typically the
-   *  center/terminal column). */
+   *  center/terminal column, plus the far panel's minimum when it's open).
+   *  This is the only ceiling: `maxSelf = parent.width - minOther`.
+   *
+   *  There was also a `maxFraction` ceiling here, dropped in #75. A second
+   *  cap that the layout projection didn't share is what let the drag and
+   *  the render disagree — you dragged past the cap and the panel stayed
+   *  put. One source of truth, or neither is. */
   minOther?: number;
-  /** Optional hard ceiling as a fraction of the parent row's width (0–1).
-   *  The effective maxSelf is `min(parent.width * maxFraction,
-   *  parent.width - minOther)`. Leave undefined to only respect `minOther`. */
-  maxFraction?: number;
 };
 
 const DEFAULT_MIN_SELF = 300;
@@ -51,11 +53,7 @@ export function SplitDivider(props: Props) {
     const edge = props.edge ?? "right";
     const proposed =
       edge === "left" ? e.clientX - rect.left : rect.right - e.clientX;
-    const fractionCap =
-      props.maxFraction != null
-        ? rect.width * props.maxFraction
-        : Number.POSITIVE_INFINITY;
-    const maxSelf = Math.min(fractionCap, rect.width - minOther);
+    const maxSelf = rect.width - minOther;
     const clamped = Math.max(minSelf, Math.min(proposed, maxSelf));
     props.onResize(clamped);
   }
