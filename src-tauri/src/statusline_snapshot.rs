@@ -125,6 +125,20 @@ where
 {
     fs::create_dir_all(&root).map_err(|e| format!("failed to create {}: {e}", root.display()))?;
 
+    // Compare canonical paths only. On macOS the platform backend reports
+    // event paths already resolved through any symlink in the chain, so a
+    // watch root containing one (`/var/folders/...`, which is a symlink to
+    // `/private/var/folders/...`, i.e. anything under `std::env::temp_dir()`)
+    // makes every `strip_prefix(root)` below fail and silently drops every
+    // snapshot. `sessions.rs`'s `canonical()` normalizes for the same reason
+    // before comparing a session's `cwd` against a project path.
+    //
+    // `unwrap_or` keeps the un-canonicalized root rather than failing the
+    // install: `create_dir_all` above just succeeded, so a failure here is
+    // an exotic race, and a watcher on the literal path is still better than
+    // no watcher at all.
+    let root = root.canonicalize().unwrap_or(root);
+
     let watch_root = root.clone();
     let mut debouncer = new_debouncer(
         Duration::from_millis(DEBOUNCE_MS),

@@ -79,6 +79,24 @@ fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool) -> bool {
     }
 }
 
+/// Is `pid` still a live process?
+///
+/// Uses `kill -0`, which delivers no signal and only reports whether the
+/// process can be signalled. The obvious alternative — testing whether
+/// `/proc/<pid>` exists — is Linux-only: macOS has no `/proc`, so that
+/// check reads as "dead" for every pid, live ones included, and the
+/// liveness assertion below then fails before the code under test has run.
+fn process_is_alive(pid: u32) -> bool {
+    Command::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 #[test]
 fn original_command_stdout_and_stdin_pass_through_completely() {
     let dir = unique_dir("large-output");
@@ -250,7 +268,7 @@ fn sigterm_to_bridge_kills_child_without_orphaning() {
         .expect("pid marker should contain a plain integer");
 
     assert!(
-        Path::new(&format!("/proc/{child_pid}")).exists(),
+        process_is_alive(child_pid),
         "child should be alive before cancellation"
     );
 
@@ -277,7 +295,7 @@ fn sigterm_to_bridge_kills_child_without_orphaning() {
     stdout_drain.join().expect("stdout-drain thread panicked");
 
     let child_gone = wait_until(Duration::from_secs(5), || {
-        !Path::new(&format!("/proc/{child_pid}")).exists()
+        !process_is_alive(child_pid)
     });
     assert!(
         child_gone,

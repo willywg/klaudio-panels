@@ -377,8 +377,19 @@ mod tests {
         fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
 
+    // NOTE: this deliberately asserts nothing about `original_command`.
+    // The project here configures no `statusLine` at any tier, so
+    // resolution falls through to the user tier — the real
+    // `$CLAUDE_CONFIG_DIR/settings.json` of whoever runs the suite. Asserting
+    // `None` there assumes that file has no `statusLine`, which is exactly
+    // the assumption `statusline_resolve.rs`'s own test module documents as
+    // unsafe for any dev or CI machine (it fails on a maintainer machine
+    // running a statusline plugin). Everything below is machine-independent;
+    // the chaining behaviour is covered by
+    // `pre_existing_statusline_is_preserved_as_original_command`, which pins
+    // the local tier and so never reaches the user tier at all.
     #[test]
-    fn no_pre_existing_statusline_produces_overlay_with_0600_context_file() {
+    fn overlay_context_file_is_written_private_with_the_expected_shape() {
         let app_data = TempDir::new("app-data");
         let project = TempDir::new("project-empty");
         let bridge_dir = TempDir::new("bridge-bin");
@@ -398,7 +409,6 @@ mod tests {
 
         let written: BridgeContext =
             serde_json::from_str(&fs::read_to_string(&overlay.context_file_path).unwrap()).unwrap();
-        assert_eq!(written.original_command, None);
         assert_eq!(written.tab_id, "tab-1");
         assert!(overlay.settings_arg.contains("klaudio-statusline-bridge"));
         assert_eq!(overlay.env_var.0, "KLAUDIO_CONTEXT_FILE");

@@ -58,4 +58,22 @@ if ! "$UNIVERSAL_BIN" </dev/null >/dev/null 2>&1; then
     exit 1
 fi
 
+# Tauri's bundler does NOT read the universal sidecar from `binaries/` the
+# way it does for a single-arch target. With `--target universal-apple-darwin`
+# it builds each arch, lipos the *main* binary into
+# `target/universal-apple-darwin/release/`, and then expects every
+# `externalBin` sidecar to already sit beside it in that same directory,
+# under its bare name with no target-triple suffix. Staging only
+# `binaries/<name>-universal-apple-darwin` fails the bundle step with
+# "Failed to copy binary from target/universal-apple-darwin/release/<name>:
+# does not exist". `binaries/` still has to be populated — that's what
+# `externalBin` validates at build-script time — so both copies are needed,
+# not one instead of the other.
+TARGET_RELEASE_DIR="$SRC_TAURI_DIR/target/$UNIVERSAL_TARGET/release"
+echo "==> staging the sidecar where the bundler looks for it"
+mkdir -p "$TARGET_RELEASE_DIR"
+cp "$UNIVERSAL_BIN" "$TARGET_RELEASE_DIR/$BIN_NAME"
+chmod +x "$TARGET_RELEASE_DIR/$BIN_NAME"
+echo "    $TARGET_RELEASE_DIR/$BIN_NAME"
+
 echo "==> ready: $UNIVERSAL_BIN"
