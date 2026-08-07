@@ -249,10 +249,35 @@ declare it only in a second, packaging-only config file:
 - **`src-tauri/scripts/prepare-statusline-bridge-universal-macos.sh`** —
   macOS-only. Runs the script above for both `x86_64-apple-darwin` and
   `aarch64-apple-darwin`, then `lipo -create`s the two slices into the
-  single `klaudio-statusline-bridge-universal-apple-darwin` sidecar
-  `--target universal-apple-darwin` expects, mirroring the main app's own
-  universal-binary step in this doc. `lipo -info` confirms both
-  architectures landed in the result before declaring success.
+  single `klaudio-statusline-bridge-universal-apple-darwin` sidecar at
+  `src-tauri/binaries/`, mirroring the main app's own universal-binary
+  step in this doc. `lipo -info` confirms both architectures landed in
+  the result before declaring success. **Then stages a second copy** at
+  `target/universal-apple-darwin/release/klaudio-statusline-bridge` (no
+  target-triple suffix). Both copies are required, for two unrelated
+  reasons — this tripped up the first `bun run release:mac` run against
+  real macOS hardware, so it's worth being explicit about why neither
+  copy can be dropped:
+  - `tauri-build`'s build script validates every `externalBin` entry
+    eagerly on every `cargo check`/`cargo build`, and it only ever looks
+    in `binaries/<name>-<target-triple>` — that's the copy the plain
+    `prepare-statusline-bridge.sh` call above produces.
+  - The **bundler** (the step that actually assembles the DMG) does
+    something different for a universal build: with
+    `--target universal-apple-darwin`, Tauri builds the main binary for
+    each arch, `lipo`s *that* into
+    `target/universal-apple-darwin/release/`, and then expects every
+    `externalBin` sidecar to already be sitting right there beside it,
+    under its bare name with no target-triple suffix — it does not
+    consult `binaries/` at this step at all. Skip this second copy and
+    the bundle step fails with "Failed to copy binary from
+    `target/universal-apple-darwin/release/<name>`: does not exist",
+    even though the correctly-named universal binary is sitting right
+    there in `binaries/`.
+  
+  This is Tauri's own behavior, not a quirk of this script — it isn't
+  documented anywhere obvious, and there was no way to find it without a
+  real `--target universal-apple-darwin` bundle run on real hardware.
 - **`package.json` scripts** — `bun run bridge:prepare -- <target>` (ad
   hoc/CI use of the first script directly), `bun run package:linux`
   (prepares the Linux sidecar, then packages with `--config
@@ -267,18 +292,33 @@ performed — the feature degrades gracefully exactly as designed:
 normally with no `--settings` overlay, and no live usage data appears.
 That's the correct fail-open behavior for a dev checkout, not a bug.
 
-**Validated so far:** a Linux `.deb` built with `bun run package:linux`
-and installed fresh in a throwaway container — the bridge sidecar landed
-at its installed resource path, `pty_open` resolved it, Claude executed
-it, and status-bar snapshots reached the UI from the installed binary
-(see the branch's own PR description / commit history for the exact
-session). **Not yet validated: the macOS universal path.** Nobody has
-run `bun run release:mac` on a real Mac and installed the resulting DMG
-since this packaging config was added — do that before trusting it for
-an actual release. If it fails, the most likely culprits are `lipo` not
-being on PATH (needs Xcode Command Line Tools) or one of the two Darwin
-Rust targets not being installed (`rustup target add x86_64-apple-darwin
-aarch64-apple-darwin`).
+**Validated:** a Linux `.deb` built with `bun run package:linux` and
+installed fresh in a throwaway container — the bridge sidecar landed at
+its installed resource path, `pty_open` resolved it, Claude executed it,
+and status-bar snapshots reached the UI from the installed binary (see
+the branch's own PR description / commit history for the exact session).
+
+The macOS universal path was validated on real hardware (arm64 Mac) and
+was in fact broken on the first attempt — the dual-staging requirement
+explained in the `prepare-statusline-bridge-universal-macos.sh` bullet
+above (`binaries/` for the build-script check, plus a second bare-named
+copy in `target/universal-apple-darwin/release/` for the bundler itself)
+wasn't there yet. The prepare script correctly produced the universal
+sidecar in `binaries/` (`lipo -info` confirmed `x86_64 arm64`), but
+`tauri build --target universal-apple-darwin` still failed at the bundle
+step, since that step never looks in `binaries/` for a universal build —
+see the mechanism explained above. Once fixed: a from-scratch
+`bun run release:mac` produced a DMG whose bundled sidecar is a genuine
+universal binary (`lipo -info` reports `x86_64 arm64`) and lands in
+`Contents/MacOS/` beside the main executable — the first path
+`resolve_bridge_binary_path` probes for an installed app. The packaged
+bridge was then run directly against a real piped `statusLine` payload:
+it preserved the original command's stdout and wrote a valid snapshot.
+If a future `release:mac` run fails at the bundle step again, re-check
+that both sidecar copies exist before assuming a fresh regression —
+`lipo` not being on PATH (needs Xcode Command Line Tools) or a missing
+Darwin Rust target (`rustup target add x86_64-apple-darwin
+aarch64-apple-darwin`) are the other likely culprits.
 
 ## Anti-patterns to avoid
 
