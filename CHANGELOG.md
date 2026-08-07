@@ -4,6 +4,47 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.10.0] — 2026-08-07
+
+### Added
+- **A project can now run under its own Claude account, via direnv**
+  ([#64](https://github.com/willywg/klaudio-panels/pull/64)). If a project's
+  `.envrc` exports a `CLAUDE_CONFIG_DIR`, Klaudio spawns that project's
+  sessions against it and lists sessions from it — client work under one
+  account, personal projects under another, without logging in and out.
+  `project_env.rs` shells out to `direnv export json` with the project as cwd
+  and merges the resulting diff onto the hydrated login-shell env, so a real
+  `.envrc` works as written; we don't reimplement direnv's stdlib. Both the
+  direnv subprocess and the PTY spawn `env_clear()` first, so a variable
+  direnv meant to unset can't leak in from Klaudio's own process env.
+
+  It **fails closed**: a blocked, malformed, timed-out, or non-zero-exit
+  `.envrc` returns an error instead of quietly falling back to `~/.claude`,
+  because that fallback would show one account's sessions under another's
+  project. direnv's stderr is never surfaced — the error points at
+  `direnv status` / `direnv allow` instead. Projects with no `.envrc`, or
+  users without direnv, are unaffected and pay nothing: that path is a
+  `stat` walk up the ancestor chain, no shell and no direnv spawned.
+
+  Every tab and stored session is namespaced by a **profile id**, resolved
+  before the tab exists rather than attached afterwards. `pty_open` re-derives
+  that id from the env it actually spawned with and refuses to spawn on a
+  mismatch, so an `.envrc` edited between the UI's check and the spawn can't
+  land a session in the wrong account.
+
+  **Known gap:** the global JSONL watcher still only watches the default
+  `~/.claude/projects`, so a custom-profile tab doesn't get live label
+  updates, `/rename` propagation, or completion notifications — use the
+  Sessions-list refresh button. This is stale, never wrong: every live-event
+  handler checks the profile id first, so a custom-profile tab is never
+  updated from a different account's session. A multi-root watcher is
+  follow-up work.
+
+### Tracked work
+- PR: [#64](https://github.com/willywg/klaudio-panels/pull/64) — by
+  [@reissaavedra](https://github.com/reissaavedra), the project's first
+  external *feature* contribution, over three review rounds.
+
 ## [1.9.2] — 2026-08-06
 
 ### Added
