@@ -34,6 +34,15 @@ export type TerminalTab = {
    *  or by xterm onData (the user is typing here). Project-switch does
    *  NOT clear — see PRP 018 §4. */
   needsAttention: boolean;
+  /** Whether `pty_open` actually installed the status-bar statusLine
+   *  overlay for this tab (always false if the feature is disabled, or if
+   *  it's enabled but the backend couldn't prepare it — see
+   *  `statusline_context::prepare_status_bar_overlay`). This is the one
+   *  legitimate "we know for a fact nothing is coming" signal — it must
+   *  NOT be used to infer whether Claude Code's statusLine ever actually
+   *  ticks afterward, which stays indistinguishable from "hasn't ticked
+   *  yet" even when this is true. */
+  statusBarOverlayInstalled: boolean;
 };
 
 type TerminalStore = {
@@ -50,6 +59,12 @@ export type OpenTabOpts = {
   /** Resolved by the caller via `resolve_profile_id` *before* calling
    *  `openTab` — see `TerminalTab.profileId`. */
   profileId: string;
+  /** Whether to ask `pty_open` to install the status-bar statusLine
+   *  overlay for this tab. Computed by the caller from the status bar's own
+   *  preferences (`lib/status-bar-prefs.ts`) — this module deliberately
+   *  never reads those prefs itself, the same separation already used for
+   *  `profileId`. */
+  enableStatusBar: boolean;
 };
 
 function newId(): string {
@@ -124,6 +139,7 @@ export function makeTerminalContext() {
       error: null,
       spawnedAt: Date.now(),
       needsAttention: false,
+      statusBarOverlayInstalled: false,
     };
     setStore(
       produce((s) => {
@@ -133,12 +149,19 @@ export function makeTerminalContext() {
     );
 
     try {
-      await invoke("pty_open", {
+      const overlayInstalled = await invoke<boolean>("pty_open", {
         id,
         projectPath,
         args,
         expectedProfileId: opts.profileId,
+        enableStatusBar: opts.enableStatusBar,
       });
+      setStore(
+        "tabs",
+        (t) => t.id === id,
+        "statusBarOverlayInstalled",
+        overlayInstalled,
+      );
     } catch (err) {
       const msg = String(err);
       console.error("pty_open failed", msg);

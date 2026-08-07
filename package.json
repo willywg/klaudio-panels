@@ -11,7 +11,13 @@
     "tauri": "tauri",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "release:mac": "tauri build --target universal-apple-darwin"
+    "validate": "bun run typecheck && bun test && cd src-tauri && cargo check && cargo clippy -- -D warnings",
+    "dev:app": "tauri dev",
+    "dev:app:fresh-bridge": "cargo build --manifest-path src-tauri/Cargo.toml --bin klaudio-statusline-bridge && tauri dev",
+    "bridge:prepare": "bash src-tauri/scripts/prepare-statusline-bridge.sh",
+    "bridge:prepare:macos-universal": "bash src-tauri/scripts/prepare-statusline-bridge-universal-macos.sh",
+    "package:linux": "bun run bridge:prepare -- x86_64-unknown-linux-gnu && tauri build --config src-tauri/tauri.bundle.conf.json",
+    "release:mac": "bun run bridge:prepare:macos-universal && tauri build --config src-tauri/tauri.bundle.conf.json --target universal-apple-darwin"
   },
   "license": "MIT",
   "dependencies": {

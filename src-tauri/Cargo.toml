@@ -4,6 +4,7 @@ version = "1.10.0"
 description = "Klaudio Panels — native window embedding the Claude Code CLI"
 authors = ["willywg"]
 edition = "2021"
+default-run = "klaudio-panels"
 
 [lib]
 name = "klaudio_panels_lib"
@@ -34,8 +35,17 @@ lru = "0.14"
 git2 = { version = "0.20", default-features = false }
 tauri-plugin-deep-link = "2.4.7"
 url = "2.5.8"
+sha2 = "0.10"
+signal-hook = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSDictionary"] }
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSImage", "NSBitmapImageRep"] }
+
+[dev-dependencies]
+# Only tauri's `test` feature (mock_app/mock_builder, gated in tauri itself
+# behind `cfg(any(test, feature = "test"))`) — dev-dependencies never take
+# part in a plain `cargo build`, so this cannot leak into the shipped
+# binary. Used by `pty`'s exit-cleanup wiring tests.
+tauri = { version = "2", features = ["macos-private-api", "devtools", "test"] }
