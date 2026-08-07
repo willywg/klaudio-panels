@@ -16,7 +16,7 @@ import {
   setPrefs,
   type NotificationPrefs,
 } from "@/lib/notifications-prefs";
-import { useTerminal } from "@/context/terminal";
+import { useTerminal, type TerminalTab } from "@/context/terminal";
 
 type SessionCompletePayload = {
   project_path: string;
@@ -119,6 +119,31 @@ function projectName(projectPath: string): string {
 
 function autoDismissMs(kind: ToastKind): number {
   return kind === "permission" ? AUTODISMISS_PERMISSION_MS : AUTODISMISS_NEUTRAL_MS;
+}
+
+/** `session:complete` is emitted by the same default-root-only backend
+ *  watcher as `session:new`/`session:meta` (session_watcher.rs — see
+ *  CLAUDE.md decision #13's follow-up note), so it can only legitimately
+ *  describe a "default" profile tab. Deliberately separate from
+ *  `findTabForEvent`, which `handleAgentEvent` also uses for the OSC 777
+ *  `claude:event` sidechannel — that one sniffs each PTY's own byte stream
+ *  per-tab and is not sourced from the watched directory, so it must NOT be
+ *  gated the same way (gating it would silently drop permission-request
+ *  notifications for every custom-profile tab).
+ *
+ *  Exported so the cross-profile guarantee can be unit tested without
+ *  standing up the Tauri event bus. */
+export function resolveCompleteTabId(
+  tabs: readonly TerminalTab[],
+  projectPath: string,
+  sessionId: string | null,
+): string | null {
+  if (!sessionId) return null;
+  const tab = tabs.find(
+    (t) => t.projectPath === projectPath && t.sessionId === sessionId,
+  );
+  if (!tab || tab.profileId !== "default") return null;
+  return tab.id;
 }
 
 function makeNotificationsContext() {
@@ -432,7 +457,11 @@ function makeNotificationsContext() {
       payload.preview && payload.preview.length > 0
         ? payload.preview
         : "Your turn — open Klaudio Panels.";
-    const tabId = findTabForEvent(payload.project_path, payload.session_id);
+    const tabId = resolveCompleteTabId(
+      term.store.tabs,
+      payload.project_path,
+      payload.session_id,
+    );
     alertProject(payload.project_path, title, body, "complete", tabId);
     if (tabId && shouldRaisePulse(payload.project_path, tabId)) {
       term.markTabNeedsAttention(tabId);

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -96,6 +97,16 @@ fn spawn_pty(
         cmd.arg(a);
     }
     cmd.cwd(&cwd);
+    // `CommandBuilder::new` pre-populates its env from Klaudio's own
+    // process env. Clear it so the child gets exactly `env` (the fully
+    // resolved shell + direnv env) — otherwise a variable direnv removed
+    // could still leak in if Klaudio's own process happened to carry it.
+    // Safe to clear unconditionally: every caller builds `env` from
+    // `shell_env::load_shell_env`, which always returns a real env (the
+    // hydrated shell env, or — when that probe fails, e.g. nushell or a
+    // timeout — a sanitized fallback with `CLAUDE_CONFIG_DIR` stripped and
+    // `PATH`/`HOME` intact), never an empty map.
+    cmd.env_clear();
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -239,6 +250,7 @@ pub async fn pty_open(
     id: String,
     project_path: String,
     args: Vec<String>,
+    expected_profile_id: String,
 ) -> Result<(), String> {
     let bin = crate::binary::find_claude_binary()?;
     let shell = crate::shell_env::get_user_shell();
@@ -251,7 +263,8 @@ pub async fn pty_open(
     // *stable*/*preview*/*dev* releases. Our value avoids those
     // substrings entirely, so the gate is bypassed and we get events.
     let client_version = format!("klaudio-panels-{}", env!("CARGO_PKG_VERSION"));
-    let env = crate::shell_env::merge_shell_env(
+    let env = crate::project_env::resolve_project_env(
+        &project_path,
         shell_env,
         vec![
             ("TERM".into(), "xterm-256color".into()),
@@ -260,7 +273,32 @@ pub async fn pty_open(
             ("WARP_CLI_AGENT_PROTOCOL_VERSION".into(), "1".into()),
             ("WARP_CLIENT_VERSION".into(), client_version),
         ],
-    );
+    )?;
+
+    // The frontend resolved `expected_profile_id` before spawning this tab
+    // (see context/terminal.tsx) so it could be attached to the tab up
+    // front, closing the race where a live session event could arrive
+    // before the profile was known. Re-derive the profile from the *same*
+    // env just resolved above (not a second direnv evaluation) and refuse
+    // to spawn if the project's .envrc changed in between — never log or
+    // return either id, only that they diverged.
+    let config_dir = env
+        .iter()
+        .find(|(k, _)| k == "CLAUDE_CONFIG_DIR")
+        .map(|(_, v)| PathBuf::from(v));
+    let actual_profile_id = crate::project_env::profile_id_for_config_dir(config_dir.as_deref());
+    if actual_profile_id != expected_profile_id {
+        debug_log::write(
+            "pty",
+            &format!("id={id} refused: resolved profile no longer matches the profile checked before spawn"),
+        );
+        return Err(
+            "this project's Claude profile changed since it was last checked (its .envrc may \
+             have been edited) — reopen the project and try again"
+                .to_string(),
+        );
+    }
+
     let bin_str = bin
         .to_str()
         .ok_or_else(|| "claude binary path is not valid UTF-8".to_string())?
