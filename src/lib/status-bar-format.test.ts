@@ -10,7 +10,6 @@ import {
   formatUsagePart,
   isStale,
   modelContextUnavailableTooltip,
-  narrowLevelForWidth,
   profileDisplayLabel,
   profileRowLabel,
   rateLimitUnavailableTooltip,
@@ -19,70 +18,8 @@ import {
   usageBarAriaLabel,
   usageBarValue,
   USAGE_BARS_MIN_WIDTH,
-  visibilityForLevel,
   wideEnoughForUsageBars,
 } from "./status-bar-format";
-
-describe("narrowLevelForWidth / visibilityForLevel", () => {
-  test("full width shows everything", () => {
-    expect(narrowLevelForWidth(700)).toBe(0);
-    expect(visibilityForLevel(0)).toEqual({
-      weekly: true,
-      fiveHour: true,
-      git: true,
-      alias: true,
-      usageCluster: true,
-    });
-  });
-
-  test("drops weekly first", () => {
-    const level = narrowLevelForWidth(500);
-    expect(level).toBe(1);
-    const v = visibilityForLevel(level);
-    expect(v.weekly).toBe(false);
-    expect(v.fiveHour).toBe(true);
-    expect(v.git).toBe(true);
-    expect(v.alias).toBe(true);
-  });
-
-  test("drops weekly then 5h, keeping the alias alone", () => {
-    const level = narrowLevelForWidth(420);
-    expect(level).toBe(2);
-    const v = visibilityForLevel(level);
-    expect(v.weekly).toBe(false);
-    expect(v.fiveHour).toBe(false);
-    expect(v.git).toBe(true);
-    expect(v.alias).toBe(true);
-    expect(v.usageCluster).toBe(true);
-  });
-
-  test("drops the git widget next", () => {
-    const level = narrowLevelForWidth(340);
-    expect(level).toBe(3);
-    const v = visibilityForLevel(level);
-    expect(v.git).toBe(false);
-    expect(v.alias).toBe(true);
-  });
-
-  test("floor: only the model+context anchor survives — alias and the whole usage cluster are gone", () => {
-    const level = narrowLevelForWidth(100);
-    expect(level).toBe(4);
-    const v = visibilityForLevel(level);
-    expect(v.weekly).toBe(false);
-    expect(v.fiveHour).toBe(false);
-    expect(v.git).toBe(false);
-    expect(v.alias).toBe(false);
-    expect(v.usageCluster).toBe(false);
-  });
-
-  test("never returns a level outside 0-4", () => {
-    for (const w of [-100, 0, 1, 10_000]) {
-      const level = narrowLevelForWidth(w);
-      expect(level).toBeGreaterThanOrEqual(0);
-      expect(level).toBeLessThanOrEqual(4);
-    }
-  });
-});
 
 describe("contextSeverity / contextBarColorClass", () => {
   test("normal under 70%", () => {
@@ -347,8 +284,7 @@ describe("usageBarAriaLabel", () => {
 });
 
 describe("wideEnoughForUsageBars / shouldShowUsageBars", () => {
-  test("wideEnoughForUsageBars is gated on USAGE_BARS_MIN_WIDTH, strictly wider than narrowLevelForWidth's own full-width level", () => {
-    expect(USAGE_BARS_MIN_WIDTH).toBeGreaterThan(560);
+  test("wideEnoughForUsageBars is gated on USAGE_BARS_MIN_WIDTH", () => {
     expect(wideEnoughForUsageBars(USAGE_BARS_MIN_WIDTH)).toBe(true);
     expect(wideEnoughForUsageBars(USAGE_BARS_MIN_WIDTH - 1)).toBe(false);
   });

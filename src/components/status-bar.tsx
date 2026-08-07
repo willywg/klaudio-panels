@@ -28,14 +28,12 @@ import {
   formatUsagePart,
   isStale,
   modelContextUnavailableTooltip,
-  narrowLevelForWidth,
   profileDisplayLabel,
   rateLimitUnavailableTooltip,
   shouldShowUsageBars,
   usageAriaLabel,
   usageBarAriaLabel,
   usageBarValue,
-  visibilityForLevel,
 } from "@/lib/status-bar-format";
 import { StatusBarPopover } from "@/components/status-bar-popover";
 
@@ -239,10 +237,6 @@ function ProjectStatusBar(props: { projectPath: string; footerWidth: number }) {
 
   const showAliasPrefix = createMemo(() => statusBar.knownProfileCount() >= 2);
 
-  const visibility = createMemo(() =>
-    visibilityForLevel(narrowLevelForWidth(props.footerWidth)),
-  );
-
   const showUsageBars = createMemo(() =>
     shouldShowUsageBars(prefs().usageBars, props.footerWidth),
   );
@@ -251,17 +245,12 @@ function ProjectStatusBar(props: { projectPath: string; footerWidth: number }) {
     () => prefs().enabled && prefs().sections.model,
   );
   const showGitSection = createMemo(
-    () =>
-      prefs().enabled &&
-      prefs().sections.git &&
-      visibility().git &&
-      gitSummary().branch !== null,
+    () => prefs().enabled && prefs().sections.git && gitSummary().branch !== null,
   );
   const showUsageSection = createMemo(
     () =>
       prefs().enabled &&
-      (prefs().sections.usage5h || prefs().sections.usageWeekly) &&
-      visibility().usageCluster,
+      (prefs().sections.usage5h || prefs().sections.usageWeekly),
   );
 
   return (
@@ -297,9 +286,9 @@ function ProjectStatusBar(props: { projectPath: string; footerWidth: number }) {
           availability={usageAvailability()}
           profileRateLimits={profileRateLimits()}
           snapshot={snapshot()}
-          showAlias={showAliasPrefix() && visibility().alias}
-          showFiveHour={prefs().sections.usage5h && visibility().fiveHour}
-          showWeekly={prefs().sections.usageWeekly && visibility().weekly}
+          showAlias={showAliasPrefix()}
+          showFiveHour={prefs().sections.usage5h}
+          showWeekly={prefs().sections.usageWeekly}
           mode={prefs().showAsRemainingVsUsed}
           aliases={prefs().profileAliases}
           showBars={showUsageBars()}

@@ -11,54 +11,6 @@ import type { UsageBarsPreference } from "./status-bar-prefs";
 export type Availability = "waiting" | "available" | "unavailable";
 
 // ---------------------------------------------------------------------
-// Responsive narrowing. The footer drops sections in a fixed order as its
-// own measured width shrinks — see status-bar.tsx's ResizeObserver. Levels
-// are coarse steps (not a continuous function) so the UI doesn't flicker
-// section visibility on sub-pixel width changes.
-// ---------------------------------------------------------------------
-
-export type NarrowLevel = 0 | 1 | 2 | 3 | 4;
-
-/** Level 0 = full width, nothing dropped. Level 4 = floor — only the
- *  model+context anchor (section 1) remains; everything else (git widget,
- *  usage cluster including its alias) is gone. Breakpoints are tuned for
- *  this footer's actual content, not a generic grid. */
-export function narrowLevelForWidth(width: number): NarrowLevel {
-  if (width >= 560) return 0;
-  if (width >= 460) return 1;
-  if (width >= 380) return 2;
-  if (width >= 300) return 3;
-  return 4;
-}
-
-export type StatusBarNarrowVisibility = {
-  /** Weekly usage number — first to go. */
-  weekly: boolean;
-  /** 5-hour usage number — second to go. */
-  fiveHour: boolean;
-  /** Git branch widget — third to go. */
-  git: boolean;
-  /** Profile alias prefix on the usage cluster — fourth to go. */
-  alias: boolean;
-  /** Whether the usage-cluster button renders at all. Once alias, 5h, and
-   *  weekly are all gone there is nothing left to show or click, so the
-   *  whole button disappears rather than rendering an empty shell. */
-  usageCluster: boolean;
-};
-
-export function visibilityForLevel(
-  level: NarrowLevel,
-): StatusBarNarrowVisibility {
-  return {
-    weekly: level < 1,
-    fiveHour: level < 2,
-    git: level < 3,
-    alias: level < 4,
-    usageCluster: level < 4,
-  };
-}
-
-// ---------------------------------------------------------------------
 // Context-usage severity. Drives the mini progress-bar fill color AND a
 // non-color "!" glyph above 90% — the glyph exists so the highest-severity
 // state is never signalled by hue alone (colorblind-safe, matches the
@@ -148,10 +100,13 @@ export function usageBarAriaLabel(label: string, usedPercentage: number): string
   return `${label}: ${usageBarValue(usedPercentage)} percent used`;
 }
 
-/** Extra-wide breakpoint gating the "auto" progress-bar presentation —
- *  deliberately wider than `narrowLevelForWidth`'s own full-width level
- *  0 (>=560): a label + bar + percentage per window needs more room
- *  than the plain "5h 31% · Week 12%" text it replaces. */
+/** Extra-wide breakpoint gating the "auto" progress-bar presentation — a
+ *  label + bar + percentage per window needs more room than the plain
+ *  "5h 31% · Week 12%" text it replaces. Unlike a generic responsive grid,
+ *  this is the footer's only real narrowing behavior: with the app's
+ *  `minWidth: 900` and the sidebar capped at 280px, the footer's own width
+ *  never drops far enough to threaten any *section's* visibility, but it
+ *  does swing across this specific threshold. */
 export const USAGE_BARS_MIN_WIDTH = 640;
 
 export function wideEnoughForUsageBars(width: number): boolean {
@@ -161,8 +116,8 @@ export function wideEnoughForUsageBars(width: number): boolean {
 /** Whether the usage cluster should render bars instead of its
  *  text-only fallback, per the `usageBars` preference. Callers only
  *  invoke this once the usage section itself is already known to be
- *  visible (see `visibilityForLevel`/`showUsageSection`) — "always"
- *  intentionally ignores `width` entirely, matching "show bars whenever
+ *  visible (see `showUsageSection`) — "always" intentionally ignores
+ *  `width` entirely, matching "show bars whenever
  *  the usage section itself is visible". */
 export function shouldShowUsageBars(
   preference: UsageBarsPreference,
