@@ -84,9 +84,8 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   and `whatsapp/` in a submodule-based project — it asks instead of guessing.
   Nothing in the printed path says which was meant, and opening the wrong
   service's file with no error shown is worse than one extra click: you read
-  it, reason about it, and never find out. The choice is remembered per path,
-  so the question comes once rather than once per click. A single match opens
-  straight away, which is the reported case.
+  it, reason about it, and never find out. A single match opens straight away,
+  which is the reported case.
 
   The search only runs after a direct hit fails, so the common case costs a
   single `stat` and no walk: measured on a real monorepo, 18µs for the direct

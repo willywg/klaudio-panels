@@ -31,25 +31,31 @@ export function FileCandidatePicker() {
     const onKey = (e: KeyboardEvent) => {
       const req = pendingFilePick();
       if (!req) return;
+      // While the picker is open every keystroke belongs to it. Capturing at
+      // `window` is not enough on its own: `preventDefault` alone lets the
+      // event keep capturing down into xterm's textarea, so Enter both picked
+      // a candidate AND submitted whatever sat in Claude's prompt, while the
+      // arrows walked its history at the same time. Stopping propagation here
+      // is what makes the modal actually modal.
+      e.preventDefault();
+      e.stopPropagation();
       if (e.key === "Escape") {
-        e.preventDefault();
         answerFilePick(null);
         return;
       }
       if (e.key === "ArrowDown") {
-        e.preventDefault();
         setActive((i) => Math.min(i + 1, req.candidates.length - 1));
         return;
       }
       if (e.key === "ArrowUp") {
-        e.preventDefault();
         setActive((i) => Math.max(i - 1, 0));
         return;
       }
       if (e.key === "Enter") {
-        e.preventDefault();
         answerFilePick(req.candidates[active()] ?? null);
       }
+      // Anything else is swallowed rather than forwarded — a keystroke meant
+      // for a modal has no business reaching the terminal behind it.
     };
     // Capture phase: the terminal underneath swallows keys otherwise.
     window.addEventListener("keydown", onKey, true);

@@ -5,10 +5,6 @@ import { askWhichFile } from "@/lib/file-picker-bus";
  *  a long session can click a lot of links; the entries are short strings. */
 const candidateCache = new Map<string, string[]>();
 
-/** What the user picked for an ambiguous path, so they are asked once per
- *  path rather than once per click. */
-const chosen = new Map<string, string>();
-
 const MAX_CACHED = 200;
 
 /** Key separator. A NUL is the one byte a filesystem path cannot hold, so it
@@ -29,10 +25,10 @@ const SEP = "\u0000";
  *
  *  - **One candidate** — open it. Covers the direct hit and the missing-prefix
  *    case, with no extra step.
- *  - **Several** — ask. `app/main.py` exists under `core/`, `telegram/` and
- *    `whatsapp/`, and nothing in the printed path says which was meant.
- *    Guessing would open a file from the wrong service with no error shown,
- *    and being quietly wrong is worse here than asking once.
+ *  - **Several** — ask, every time. `app/main.py` exists under `core/`,
+ *    `telegram/` and `whatsapp/`, and nothing in the printed path says which
+ *    was meant. Guessing would open a file from the wrong service with no
+ *    error shown, and being quietly wrong is worse here than asking.
  *  - **None** — hand back the original path so the preview reports the missing
  *    file itself, rather than the click doing nothing at all.
  *
@@ -48,17 +44,16 @@ export async function resolveProjectFile(
   const needle = rel.startsWith("./") ? rel.slice(2) : rel;
   const key = `${base}${SEP}${needle}`;
 
-  const remembered = chosen.get(key);
-  if (remembered !== undefined) return remembered;
-
   const candidates = await candidatesFor(key, base, needle);
   if (candidates.length === 0) return needle;
   if (candidates.length === 1) return candidates[0];
 
-  const pick = await askWhichFile(needle, candidates);
-  if (pick === null) return null;
-  remember(chosen, key, pick);
-  return pick;
+  // Deliberately not remembered. The picker exists so an ambiguous path never
+  // opens the wrong file without saying so, and a remembered answer is
+  // silent — it would reintroduce the exact failure the picker prevents, just
+  // one click later. Ambiguous paths are rare enough that asking each time
+  // costs little.
+  return askWhichFile(needle, candidates);
 }
 
 async function candidatesFor(
@@ -73,21 +68,21 @@ async function candidatesFor(
       projectPath: base,
       rel: needle,
     });
-    remember(candidateCache, key, matches);
+    remember(key, matches);
     return matches;
   } catch {
-    remember(candidateCache, key, []);
+    remember(key, []);
     return [];
   }
 }
 
-function remember<V>(map: Map<string, V>, key: string, value: V): void {
+function remember(key: string, value: string[]): void {
   // Oldest insertion first — Map preserves insertion order, so this is plain
   // FIFO eviction rather than a true LRU. Good enough for a cache whose only
   // job is to keep a repeated click from re-walking the project.
-  if (map.size >= MAX_CACHED) {
-    const oldest = map.keys().next().value;
-    if (oldest !== undefined) map.delete(oldest);
+  if (candidateCache.size >= MAX_CACHED) {
+    const oldest = candidateCache.keys().next().value;
+    if (oldest !== undefined) candidateCache.delete(oldest);
   }
-  map.set(key, value);
+  candidateCache.set(key, value);
 }
