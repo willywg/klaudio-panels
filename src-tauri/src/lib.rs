@@ -144,6 +144,7 @@ pub fn run() {
             file_read::read_file_bytes,
             file_read::read_image,
             file_read::resolve_project_image,
+            file_read::resolve_project_file,
             file_write::write_file_bytes,
             shell_install::install_cli,
             shell_install::uninstall_cli,

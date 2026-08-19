@@ -191,6 +191,118 @@ pub fn resolve_project_image(
     Ok(out)
 }
 
+/// Cap on returned candidates. More than a couple already means the path was
+/// ambiguous enough that guessing is the wrong answer.
+const MAX_PATH_MATCHES: usize = 10;
+
+/// Ceiling on the fallback walk. A project big enough to blow past this is one
+/// where a suffix guess would be unreliable anyway.
+const MAX_WALK_ENTRIES: usize = 20_000;
+
+/// True when `rel_path` ends with `needle` on a path-segment boundary.
+///
+/// The boundary is the whole point: `tests/foo.py` must match
+/// `ai-service/tests/foo.py` but never `pkg/mytests/foo.py`, which a plain
+/// `ends_with` would happily accept.
+fn ends_with_segments(rel_path: &str, needle: &str) -> bool {
+    if rel_path == needle {
+        return true;
+    }
+    rel_path.len() > needle.len()
+        && rel_path.ends_with(needle)
+        && rel_path.as_bytes()[rel_path.len() - needle.len() - 1] == b'/'
+}
+
+/// Resolve a path printed in the terminal to something that actually exists in
+/// the project, ranked best-first.
+///
+/// Claude prints paths relative to *its own* working directory. When a session
+/// runs in a sub-project (`construct-ai/ai-service`), `tests/foo.py` is correct
+/// for Claude and wrong for us — the prefix is simply missing. Rather than
+/// fail, look for a file whose project-relative path ends with what we were
+/// given.
+///
+/// The direct hit is checked first and costs a single `stat`, so the walk only
+/// happens when there is no alternative. It uses the `ignore` crate, which
+/// skips gitignored trees and `.git`, keeping it far cheaper than a naive
+/// `find` — and in-process, so no shell spawn.
+///
+/// Returns project-relative, forward-slash paths. Empty means no candidate.
+#[tauri::command]
+pub fn resolve_project_file(project_path: String, rel: String) -> Result<Vec<String>, String> {
+    let root = Path::new(&project_path);
+    if !root.is_dir() {
+        return Err("project path is not a directory".into());
+    }
+    let needle = rel.trim_start_matches("./").trim_start_matches('/');
+    if needle.is_empty() {
+        return Err("empty path".into());
+    }
+    // A traversal segment means the caller is not naming a project file; the
+    // suffix search would be meaningless and `resolve_rel` would reject it.
+    if needle.split('/').any(|c| c == "..") {
+        return Err("path escapes project root".into());
+    }
+
+    if root.join(needle).is_file() {
+        return Ok(vec![needle.to_string()]);
+    }
+
+    // Parallel walk: on a real monorepo the single-threaded version took
+    // ~230ms, which is a visible hitch on a click. The visitor only pushes
+    // matches, so contention on the mutex is negligible.
+    let matches = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let seen = std::sync::atomic::AtomicUsize::new(0);
+    let root_owned = root.to_path_buf();
+
+    ignore::WalkBuilder::new(root)
+        .filter_entry(|e| e.file_name() != ".git")
+        .build_parallel()
+        .run(|| {
+            let matches = std::sync::Arc::clone(&matches);
+            let root = root_owned.clone();
+            let needle = needle.to_string();
+            let seen = &seen;
+            Box::new(move |entry| {
+                use ignore::WalkState;
+                if seen.fetch_add(1, std::sync::atomic::Ordering::Relaxed) > MAX_WALK_ENTRIES {
+                    return WalkState::Quit;
+                }
+                let Ok(entry) = entry else {
+                    return WalkState::Continue;
+                };
+                if !entry.file_type().is_some_and(|t| t.is_file()) {
+                    return WalkState::Continue;
+                }
+                let Ok(r) = entry.path().strip_prefix(&root) else {
+                    return WalkState::Continue;
+                };
+                let r = r
+                    .components()
+                    .filter_map(|c| match c {
+                        std::path::Component::Normal(s) => Some(s.to_string_lossy()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("/");
+                if ends_with_segments(&r, &needle) {
+                    if let Ok(mut m) = matches.lock() {
+                        m.push(r);
+                    }
+                }
+                WalkState::Continue
+            })
+        });
+
+    let mut out = match std::sync::Arc::try_unwrap(matches) {
+        Ok(m) => m.into_inner().unwrap_or_default(),
+        Err(arc) => arc.lock().map(|m| m.clone()).unwrap_or_default(),
+    };
+    out.sort_by_key(|p| (p.matches('/').count(), p.len()));
+    out.truncate(MAX_PATH_MATCHES);
+    Ok(out)
+}
+
 #[derive(Debug, Serialize, Clone)]
 pub struct FilePayload {
     pub path: String,
@@ -413,4 +525,121 @@ mod tests {
         // Only a leading `~/` counts — a literal path keeps its shape.
         assert_eq!(expand_tilde("/tmp/a~b.png"), PathBuf::from("/tmp/a~b.png"));
     }
+
+    /// Build `<root>/<rel>` including parents, with `body` as contents.
+    fn touch(root: &Path, rel: &str, body: &str) {
+        let abs = root.join(rel);
+        fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        fs::write(abs, body).unwrap();
+    }
+
+    #[test]
+    fn a_correct_path_resolves_without_walking() {
+        let tmp = TempDir::new("resolve-direct");
+        touch(tmp.path(), "src/main.rs", "fn main() {}");
+        let got =
+            resolve_project_file(tmp.path().display().to_string(), "src/main.rs".into()).unwrap();
+        assert_eq!(got, vec!["src/main.rs".to_string()]);
+    }
+
+    #[test]
+    fn a_path_missing_its_subproject_prefix_is_found() {
+        // The reported case: Claude runs in `ai-service` and prints
+        // `tests/foo.py`, which is wrong relative to the project root.
+        let tmp = TempDir::new("resolve-prefix");
+        touch(tmp.path(), "ai-service/tests/test_llm_client_timeout.py", "x");
+        let got = resolve_project_file(
+            tmp.path().display().to_string(),
+            "tests/test_llm_client_timeout.py".into(),
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            vec!["ai-service/tests/test_llm_client_timeout.py".to_string()]
+        );
+    }
+
+    #[test]
+    fn the_suffix_must_land_on_a_segment_boundary() {
+        // `pkg/mytests/foo.py` ends with the string `tests/foo.py` but is a
+        // different file; a plain ends_with would wrongly return it.
+        let tmp = TempDir::new("resolve-boundary");
+        touch(tmp.path(), "pkg/mytests/foo.py", "x");
+        let got =
+            resolve_project_file(tmp.path().display().to_string(), "tests/foo.py".into()).unwrap();
+        assert!(got.is_empty(), "got {got:?}");
+    }
+
+    #[test]
+    fn a_leading_dot_slash_is_tolerated() {
+        let tmp = TempDir::new("resolve-dotslash");
+        touch(tmp.path(), "src/main.rs", "x");
+        let got =
+            resolve_project_file(tmp.path().display().to_string(), "./src/main.rs".into()).unwrap();
+        assert_eq!(got, vec!["src/main.rs".to_string()]);
+    }
+
+    #[test]
+    fn ambiguous_matches_come_back_shallowest_first() {
+        let tmp = TempDir::new("resolve-ambiguous");
+        touch(tmp.path(), "deep/nested/pkg/tests/conftest.py", "x");
+        touch(tmp.path(), "svc/tests/conftest.py", "x");
+        let got = resolve_project_file(
+            tmp.path().display().to_string(),
+            "tests/conftest.py".into(),
+        )
+        .unwrap();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0], "svc/tests/conftest.py");
+    }
+
+    #[test]
+    fn a_missing_file_yields_no_candidates_rather_than_an_error() {
+        // The caller falls back to the original path so the preview can show
+        // its own "not found" instead of a resolver error.
+        let tmp = TempDir::new("resolve-missing");
+        touch(tmp.path(), "src/main.rs", "x");
+        let got =
+            resolve_project_file(tmp.path().display().to_string(), "nope/gone.rs".into()).unwrap();
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn traversal_is_refused() {
+        let tmp = TempDir::new("resolve-traversal");
+        touch(tmp.path(), "src/main.rs", "x");
+        assert!(
+            resolve_project_file(
+                tmp.path().display().to_string(),
+                "../../etc/passwd".into()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn gitignored_trees_are_not_searched() {
+        // Without this the fallback would happily resolve into node_modules
+        // and open a vendored copy instead of the user's file.
+        let tmp = TempDir::new("resolve-ignored");
+        // `ignore` only honours `.gitignore` inside a git repo, so the marker
+        // directory is the precondition, not decoration. Matches how
+        // `list_files_recursive` and `resolve_project_image` already behave.
+        fs::create_dir_all(tmp.path().join(".git")).unwrap();
+        fs::write(tmp.path().join(".gitignore"), "node_modules/\n").unwrap();
+        touch(tmp.path(), "node_modules/dep/tests/foo.py", "x");
+        let got =
+            resolve_project_file(tmp.path().display().to_string(), "tests/foo.py".into()).unwrap();
+        assert!(got.is_empty(), "got {got:?}");
+    }
+
+    #[test]
+    fn segment_boundary_helper_edges() {
+        assert!(ends_with_segments("a/b/c.py", "b/c.py"));
+        assert!(ends_with_segments("a/b/c.py", "a/b/c.py"));
+        assert!(ends_with_segments("a/b/c.py", "c.py"));
+        assert!(!ends_with_segments("a/mytests/c.py", "tests/c.py"));
+        assert!(!ends_with_segments("c.py", "a/c.py"));
+    }
+
 }

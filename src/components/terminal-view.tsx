@@ -33,6 +33,7 @@ import {
   resolveImagePath,
 } from "@/lib/image-files";
 import { recordClip } from "@/lib/record-clip";
+import { resolveProjectFile } from "@/lib/resolve-file";
 
 const THEME = {
   background: "#0b0b0c",
@@ -327,7 +328,12 @@ export function TerminalView(props: Props) {
           });
           return;
         }
-        diffPanel.openFile(tab.projectPath, normalizeRel(rel), line);
+        // The path may be relative to the session's cwd rather than to the
+        // project root — see `resolveProjectFile`. Resolving first means the
+        // preview tab gets a path that actually exists.
+        void resolveProjectFile(tab.projectPath, normalizeRel(rel)).then(
+          (target) => diffPanel.openFile(tab.projectPath, target, line),
+        );
       },
       {
         onHover: (path, event) => showThumbnail(path, event),

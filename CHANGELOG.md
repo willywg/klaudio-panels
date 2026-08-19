@@ -64,6 +64,33 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 - Issue: [#79](https://github.com/willywg/klaudio-panels/issues/79)
 - PR: [#80](https://github.com/willywg/klaudio-panels/pull/80)
 
+## [Unreleased]
+
+### Fixed
+- **Terminal file links work when the session runs in a sub-project**
+  ([#81](https://github.com/willywg/klaudio-panels/issues/81)). Claude prints
+  paths relative to *its own* working directory, so a session running in
+  `construct-ai/ai-service` printing `tests/test_llm_client_timeout.py` sent
+  the preview looking for `construct-ai/tests/…`, which does not exist —
+  the path was right, it was just missing a prefix.
+
+  When the direct path misses, `resolve_project_file` now looks for a file
+  whose project-relative path ends with the given one on a **path-segment
+  boundary** — so `tests/foo.py` matches `ai-service/tests/foo.py` but never
+  `pkg/mytests/foo.py`, which a plain suffix check would wrongly accept.
+  Candidates come back shallowest-first and the best one opens.
+
+  The search only runs after a direct hit fails, so the common case costs a
+  single `stat` and no walk: measured on a real monorepo, 18µs for the direct
+  hit against 39ms for the fallback. The fallback uses the `ignore` crate's
+  parallel walker, which skips gitignored trees and `.git` for free — the
+  single-threaded version took 230ms, enough to feel on a click. Results are
+  memoised per project and path so a repeated click never re-walks.
+
+  Shelling out to `find` or `ag` was considered and rejected: a process spawn
+  is slower than an in-process walk, less portable, and would throw away the
+  gitignore filtering we already get.
+
 ## [1.10.0] — 2026-08-07
 
 ### Added
