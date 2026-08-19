@@ -2,7 +2,7 @@
 
 **Issue:** [#79](https://github.com/willywg/klaudio-panels/issues/79)
 **Status:** in progress
-**Scope:** text-only v1
+**Scope:** text-only v1, Klaudio-originated clips only
 
 ## The problem
 
@@ -14,26 +14,109 @@ Claude to print it again.
 ## What we build
 
 A dropdown in the titlebar, next to the notification bell: the last 10 things
-that hit the system pasteboard, click one to put it back.
+Klaudio copied, click one to put it back.
 
-The key property is that it watches the **pasteboard**, not the terminal. That
-makes it source-agnostic for free — `pbcopy` from Claude's Bash tool, ⌘C in
-xterm.js, a copy from Safari, all the same code path. A feature that hooked
-Claude's output would only ever cover the first.
+## The pivot that defines the design
 
-## What we deliberately do not build
+The first cut watched the **system pasteboard**, polling
+`NSPasteboard.changeCount`. It worked, and it was wrong: it recorded
+everything — a copy from Safari, a WhatsApp message, a password. Reviewing it
+in use, the ask sharpened to *only what Klaudio copied*.
 
-### A copy button on Claude's markdown code blocks
+That is not a predicate you can bolt onto a watcher. **The pasteboard exposes
+no attribution**: `changeCount` tells you a write happened, never who made it.
+There is no owner PID, no source app, nothing. Filtering by origin requires
+*owning the write*.
 
-The obvious version of this request, and it is off the table under
-architectural decision #2 (never parse PTY output).
+Two rejected approximations, for the record:
 
-Claude Code renders fenced code blocks as ANSI-styled text inside a character
-grid. Nothing in the byte stream marks where a block begins or ends. Finding
-one means reading the xterm buffer back and inferring structure from styling
-and indentation — semantic parsing of terminal output, the exact thing decision
-#2 exists to prevent. It also breaks on a theme change, a wrapped line, or any
-adjustment to how Claude renders.
+- **Frontmost-app filter** — only record while Klaudio is frontmost. Ten lines,
+  and it fails in exactly the situation the feature exists for: Claude running
+  `pbcopy` in the background while the user reads something in another window.
+- **An MCP tool Claude calls instead of `pbcopy`** — model-dependent, needs
+  per-project `.mcp.json`, and captures nothing from the user's own ⌘C.
+
+## What we do instead: own both copy paths
+
+### 1. A `pbcopy` shim on every PTY's PATH
+
+`spawn_pty` — the single choke point all three `pty_open*` variants funnel
+through — prepends a Klaudio-owned directory to the child's `PATH` and sets
+`KLAUDIO_CLIP_SOCK`. That directory holds a `pbcopy` shim which tees stdin to
+the real `/usr/bin/pbcopy` and to the unix socket the app listens on.
+
+Injection happens *after* direnv, so a project's `.envrc` cannot displace the
+shim.
+
+The shim's contract is that it must never be worse than the real `pbcopy`:
+
+- Both branches end at `/usr/bin/pbcopy` with `"$@"` forwarded verbatim, so
+  `pbcopy -pboard find` keeps working.
+- The real `pbcopy`'s exit status is what the caller sees (`PIPESTATUS[1]`).
+- Missing socket, dead socket, or missing `nc` all fall through to a plain
+  `exec`. Recording is best-effort; breaking the user's `pbcopy` to feed a
+  history panel would be a terrible trade.
+- `tee` into a process substitution keeps the payload off disk. A clip may
+  well be a secret and has no business in a temp file.
+
+### 2. ⌘C inside a Klaudio terminal
+
+Already our own code — `terminal-view.tsx`, `shell-terminal-view.tsx` and
+`editor-terminal-store.ts` each report the selection through
+`clipboard_record`.
+
+### What this buys beyond correctness
+
+Because nothing observes the system pasteboard any more, **the entire
+privacy surface is gone**. The first cut needed careful handling of
+`org.nspasteboard.ConcealedType` and friends so a password manager's clip
+would not land in a dropdown; now such a clip is not something we could
+capture even by accident. The safest handling of a secret is being structurally
+unable to see it.
+
+## Other decisions
+
+### In-memory only
+
+Decision #6 restricts SQLite to app settings, but the stronger reason is
+privacy surface: persisting every copy to disk drags in encryption at rest, a
+retention policy, and a "clear history" flow, for a feature framed as "the
+last 5 or 10". A ring buffer that dies with the process delivers exactly that.
+
+### An off switch, defaulting on
+
+The toggle lives in the dropdown and persists in `localStorage`. The choice is
+pushed to the backend on mount, before any PTY can be spawned.
+
+### Text only in v1
+
+Images and file URLs force a total-memory budget and an eviction policy that
+text does not — a 40MB PNG cannot sit ten deep in a ring buffer. Text is capped
+per entry (64KB) and bounded by count. A non-UTF-8 payload piped to `pbcopy`
+is skipped rather than mangled.
+
+### Re-copy only; pasting into the PTY is a follow-up
+
+Clicking an entry puts it back on the pasteboard. That is the whole ask — the
+clip is destined for an email or WhatsApp, not for Claude.
+
+A "paste into the active tab" action looked free (`terminal.write` already
+exists) but is not: `pty_write` sends raw bytes, while correct pasting goes
+through `term.paste()`, which wraps the text in bracketed-paste markers when
+the PTY has `?2004h` active. Without those markers Claude Code reads a
+multi-line snippet as typed input and every newline submits the prompt. Doing
+it properly means an event bus from the titlebar to `terminal-view.tsx` (the
+`image-lightbox-bus.ts` pattern).
+
+## What is still out of scope
+
+**A copy button on Claude's rendered markdown code blocks**, the obvious
+version of the original request. It needs the PTY output parsed to find where
+a block starts and ends, which architectural decision #2 forbids. Claude Code
+renders fenced blocks as ANSI-styled text inside a character grid; nothing in
+the byte stream marks their extent, so finding one means inferring structure
+from styling and indentation, and it breaks on a theme change or a wrapped
+line.
 
 The precedents that *look* like they'd license it do not:
 
@@ -43,124 +126,53 @@ The precedents that *look* like they'd license it do not:
 | OSC 777 CLI-agent sniffer (`cli_agent.rs`) | **Published wire contract** (warp's protocol v1) | There is no equivalent contract for "this region is a code block" |
 
 There is exactly one clean path, and it is not ours: **OSC 52**, the standard
-terminal clipboard escape. If Claude Code emitted it on copy, we would receive
-the payload as a wire-level event and need no parsing at all. It does not.
-
-### An MCP server for Klaudio
-
-Offered in the original request. It would be a downgrade *for this feature*:
-
-- The pasteboard watcher is a passive observer. It catches `pbcopy` with zero
-  cooperation from Claude.
-- An MCP requires the model to **choose** `klaudio_copy` over `pbcopy` — model
-  dependent, needs per-project `.mcp.json`, and captures nothing copied outside
-  Claude, which is half the problem being solved.
-- It adds a server process, a config surface, and a failure mode, to do worse
-  what a polling loop does perfectly.
-
-An MCP for Klaudio remains a good idea for a **different** class of feature:
-where Claude needs to *drive the UI* — "open this diff in the panel", "show
-this image", "rename this tab", "split the terminal". None of that is
-inferable from the filesystem. It deserves its own issue.
-
-## Design decisions
-
-### 1. Poll `changeCount`, not the contents
-
-`NSPasteboard.changeCount` is a monotonic integer that increments on every
-write by any process. Polling it every 500ms costs an integer read; polling the
-*contents* costs a string (or image) copy per tick, and cannot distinguish
-"copied the same text twice" from "nothing happened".
-
-macOS exposes no pasteboard-change notification. Polling is what Maccy, Clipy
-and Raycast all do; there is no better primitive available.
-
-`objc2-app-kit` 0.3.2 is already a dependency (`open_in.rs` uses `NSWorkspace`
-for app icons) and generates `NSPasteboard::generalPasteboard()`,
-`.changeCount()`, `.types()` and `NSPasteboardTypeString`. Only the
-`NSPasteboard` feature flag is missing.
-
-### 2. In-memory only
-
-Decision #6 restricts SQLite to app settings, but the stronger reason is
-privacy surface: persisting every copy to disk drags in encryption at rest, a
-retention policy, and a "clear history" flow, for a feature the user framed as
-"the last 5 or 10". A ring buffer that dies with the process delivers exactly
-that.
-
-### 3. Honor the NSPasteboard privacy markers
-
-**The non-negotiable part.** Password managers mark their writes with
-`org.nspasteboard.ConcealedType`; the convention (nspasteboard.org) also
-defines `TransientType` and `AutoGeneratedType` for content that should not be
-recorded. A history that ignores these silently captures 1Password's output
-into a dropdown that any passer-by can read.
-
-We check `pasteboard.types()` before reading any string and skip the tick
-entirely on a match. Cheap, and it is the difference between a utility and a
-liability.
-
-### 4. An off switch, defaulting on
-
-A clipboard recorder with no way to turn it off is a bad default for someone
-working across client projects. The toggle lives in the dropdown and persists
-in `localStorage`.
-
-When disabled the poller keeps tracking `changeCount` but never reads content,
-so re-enabling does not backfill whatever was copied while it was off.
-
-### 5. Text only in v1
-
-Images and file URLs force a total-memory budget and an eviction policy that
-text does not — a 40MB PNG cannot sit ten deep in a ring buffer. Text is capped
-per entry (64KB, generous for emails and snippets) and bounded by count.
-Images are a follow-up, and the v1.9.2 image pipeline already gives us
-thumbnails when we get there.
-
-### 6. Re-copy only; pasting into the PTY is a follow-up
-
-Clicking an entry puts it back on the pasteboard. That is the whole ask —
-the clip is destined for an email or WhatsApp, not for Claude.
-
-A "paste into the active tab" action looked free (`terminal.write` already
-exists) but is not: `pty_write` sends raw bytes, while correct pasting goes
-through `term.paste()`, which wraps the text in bracketed-paste markers when
-the PTY has `?2004h` active. Without those markers Claude Code reads a
-multi-line snippet as typed input and every newline submits the prompt. Doing
-it properly means an event bus from the titlebar to `terminal-view.tsx` (the
-`image-lightbox-bus.ts` pattern). Worth doing, not worth bundling into a
-feature nobody asked it of.
+terminal clipboard escape. If Claude Code emitted it on copy we would receive
+the payload as a wire-level event and need no shim at all. It does not.
 
 ## Module layout
 
-**Rust** (`src-tauri/src/clipboard_history.rs`, new)
+**Rust**
 
-- Background thread installed from `lib.rs` `setup`, same shape as
-  `session_watcher::install`.
-- Ring buffer behind a `LazyLock<Mutex<..>>`, cap 10.
-- Emits `clipboard:new` per accepted entry.
-- Commands: `clipboard_history_list`, `clipboard_history_clear`,
-  `clipboard_history_set_enabled`.
-- Pure, unit-tested helpers: marker detection, entry normalization,
-  ring insertion with dedupe-promote.
+- `clipboard_history.rs` (new) — the ring, the shim source, the shim installer,
+  the unix-socket listener, and the `clipboard_record` /
+  `clipboard_history_list` / `_clear` / `_set_enabled` commands. Emits
+  `clipboard:new`.
+- `pty.rs` — `clipboard_history_env` prepends the shim dir to `PATH` and sets
+  `KLAUDIO_CLIP_SOCK`, applied in `spawn_pty`.
 
 **Frontend**
 
-- `src/lib/clipboard-prefs.ts` — the enabled flag in `localStorage`.
-- `src/context/clipboard-history.tsx` — store, `clipboard:new` listener,
-  initial `clipboard_history_list`.
-- `src/components/clipboard-history-button.tsx` — titlebar dropdown, modeled
-  on `notification-bell.tsx` (same click-outside and Escape handling).
-- `src/components/titlebar.tsx` — mount it beside `<NotificationBell />`.
+- `lib/clipboard-prefs.ts` — enabled flag, row preview and size formatting.
+- `lib/record-clip.ts` — the ⌘C reporting call.
+- `context/clipboard-history.tsx` — store, `clipboard:new` listener, initial
+  `clipboard_history_list`.
+- `components/clipboard-history-button.tsx` — the dropdown, modeled on
+  `notification-bell.tsx`.
+- `components/titlebar.tsx` — mounts it, and carries the `relative z-40` that
+  makes the titlebar its own stacking context (see below).
 
-Cross-context communication stays on Tauri events, per the module-boundaries
-rule.
+## A UI bug this surfaced
+
+The dropdown rendered *underneath* the diff panel's sticky repo headers. Those
+are `sticky z-10`; the dropdown is `absolute z-50`, so z-index alone said the
+dropdown should win. It did not, because the sticky row carried
+`backdrop-blur-sm`: in WebKit a `backdrop-filter` element is promoted to its
+own compositing layer and can paint over a higher-z-index element living in a
+different subtree, and the titlebar `<header>` created no stacking context of
+its own to contain the comparison.
+
+Fixed at the right level — `relative z-40` on the header, which fixes all three
+of its dropdowns at once — plus dropping the blur, which contributed almost
+nothing behind a 95%-opaque background and was the compositing trigger.
 
 ## Acceptance
 
-- `pbcopy` from inside a Claude tab shows up in the dropdown within ~500ms.
-- Copying from outside the app (browser, Finder) shows up too.
-- Copying from a password manager does **not**.
+- `pbcopy` inside a Claude tab shows up in the dropdown.
+- It shows up even when Klaudio is not the frontmost app.
+- ⌘C on a terminal selection shows up.
+- Copying in Safari, WhatsApp or a password manager does **not**.
+- `pbcopy` keeps working with the app closed, with the socket gone, and with
+  `-pboard` arguments.
 - Clicking an entry makes ⌘V produce it.
 - Toggling off stops recording; toggling back on does not backfill.
 - Nothing is written to disk.

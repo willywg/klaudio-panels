@@ -150,6 +150,7 @@ pub fn run() {
             notify::notify_native,
             notify::set_dock_badge,
             plugins::is_warp_plugin_installed,
+            clipboard_history::clipboard_record,
             clipboard_history::clipboard_history_list,
             clipboard_history::clipboard_history_clear,
             clipboard_history::clipboard_history_set_enabled,

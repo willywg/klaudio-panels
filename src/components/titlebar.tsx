@@ -34,8 +34,14 @@ export function Titlebar(props: Props) {
   const palette = useCommandPalette();
 
   return (
+    // `relative z-40` makes the titlebar its own stacking context sitting
+    // above <main>'s auto-z content. Without it the dropdowns (absolute z-50)
+    // live in the root stacking context alongside the diff panel's sticky repo
+    // headers, and WebKit paints a composited backdrop-filter element over
+    // them regardless of z-index. Kept below the z-50 command palette and the
+    // z-[100]/z-[110] modals and toasts.
     <header
-      class="h-10 shrink-0 flex items-center bg-neutral-950 border-b border-neutral-800 select-none"
+      class="relative z-40 h-10 shrink-0 flex items-center bg-neutral-950 border-b border-neutral-800 select-none"
       data-tauri-drag-region
     >
       {/* Spacer for traffic lights on macOS. */}

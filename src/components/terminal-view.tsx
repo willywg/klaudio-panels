@@ -32,6 +32,7 @@ import {
   relativizeToProject,
   resolveImagePath,
 } from "@/lib/image-files";
+import { recordClip } from "@/lib/record-clip";
 
 const THEME = {
   background: "#0b0b0c",
@@ -210,6 +211,7 @@ export function TerminalView(props: Props) {
       if (!meta) return true;
       const key = e.key.toLowerCase();
       if (key === "c" && term!.hasSelection()) {
+        recordClip(term!.getSelection());
         navigator.clipboard
           .writeText(term!.getSelection())
           .catch((err) => console.warn("clipboard write failed", err));

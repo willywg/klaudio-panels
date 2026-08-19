@@ -48,6 +48,43 @@ fn log_startup_bytes(id: &str, bytes: &[u8]) {
     debug_log::write("pty", &format!("id={id} first_bytes={out}"));
 }
 
+/// Put Klaudio's `pbcopy` shim ahead of `/usr/bin` on the child's `PATH` and
+/// tell it where to report. This is the single choke point every Klaudio
+/// terminal passes through — Claude tabs, the shell panel and editor PTYs
+/// alike — which is why the injection lives here rather than in each
+/// `pty_open*`.
+///
+/// Applied *after* direnv, so a project's `.envrc` cannot displace the shim.
+/// Leaves the env untouched when the cache dir is unavailable: no shim simply
+/// means no clipboard history, never a broken `PATH`.
+fn clipboard_history_env(env: Vec<(String, String)>) -> Vec<(String, String)> {
+    let (Some(dir), Some(sock)) = (
+        crate::clipboard_history::shim_dir(),
+        crate::clipboard_history::socket_path(),
+    ) else {
+        return env;
+    };
+    let dir = dir.display().to_string();
+    let mut out: Vec<(String, String)> = env
+        .into_iter()
+        .map(|(k, v)| {
+            if k == "PATH" {
+                (k, format!("{dir}:{v}"))
+            } else {
+                (k, v)
+            }
+        })
+        .collect();
+    if !out.iter().any(|(k, _)| k == "PATH") {
+        out.push(("PATH".into(), dir));
+    }
+    out.push((
+        "KLAUDIO_CLIP_SOCK".into(),
+        sock.display().to_string(),
+    ));
+    out
+}
+
 /// Core PTY spawn routine used by both Claude and embedded editor sessions.
 /// `binary` is the absolute path of the executable to run; `env` is the
 /// fully-merged env (shell-hydrated + overrides) the child should inherit.
@@ -107,7 +144,7 @@ fn spawn_pty(
     // timeout — a sanitized fallback with `CLAUDE_CONFIG_DIR` stripped and
     // `PATH`/`HOME` intact), never an empty map.
     cmd.env_clear();
-    for (k, v) in env {
+    for (k, v) in clipboard_history_env(env) {
         cmd.env(k, v);
     }
 

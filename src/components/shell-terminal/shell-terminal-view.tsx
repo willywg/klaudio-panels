@@ -21,6 +21,7 @@ import {
   unregisterTerminalFocus,
 } from "@/lib/terminal-focus-bus";
 import { ScrollToBottomButton } from "@/components/scroll-to-bottom-button";
+import { recordClip } from "@/lib/record-clip";
 
 const THEME = {
   background: "#0b0b0c",
@@ -146,6 +147,7 @@ export function ShellTerminalView(props: Props) {
       if (!meta) return true;
       const key = e.key.toLowerCase();
       if (key === "c" && term!.hasSelection()) {
+        recordClip(term!.getSelection());
         navigator.clipboard
           .writeText(term!.getSelection())
           .catch((err) => console.warn("clipboard write failed", err));
