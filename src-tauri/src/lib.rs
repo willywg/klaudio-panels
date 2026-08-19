@@ -1,6 +1,7 @@
 pub mod binary;
 pub mod cli_agent;
 pub mod cli_args;
+pub mod clipboard_history;
 pub mod debug_log;
 pub mod file_read;
 pub mod file_write;
@@ -59,6 +60,7 @@ pub fn run() {
                     &format!("Klaudio Panels starting — log at {}", p.display()),
                 );
             }
+            clipboard_history::install(app.handle().clone());
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 if let Err(e) = session_watcher::install(handle) {
@@ -148,6 +150,9 @@ pub fn run() {
             notify::notify_native,
             notify::set_dock_badge,
             plugins::is_warp_plugin_installed,
+            clipboard_history::clipboard_history_list,
+            clipboard_history::clipboard_history_clear,
+            clipboard_history::clipboard_history_set_enabled,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
