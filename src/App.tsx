@@ -54,6 +54,7 @@ import {
 } from "@/context/command-palette";
 import { CommandPalette } from "@/components/command-palette";
 import { RevealProvider, useReveal } from "@/context/reveal";
+import { ClipboardHistoryProvider } from "@/context/clipboard-history";
 import {
   NotificationsProvider,
   useNotifications,
@@ -1240,7 +1241,9 @@ export default function App() {
                           <SessionWatcherProvider>
                             <NotificationsProvider>
                               <CommandPaletteProvider>
-                                <Shell />
+                                <ClipboardHistoryProvider>
+                                  <Shell />
+                                </ClipboardHistoryProvider>
                               </CommandPaletteProvider>
                             </NotificationsProvider>
                           </SessionWatcherProvider>

@@ -7,6 +7,7 @@ import "@xterm/xterm/css/xterm.css";
 import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrlInSystemBrowser } from "@/lib/open-url";
 import { makeBareUrlLinkProvider } from "@/lib/xterm-bare-url-links";
+import { recordClip } from "@/lib/record-clip";
 
 /** Editor PTY terminals live HERE, not in the component that shows them.
  *
@@ -194,6 +195,7 @@ export function acquireEditorTerminal(
     if (!meta) return true;
     const key = e.key.toLowerCase();
     if (key === "c" && term.hasSelection()) {
+      recordClip(term.getSelection());
       navigator.clipboard
         .writeText(term.getSelection())
         .catch((err) => console.warn("clipboard write failed", err));

@@ -4,15 +4,16 @@ import {
   createEffect,
   createMemo,
   createSignal,
-  onCleanup,
   onMount,
   type JSX,
 } from "solid-js";
+import { Portal } from "solid-js/web";
 import { ArrowLeft, Bell, BellOff, Settings } from "lucide-solid";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useNotifications, type UnreadItem } from "@/context/notifications";
 import type { NotificationPrefs } from "@/lib/notifications-prefs";
 import { relativeTime } from "@/lib/relative-time";
+import { useAnchoredPanel } from "@/lib/anchored-panel";
 
 const WARP_PLUGIN_INSTALL_URL =
   "https://github.com/willywg/klaudio-panels#permission-requests-recommended-warp-plugin";
@@ -27,50 +28,32 @@ function projectName(projectPath: string): string {
 
 export function NotificationBell() {
   const notifications = useNotifications();
-  const [open, setOpen] = createSignal(false);
+  const panel = useAnchoredPanel();
   const [view, setView] = createSignal<View>("list");
-  let wrapRef: HTMLDivElement | undefined;
 
   const items = createMemo(() => notifications.unreadItems());
   const count = createMemo(() => items().length);
 
   // Every reopen lands on the list — settings is opt-in per session.
   createEffect(() => {
-    if (open()) setView("list");
-  });
-
-  onMount(() => {
-    const onDown = (e: PointerEvent) => {
-      if (!open()) return;
-      if (wrapRef && e.target instanceof Node && !wrapRef.contains(e.target)) {
-        setOpen(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("pointerdown", onDown, true);
-    window.addEventListener("keydown", onKey);
-    onCleanup(() => {
-      window.removeEventListener("pointerdown", onDown, true);
-      window.removeEventListener("keydown", onKey);
-    });
+    if (panel.open()) setView("list");
   });
 
   function handleItemClick(item: UnreadItem) {
     notifications.activateProjectFromBell(item.projectPath, item.tabId);
-    setOpen(false);
+    panel.close();
   }
 
   return (
-    <div ref={wrapRef} class="relative flex items-center">
+    <div class="flex items-center">
       <button
+        ref={panel.triggerRef}
         type="button"
         class="w-8 h-7 rounded flex items-center justify-center text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/80 transition relative"
-        onClick={() => setOpen((v) => !v)}
+        onClick={panel.toggle}
         aria-label="Notifications"
         title="Notifications"
-        classList={{ "text-neutral-100 bg-neutral-800/60": open() }}
+        classList={{ "text-neutral-100 bg-neutral-800/60": panel.open() }}
       >
         <Bell size={15} strokeWidth={1.75} />
         <Show when={count() > 0}>
@@ -80,23 +63,29 @@ export function NotificationBell() {
         </Show>
       </button>
 
-      <Show when={open()}>
-        <div class="absolute right-0 top-full mt-1 z-50 w-[360px] max-h-[480px] rounded-md border border-neutral-800 bg-neutral-900 shadow-xl text-[12px] flex flex-col">
-          <Show
-            when={view() === "settings"}
-            fallback={
-              <ListView
-                items={items()}
-                count={count()}
-                onItemClick={handleItemClick}
-                onMarkAllRead={() => notifications.clearAllItems()}
-                onOpenSettings={() => setView("settings")}
-              />
-            }
+      <Show when={panel.open()}>
+        <Portal>
+          <div
+            ref={panel.panelRef}
+            class="fixed z-[90] w-[360px] max-h-[480px] rounded-md border border-neutral-800 bg-neutral-900 shadow-xl text-[12px] flex flex-col"
+            style={panel.style()}
           >
-            <SettingsView onBack={() => setView("list")} />
-          </Show>
-        </div>
+            <Show
+              when={view() === "settings"}
+              fallback={
+                <ListView
+                  items={items()}
+                  count={count()}
+                  onItemClick={handleItemClick}
+                  onMarkAllRead={() => notifications.clearAllItems()}
+                  onOpenSettings={() => setView("settings")}
+                />
+              }
+            >
+              <SettingsView onBack={() => setView("list")} />
+            </Show>
+          </div>
+        </Portal>
       </Show>
     </div>
   );
@@ -182,7 +171,8 @@ function BellItem(props: { item: UnreadItem; onClick: () => void }) {
           </span>
         </span>
         <span class="block mt-0.5 text-[12px] text-neutral-200 line-clamp-1">
-          {props.item.title.split(" · ").slice(1).join(" · ") || props.item.title}
+          {props.item.title.split(" · ").slice(1).join(" · ") ||
+            props.item.title}
         </span>
         <span class="block mt-0.5 text-[11px] text-neutral-400 line-clamp-2 break-words">
           {props.item.body}
@@ -287,7 +277,9 @@ function ToggleRow(props: {
       classList={{ "opacity-60": props.disabled }}
     >
       <div class="flex-1 min-w-0">
-        <div class="text-[12px] text-neutral-100 font-medium">{props.label}</div>
+        <div class="text-[12px] text-neutral-100 font-medium">
+          {props.label}
+        </div>
         <div class="text-[11px] text-neutral-400 mt-0.5">{props.help}</div>
       </div>
       <button

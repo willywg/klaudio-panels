@@ -232,7 +232,7 @@ export function DiffPanel(props: Props) {
                     {(group) => (
                       <>
                         <Show when={groups().length > 1}>
-                          <div class="sticky top-0 z-10 flex items-center gap-2 px-3 py-1.5 bg-neutral-900/95 backdrop-blur-sm border-y border-neutral-800">
+                          <div class="sticky top-0 z-10 flex items-center gap-2 px-3 py-1.5 bg-neutral-900 border-y border-neutral-800">
                             <GitBranch
                               size={11}
                               strokeWidth={2}

@@ -11,6 +11,7 @@ import { useCommandPalette } from "@/context/command-palette";
 import { GitSummaryPill } from "@/components/git-summary-pill";
 import { OpenInDropdown } from "@/components/open-in-dropdown";
 import { NotificationBell } from "@/components/notification-bell";
+import { ClipboardHistoryButton } from "@/components/clipboard-history-button";
 
 function basename(path: string): string {
   const trimmed = path.endsWith("/") ? path.slice(0, -1) : path;
@@ -106,6 +107,7 @@ export function Titlebar(props: Props) {
             </>
           )}
         </Show>
+        <ClipboardHistoryButton />
         <NotificationBell />
       </div>
     </header>

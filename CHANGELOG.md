@@ -4,6 +4,66 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [Unreleased]
+
+### Added
+- **Clipboard history in the titlebar** ([#79](https://github.com/willywg/klaudio-panels/issues/79),
+  PRP 022). Working several projects at once makes the clipboard lossy: Claude
+  runs `pbcopy` to hand something over, and before it reaches an email or
+  WhatsApp something else overwrites it. A new dropdown next to the
+  notification bell keeps the last 10 things **Klaudio** copied; click one to
+  put it back.
+
+  Only Klaudio's own copies are recorded, and that constraint is what shapes
+  the design. The system pasteboard exposes no attribution — `changeCount`
+  tells you a write happened, never who made it — so filtering by origin is
+  not a predicate you can add to a watcher; it requires owning the write. Two
+  paths do: `spawn_pty` prepends a Klaudio-owned `pbcopy` shim to every PTY's
+  `PATH` (after direnv, so an `.envrc` cannot displace it) which tees the clip
+  to the real `/usr/bin/pbcopy` and to a unix socket the app listens on; and
+  ⌘C in a Klaudio terminal, which was already our own code.
+
+  The shim is built to never be worse than the real `pbcopy`: arguments are
+  forwarded verbatim, the real exit status is what the caller sees, and a
+  missing socket, dead socket or missing `nc` all fall through to a plain
+  `exec`. The payload never touches disk.
+
+  A side effect worth naming: because nothing observes the system pasteboard,
+  a password copied from 1Password is not something this can capture even by
+  accident. An earlier iteration polled `NSPasteboard.changeCount` and needed
+  careful `org.nspasteboard.ConcealedType` handling to avoid exactly that; the
+  safest handling of a secret turned out to be being structurally unable to
+  see it.
+
+  Nothing is persisted — the ring dies with the process. Recording can be
+  turned off from the dropdown, and turning it back on does not backfill.
+
+  The obvious version of this request — a copy button on Claude's rendered
+  markdown code blocks — was rejected: it needs the PTY output parsed to find
+  where a block starts and ends, which architectural decision #2 forbids, and
+  it would break on a theme change or a wrapped line. The existing precedents
+  do not cover it either; the file-path link providers are lexical and the OSC
+  777 sidechannel is a published wire contract.
+
+  Text only for now. Images and file URLs force a memory budget and eviction
+  policy that text does not.
+
+### Fixed
+- **Titlebar dropdowns no longer render underneath the Git panel.** The
+  clipboard, notification and "open in" popovers were painted over by the diff
+  panel's sticky repo headers. Those are `z-10` against the dropdowns' `z-50`,
+  so z-index alone said the dropdowns should win — but the sticky row carried
+  `backdrop-blur-sm`, and in WebKit a `backdrop-filter` element is promoted to
+  its own compositing layer where it can paint over a higher-z-index element in
+  a different subtree. The titlebar now establishes its own stacking context
+  (`relative z-40`), which fixes all three dropdowns at once, and the blur —
+  which contributed almost nothing behind a 95%-opaque background — is gone.
+
+### Tracked work
+- PRP: [`PRPs/022--clipboard-history.md`](PRPs/022--clipboard-history.md)
+- Issue: [#79](https://github.com/willywg/klaudio-panels/issues/79)
+- PR: [#80](https://github.com/willywg/klaudio-panels/pull/80)
+
 ## [1.10.0] — 2026-08-07
 
 ### Added
