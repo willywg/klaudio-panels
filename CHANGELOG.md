@@ -80,6 +80,14 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   `pkg/mytests/foo.py`, which a plain suffix check would wrongly accept.
   Candidates come back shallowest-first and the best one opens.
 
+  When several files match — `app/main.py` exists under `core/`, `telegram/`
+  and `whatsapp/` in a submodule-based project — it asks instead of guessing.
+  Nothing in the printed path says which was meant, and opening the wrong
+  service's file with no error shown is worse than one extra click: you read
+  it, reason about it, and never find out. The choice is remembered per path,
+  so the question comes once rather than once per click. A single match opens
+  straight away, which is the reported case.
+
   The search only runs after a direct hit fails, so the common case costs a
   single `stat` and no walk: measured on a real monorepo, 18µs for the direct
   hit against 39ms for the fallback. The fallback uses the `ignore` crate's

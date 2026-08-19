@@ -61,6 +61,7 @@ import {
 } from "@/context/notifications";
 import { installGlobalErrorForwarding } from "@/lib/debug-log";
 import { DiffPanel } from "@/components/diff-panel/diff-panel";
+import { FileCandidatePicker } from "@/components/file-candidate-picker";
 import { SplitDivider } from "@/components/diff-panel/split-pane";
 import {
   CENTER_MIN,
@@ -991,6 +992,7 @@ function Shell() {
           openers (terminal link provider, file preview) are scattered, and
           threading a prop to all of them would buy nothing. */}
       <ImageLightbox />
+      <FileCandidatePicker />
       <main class="flex-1 flex min-h-0 overflow-hidden">
       <ProjectsSidebar
         activePath={activeProjectPath()}

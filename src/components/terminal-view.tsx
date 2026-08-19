@@ -5,9 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
-import {
-  readText as readClipboardText,
-} from "@tauri-apps/plugin-clipboard-manager";
+import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { useTerminal } from "@/context/terminal";
 import { useDiffPanel } from "@/context/diff-panel";
 import { makeFileLinkProvider } from "@/lib/xterm-file-links";
@@ -191,7 +189,13 @@ export function TerminalView(props: Props) {
       // on its own and xterm's input listener would forward a plain `\r`
       // to the PTY before our async write lands, so Claude sees submit
       // first and our ESC-CR arrives too late.
-      if (e.key === "Enter" && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (
+        e.key === "Enter" &&
+        e.shiftKey &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey
+      ) {
         e.preventDefault();
         void ctx.write(props.id, encoder.encode("\x1b\r"));
         return false;
@@ -261,9 +265,9 @@ export function TerminalView(props: Props) {
     });
 
     // Track scroll position so the floating "scroll to bottom" button hides
-     // itself once the user is back at the tail. xterm fires onScroll for both
-     // user scrolling (wheel, drag) and new-data-pushed-baseY-down, so this
-     // signal also catches the "you have new content below" case.
+    // itself once the user is back at the tail. xterm fires onScroll for both
+    // user scrolling (wheel, drag) and new-data-pushed-baseY-down, so this
+    // signal also catches the "you have new content below" case.
     scrollDisposable = term.onScroll(() => {
       if (!term) return;
       const buf = term.buffer.active;
@@ -304,7 +308,9 @@ export function TerminalView(props: Props) {
     // Bare-URL provider runs BEFORE the file provider so domains like
     // `app.constructai.la` route to the browser instead of being treated as
     // a file with `.la` extension (file regex would otherwise greedy-match).
-    bareUrlDisposable = term.registerLinkProvider(makeBareUrlLinkProvider(term));
+    bareUrlDisposable = term.registerLinkProvider(
+      makeBareUrlLinkProvider(term),
+    );
 
     // Cmd/Ctrl+click on `src/foo.ts` or `src/foo.ts:42` opens a preview tab.
     // Uses xterm's native link provider API so we never parse the PTY buffer
@@ -332,7 +338,11 @@ export function TerminalView(props: Props) {
         // project root — see `resolveProjectFile`. Resolving first means the
         // preview tab gets a path that actually exists.
         void resolveProjectFile(tab.projectPath, normalizeRel(rel)).then(
-          (target) => diffPanel.openFile(tab.projectPath, target, line),
+          // null means the user dismissed the "which one?" picker.
+          (target) => {
+            if (target !== null)
+              diffPanel.openFile(tab.projectPath, target, line);
+          },
         );
       },
       {
@@ -518,10 +528,7 @@ export function TerminalView(props: Props) {
       data-pty-id={props.id}
     >
       <div ref={container} class="flex-1 min-h-0 min-w-0 overflow-hidden p-2" />
-      <ScrollToBottomButton
-        visible={isScrolledUp()}
-        onClick={scrollToBottom}
-      />
+      <ScrollToBottomButton visible={isScrolledUp()} onClick={scrollToBottom} />
       <Show when={isDragOver()}>
         <div class="absolute inset-1 border-2 border-dashed border-indigo-400/60 rounded pointer-events-none flex items-center justify-center">
           <div class="px-3 py-1.5 rounded bg-indigo-500/20 text-indigo-200 text-[12px] font-medium">
@@ -536,7 +543,8 @@ export function TerminalView(props: Props) {
       </Show>
       <Show when={tab()?.status === "exited"}>
         <div class="border-t border-neutral-800 bg-neutral-900/50 px-3 py-1.5 text-[11px] text-neutral-500 font-mono">
-          PTY closed (code {tab()?.exitCode ?? "?"}). Close this tab or open another session.
+          PTY closed (code {tab()?.exitCode ?? "?"}). Close this tab or open
+          another session.
         </div>
       </Show>
     </div>
