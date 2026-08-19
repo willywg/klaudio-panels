@@ -98,6 +98,33 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   is slower than an in-process walk, less portable, and would throw away the
   gitignore filtering we already get.
 
+- **Image links work in a sub-project too**
+  ([#83](https://github.com/willywg/klaudio-panels/issues/83)). The fix above
+  did not reach images: `resolveImagePath` still joined any path *containing a
+  slash* onto the project root unchecked — the very assumption that fix
+  existed to undo. A session running in `web/` printing `public/logo.png` sent
+  us to `<root>/public/logo.png`, which does not exist, and the link went
+  quietly inert: no thumbnail on hover, nothing on ⌘-click.
+
+  Only the bare-name shape (`logo.png`) was ever searched for, through a
+  *second* resolver — `resolve_project_image` — with its own ranking, its own
+  caps and its own frontend cache. Two resolvers answering the same question is
+  why images kept a bug source files had already had fixed, so that one is now
+  deleted: a bare name is a suffix with one segment, and `resolve_project_file`
+  already handles suffixes. One ranking, one cache, nothing left to drift.
+
+  What still bypasses the resolver: absolute and `~/` paths, since `read_image`
+  is deliberately not project-scoped (that is how screenshots outside the
+  project work at all, [#73](https://github.com/willywg/klaudio-panels/issues/73)),
+  and `../` traversals, which leave the project and so are joined and handed
+  to `read_image` as before.
+
+  Ambiguity is handled differently per gesture. A ⌘-click opens the same
+  picker source files get. A hover does not: it takes the best candidate and
+  lives with a guess for the length of a thumbnail, because popping a modal at
+  the mouse pointer for something nobody committed to opening is worse than
+  being occasionally wrong about which `logo.png` gets previewed.
+
 ## [1.10.0] — 2026-08-07
 
 ### Added

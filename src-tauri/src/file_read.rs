@@ -132,65 +132,6 @@ pub fn read_image(path: String) -> Result<ImagePayload, String> {
     })
 }
 
-/// Most matches we'll bother reporting for a bare filename. Beyond a handful
-/// the name is too ambiguous to guess from anyway.
-const MAX_IMAGE_MATCHES: usize = 8;
-
-/// Locate an image inside a project by bare filename.
-///
-/// Claude lists images by name alone (`logo.png`, `logo-turismoi-small.png`)
-/// far more often than by full path. Joining such a name onto the project
-/// root produces `<project>/logo.png`, which almost never exists — that was
-/// the `No such file or directory` the user hit (#73). Searching the project
-/// finds the real one.
-///
-/// Results are sorted shortest-path-first, so a top-level `public/images/x.png`
-/// beats something buried six directories deep. Gitignored files and dotdirs
-/// are skipped, which is also what keeps this cheap: no `node_modules`, no
-/// build output.
-#[tauri::command]
-pub fn resolve_project_image(
-    project_path: String,
-    name: String,
-) -> Result<Vec<String>, String> {
-    let root = Path::new(&project_path);
-    if !root.is_dir() {
-        return Err("project path is not a directory".into());
-    }
-    // Guard against a "name" that is really a path, and against traversal.
-    if name.contains('/') || name.is_empty() || name == ".." {
-        return Err("expected a bare filename".into());
-    }
-    let ext = Path::new(&name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
-    if !IMAGE_EXTENSIONS.contains(&ext.as_str()) {
-        return Err(format!("not an image extension: {ext}"));
-    }
-
-    let mut out: Vec<String> = Vec::new();
-    let walker = ignore::WalkBuilder::new(root)
-        .filter_entry(|e| e.file_name() != ".git")
-        .build();
-    for entry in walker.flatten() {
-        if !entry.file_type().is_some_and(|t| t.is_file()) {
-            continue;
-        }
-        if entry.file_name() != std::ffi::OsStr::new(&name) {
-            continue;
-        }
-        out.push(entry.path().to_string_lossy().into_owned());
-        if out.len() >= MAX_IMAGE_MATCHES * 4 {
-            break;
-        }
-    }
-    out.sort_by_key(|p| (p.matches('/').count(), p.len()));
-    out.truncate(MAX_IMAGE_MATCHES);
-    Ok(out)
-}
-
 /// Cap on returned candidates. More than a couple already means the path was
 /// ambiguous enough that guessing is the wrong answer.
 const MAX_PATH_MATCHES: usize = 10;
@@ -221,6 +162,12 @@ fn ends_with_segments(rel_path: &str, needle: &str) -> bool {
 /// for Claude and wrong for us — the prefix is simply missing. Rather than
 /// fail, look for a file whose project-relative path ends with what we were
 /// given.
+///
+/// Images come through here too. They used to have their own resolver keyed on
+/// a bare filename, which meant a path *with* a directory was joined onto the
+/// project root unchecked — the very assumption this command exists to undo,
+/// so images kept the bug after source files were fixed (#83). A bare name is
+/// just a suffix with one segment, so one resolver covers both.
 ///
 /// The direct hit is checked first and costs a single `stat`, so the walk only
 /// happens when there is no alternative. It uses the `ignore` crate, which
@@ -492,33 +439,6 @@ mod tests {
     }
 
     #[test]
-    fn finds_a_bare_filename_anywhere_in_the_project() {
-        let tmp = TempDir::new("resolve");
-        let root = tmp.path();
-        fs::create_dir_all(root.join("app/assets/images/deep")).unwrap();
-        fs::create_dir_all(root.join("public/images")).unwrap();
-        fs::write(root.join("public/images/logo.png"), PNG_HEADER).unwrap();
-        fs::write(root.join("app/assets/images/deep/logo.png"), PNG_HEADER).unwrap();
-
-        let hits =
-            resolve_project_image(root.to_string_lossy().into_owned(), "logo.png".into()).unwrap();
-
-        assert_eq!(hits.len(), 2);
-        // Shallowest first — a bare name is a guess, so guess the likelier one.
-        assert!(hits[0].ends_with("public/images/logo.png"), "got {hits:?}");
-    }
-
-    #[test]
-    fn resolve_refuses_a_path_or_a_non_image() {
-        let tmp = TempDir::new("resolve-guard");
-        let root = tmp.path().to_string_lossy().into_owned();
-
-        assert!(resolve_project_image(root.clone(), "../etc/passwd.png".into()).is_err());
-        assert!(resolve_project_image(root.clone(), "a/b.png".into()).is_err());
-        assert!(resolve_project_image(root, "notes.txt".into()).is_err());
-    }
-
-    #[test]
     fn expands_a_leading_tilde() {
         let home = dirs::home_dir().expect("no home dir");
         assert_eq!(expand_tilde("~/x/y.png"), home.join("x/y.png"));
@@ -591,6 +511,21 @@ mod tests {
         .unwrap();
         assert_eq!(got.len(), 2);
         assert_eq!(got[0], "svc/tests/conftest.py");
+    }
+
+    #[test]
+    fn a_bare_filename_is_found_anywhere_in_the_project() {
+        // What `resolve_project_image` used to do on its own. Images now go
+        // through this resolver too, which is the point: one ranking, one set
+        // of caps, no chance of the two drifting apart again (#83).
+        let tmp = TempDir::new("resolve-bare");
+        touch(tmp.path(), "app/assets/images/deep/logo.png", "x");
+        touch(tmp.path(), "public/images/logo.png", "x");
+        let got =
+            resolve_project_file(tmp.path().display().to_string(), "logo.png".into()).unwrap();
+        assert_eq!(got.len(), 2);
+        // Shallowest first — a bare name is a guess, so guess the likelier one.
+        assert_eq!(got[0], "public/images/logo.png");
     }
 
     #[test]

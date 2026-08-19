@@ -1,9 +1,24 @@
-import { describe, expect, test } from "bun:test";
-import {
-  isImagePath,
-  relativizeToProject,
-  resolveImagePath,
-} from "./image-files";
+import { describe, expect, mock, test } from "bun:test";
+import { answerFilePick, pendingFilePick } from "@/lib/file-picker-bus";
+
+/** What the (mocked) backend will answer for the next lookup. Each test uses
+ *  a distinct project path so `projectFileCandidates`' cache never serves a
+ *  previous test's answer. */
+let candidates: string[] = [];
+function setCandidates(next: string[]) {
+  candidates = next;
+}
+
+mock.module("@tauri-apps/api/core", () => ({
+  invoke: async () => candidates,
+}));
+
+const { isImagePath, relativizeToProject, resolveImagePath } = await import(
+  "./image-files"
+);
+
+/** Let the resolver run up to the point where it opens the picker. */
+const flush = () => new Promise((r) => setTimeout(r, 0));
 
 describe("isImagePath", () => {
   test("accepts the allowlisted extensions, case-insensitively", () => {
@@ -30,20 +45,69 @@ describe("isImagePath", () => {
 });
 
 describe("resolveImagePath shapes", () => {
-  // The async branch (bare filename -> Rust search) needs the Tauri bridge,
-  // so only the two synchronous shapes are exercised here.
   test("absolute and home paths pass straight through", async () => {
+    // No resolver involved: `read_image` reads from anywhere on disk, which
+    // is how screenshots outside the project work at all (#73).
     expect(await resolveImagePath("/proj", "/tmp/a.png")).toBe("/tmp/a.png");
     expect(await resolveImagePath("/proj", "~/shots/a.png")).toBe(
       "~/shots/a.png",
     );
   });
 
-  test("a path with a directory is joined onto the project", async () => {
-    expect(await resolveImagePath("/proj", "public/images/logo.png")).toBe(
-      "/proj/public/images/logo.png",
+  test("a traversal path is joined rather than searched", async () => {
+    // It leaves the project, so the suffix search has nothing to say about
+    // it; the join still opens it when it exists.
+    expect(await resolveImagePath("/proj", "../sibling/a.png")).toBe(
+      "/proj/../sibling/a.png",
     );
-    expect(await resolveImagePath("/proj/", "./a/b.png")).toBe("/proj/a/b.png");
+  });
+});
+
+describe("resolveImagePath against the project", () => {
+  test("uses the resolved candidate, not a blind join", async () => {
+    // The bug: `public/logo.png` printed by a session running in `web/` was
+    // joined onto the root, and `<root>/public/logo.png` doesn't exist.
+    setCandidates(["web/public/logo.png"]);
+    expect(await resolveImagePath("/p1", "public/logo.png")).toBe(
+      "/p1/web/public/logo.png",
+    );
+  });
+
+  test("a bare filename still resolves", async () => {
+    setCandidates(["app/assets/logo.png"]);
+    expect(await resolveImagePath("/p2", "./logo.png")).toBe(
+      "/p2/app/assets/logo.png",
+    );
+  });
+
+  test("nothing matching stays quiet", async () => {
+    setCandidates([]);
+    expect(await resolveImagePath("/p3", "gone.png")).toBeNull();
+  });
+
+  test("a hover takes the best candidate instead of asking", async () => {
+    // Asking on hover would pop a modal at the mouse pointer for a thumbnail
+    // nobody committed to opening.
+    setCandidates(["a/x.png", "b/x.png"]);
+    expect(await resolveImagePath("/p4", "x.png")).toBe("/p4/a/x.png");
+    expect(pendingFilePick()).toBeNull();
+  });
+
+  test("a click asks which one, and honours the answer", async () => {
+    setCandidates(["core/x.png", "web/x.png"]);
+    const p = resolveImagePath("/p5", "x.png", { ask: true });
+    await flush();
+    expect(pendingFilePick()?.candidates).toEqual(["core/x.png", "web/x.png"]);
+    answerFilePick("web/x.png");
+    expect(await p).toBe("/p5/web/x.png");
+  });
+
+  test("a dismissed picker resolves to null", async () => {
+    setCandidates(["core/y.png", "web/y.png"]);
+    const p = resolveImagePath("/p6", "y.png", { ask: true });
+    await flush();
+    answerFilePick(null);
+    expect(await p).toBeNull();
   });
 });
 
