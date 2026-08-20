@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { askWhichFile } from "@/lib/file-picker-bus";
 import {
+  isAbsoluteish,
   needleOf,
   projectBase,
   projectFileCandidates,
@@ -66,9 +67,9 @@ export function invalidateImage(path: string): void {
   cache.delete(path);
 }
 
-export function isAbsoluteish(path: string): boolean {
-  return path.startsWith("/") || path.startsWith("~/");
-}
+// Lives in `resolve-file` now that text files ask the same question images
+// always did; re-exported here so the existing importers keep working.
+export { isAbsoluteish } from "@/lib/resolve-file";
 
 export type ResolveImageOpts = {
   /** Ask the user which file when several match. Only a click may set this:

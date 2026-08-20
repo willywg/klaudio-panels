@@ -23,6 +23,7 @@ import { createInternalDrag } from "@/lib/use-internal-drag";
 import type { FileStatus } from "@/lib/git-status";
 import { focusTerminal } from "@/lib/terminal-focus-bus";
 import { looksBinaryByExtension } from "@/lib/cm-language";
+import { isAbsoluteish } from "@/lib/resolve-file";
 import { DiffFileRow } from "./diff-file-row";
 import { createFileOpener } from "./use-file-opener";
 import { FilePreview } from "./file-preview";
@@ -401,9 +402,13 @@ function TabStrip(props: { projectPath: string }) {
     // and >1 MiB.
     if (m.tabKind === "file") {
       items.push({
-        label: "Edit this file",
+        // A file outside the project reads but never saves — writes stay
+        // project-scoped on purpose (#85). Disabling here is what keeps the
+        // inline editor from becoming a trap that only fails at ⌘S; "Open
+        // in…" below still works on it.
+        label: isAbsoluteish(m.rel) ? "Edit (outside the project)" : "Edit this file",
         icon: Pencil,
-        disabled: looksBinaryByExtension(m.rel),
+        disabled: looksBinaryByExtension(m.rel) || isAbsoluteish(m.rel),
         onClick: () => {
           panel.openEdit(props.projectPath, m.rel);
           panel.openPanel(props.projectPath);
@@ -522,10 +527,12 @@ function TabItem(props: {
     const base = props.projectPath.endsWith("/")
       ? props.projectPath.slice(0, -1)
       : props.projectPath;
-    return {
-      path: `${base}/${props.tab.path}`,
-      label: basename(props.tab.path),
-    };
+    // An outside-the-project tab (#85) already carries an absolute path;
+    // joining it onto the root would drag a path that doesn't exist.
+    const path = isAbsoluteish(props.tab.path)
+      ? props.tab.path
+      : `${base}/${props.tab.path}`;
+    return { path, label: basename(props.tab.path) };
   });
 
   function onClick(e: MouseEvent) {
@@ -573,7 +580,15 @@ function TabItem(props: {
           •
         </span>
       </Show>
-      <span class="truncate max-w-[180px]">{label()}</span>
+      {/* The tab shows a basename, which since #85 can belong to a file
+          anywhere on disk — the full path is the only thing that says which
+          one, so it lives in the tooltip. */}
+      <span
+        class="truncate max-w-[180px]"
+        title={props.tab.kind === "diff" ? undefined : props.tab.path}
+      >
+        {label()}
+      </span>
       <Show when={props.tab.kind !== "diff"}>
         <button
           class="w-4 h-4 rounded-sm flex items-center justify-center text-neutral-500 hover:bg-neutral-700 hover:text-neutral-100 transition opacity-0 group-hover:opacity-100"

@@ -181,7 +181,14 @@ pub fn resolve_project_file(project_path: String, rel: String) -> Result<Vec<Str
     if !root.is_dir() {
         return Err("project path is not a directory".into());
     }
-    let needle = rel.trim_start_matches("./").trim_start_matches('/');
+    // An absolute or `~/` path already says where it lives; stripping the
+    // leading slash and hunting for a suffix match inside the project could
+    // only ever answer a question nobody asked. The frontend short-circuits
+    // these before calling; this is the second lock on the same door.
+    if rel.starts_with('/') || rel.starts_with("~/") {
+        return Err("expected a project-relative path".into());
+    }
+    let needle = rel.trim_start_matches("./");
     if needle.is_empty() {
         return Err("empty path".into());
     }
@@ -268,6 +275,33 @@ pub(crate) fn mtime_ms(meta: &Metadata) -> i64 {
         .unwrap_or(0)
 }
 
+/// Resolve a path we are being asked to **read**.
+///
+/// A project-relative path keeps the root check, so `../../.ssh/id_rsa` is
+/// still refused: a relative path that climbs out is a path someone got wrong
+/// (or is probing with), never one the user pointed at.
+///
+/// An absolute or `~/` path is taken at face value. Claude routinely hands the
+/// user files that cannot be expressed relative to the open project — its own
+/// scratchpad under `/private/tmp/claude-…`, a temp export, a file in a
+/// sibling repo — and refusing to *display* one is the app declining to show
+/// what the user just asked for and can already `cat` in the terminal below.
+/// This is the same boundary `read_image` has drawn since #73, now applied to
+/// text: read-only, size-capped, and only ever for a path the user pointed at.
+///
+/// Writes deliberately do **not** get this treatment — `write_file_bytes`
+/// stays on `resolve_rel`. Klaudio never writing outside a project you opened
+/// is a property worth keeping, and it costs the user nothing: an outside file
+/// still opens in their own editor through "Open in…".
+pub(crate) fn resolve_readable(project_path: &str, rel: &str) -> Result<PathBuf, String> {
+    if rel.starts_with('/') || rel.starts_with("~/") {
+        return expand_tilde(rel)
+            .canonicalize()
+            .map_err(|e| format!("canonicalize file: {e}"));
+    }
+    resolve_rel(project_path, rel)
+}
+
 pub(crate) fn resolve_rel(project_path: &str, rel: &str) -> Result<PathBuf, String> {
     let base = Path::new(project_path);
     let candidate = base.join(rel);
@@ -285,7 +319,7 @@ pub(crate) fn resolve_rel(project_path: &str, rel: &str) -> Result<PathBuf, Stri
 
 #[tauri::command]
 pub fn read_file_bytes(project_path: String, rel_path: String) -> Result<FilePayload, String> {
-    let abs = resolve_rel(&project_path, &rel_path)?;
+    let abs = resolve_readable(&project_path, &rel_path)?;
     let meta = std::fs::metadata(&abs).map_err(|e| format!("stat: {e}"))?;
     let bytes = meta.len();
     let mtime = mtime_ms(&meta);
@@ -550,6 +584,55 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn an_absolute_path_is_not_something_to_search_for() {
+        // It already says where it lives. The read path takes it at face
+        // value instead — see `resolve_readable`.
+        let tmp = TempDir::new("resolve-absolute");
+        touch(tmp.path(), "notes.md", "x");
+        assert!(
+            resolve_project_file(tmp.path().display().to_string(), "/tmp/notes.md".into()).is_err()
+        );
+        assert!(
+            resolve_project_file(tmp.path().display().to_string(), "~/notes.md".into()).is_err()
+        );
+    }
+
+    #[test]
+    fn an_absolute_path_reads_from_outside_the_project() {
+        // Claude's scratchpad, a temp export, a sibling repo — none of these
+        // can be named relative to the open project, and refusing to show one
+        // is the app declining to display what the user just asked for (#85).
+        let outside = TempDir::new("outside");
+        fs::write(outside.path().join("scratch.md"), "# hola").unwrap();
+        let project = TempDir::new("project");
+        touch(project.path(), "src/main.rs", "x");
+
+        let got = read_file_bytes(
+            project.path().display().to_string(),
+            outside.path().join("scratch.md").display().to_string(),
+        )
+        .expect("outside file should read");
+        assert_eq!(got.contents.as_deref(), Some("# hola"));
+    }
+
+    #[test]
+    fn a_relative_path_still_cannot_climb_out() {
+        // The guard that matters: a *relative* path escaping the root is one
+        // someone got wrong or is probing with, never one the user pointed at.
+        let outside = TempDir::new("outside-rel");
+        fs::write(outside.path().join("secret.txt"), "s3cret").unwrap();
+        let project = TempDir::new("project-rel");
+        touch(project.path(), "src/main.rs", "x");
+
+        let escape = format!(
+            "../{}/secret.txt",
+            outside.path().file_name().unwrap().to_string_lossy()
+        );
+        let err = read_file_bytes(project.path().display().to_string(), escape).unwrap_err();
+        assert!(err.contains("escapes project root"), "got {err}");
     }
 
     #[test]
