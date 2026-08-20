@@ -34,6 +34,11 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   copied — a second copy is how the two views would drift into disagreeing
   about the same file.
 
+  A long commit message — a squash merge's, typically — scrolls inside its own
+  region rather than pushing the file list off the bottom, and the divider
+  between the two is draggable: how much of the message you want to read at a
+  glance is a preference, and it is remembered.
+
   Details worth knowing: a merge is shown against its **first parent**, as
   `git show` does, and its list row says `merge` instead of a line count
   (`git log --stat` omits merge stats for the same reason — the number would
