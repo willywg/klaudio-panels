@@ -153,6 +153,32 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   Tab labels are basenames, and a basename can now belong to a file anywhere
   on disk, so the full path moved into the tab's tooltip.
 
+- **Terminal links survive a line wrap**
+  ([#87](https://github.com/willywg/klaudio-panels/issues/87)). Found while
+  QA'ing the above: it worked once the window was wide enough, which is what
+  pointed at the cause. xterm stores a too-long line as N rows of exactly
+  `cols` cells, and both link providers read one row at a time — so a wrapped
+  path was two fragments and neither one worked. The head opened a preview
+  that couldn't read it; the tail (`…/test-note.md`) matched as a *bare*
+  relative name and got hunted for inside the project. Both tabs were visible
+  in the same screenshot, one erroring.
+
+  Pre-existing, but #85 turned it from occasional into constant: absolute
+  paths are long, and Claude prints them all the time.
+
+  Providers now read the whole **logical** line — walk back to the row that
+  started the wrap, join the continuations, and give each match an
+  `ILinkRange` whose ends may sit on different rows, which xterm underlines
+  across the wrap. Matches are filtered to the row being asked about, or one
+  link would register once per row it crosses.
+
+  The offset→cell mapping is what the range math rests on, so rows are joined
+  untrimmed and every cell contributes exactly one character: an emoji is two
+  code units in one cell, and the second cell of a double-width character is
+  empty. Both would otherwise slide later offsets onto the wrong cell — and,
+  once rows are joined, onto the wrong row. `makeBareUrlLinkProvider` had the
+  identical flaw and gets the same fix.
+
 ## [1.10.0] — 2026-08-07
 
 ### Added
