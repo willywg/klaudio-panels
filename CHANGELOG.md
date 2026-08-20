@@ -125,6 +125,60 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   the mouse pointer for something nobody committed to opening is worse than
   being occasionally wrong about which `logo.png` gets previewed.
 
+### Added
+- **The preview opens files that live outside the project**
+  ([#85](https://github.com/willywg/klaudio-panels/issues/85)). ⌘-clicking an
+  absolute path printed in the terminal dead-ended on *"Couldn't read file:
+  path escapes project root"* — most visibly for the markdown files Claude
+  writes into its own scratchpad under `/private/tmp/claude-…` and then hands
+  you by path.
+
+  The root check was right for a *relative* path that climbs out
+  (`../../.ssh/id_rsa` is a path someone got wrong, or is probing with) and
+  wrong for an absolute one the user clicked. Images have read from anywhere
+  since [#73](https://github.com/willywg/klaudio-panels/issues/73) for exactly
+  this reason, and "Open in nvim" always did, being a PTY running the user's
+  editor — our own reader was the last thing enforcing a root it had no way to
+  justify. Refusing to *display* a file the user can already `cat` in the
+  terminal below is the app declining to show what was just asked for.
+
+  **Writes deliberately did not move.** `write_file_bytes` still resolves
+  against the project root, so Klaudio never writes outside a project you
+  opened — a property worth being able to state plainly, and one that costs
+  nothing here, since an outside file still opens in your own editor through
+  "Open in…". To keep that from becoming a trap that only fails at ⌘S, the
+  inline editor refuses an outside file up front: ⌘E says why, and the
+  context-menu entry reads "Edit (outside the project)", disabled.
+
+  Tab labels are basenames, and a basename can now belong to a file anywhere
+  on disk, so the full path moved into the tab's tooltip.
+
+- **Terminal links survive a line wrap**
+  ([#87](https://github.com/willywg/klaudio-panels/issues/87)). Found while
+  QA'ing the above: it worked once the window was wide enough, which is what
+  pointed at the cause. xterm stores a too-long line as N rows of exactly
+  `cols` cells, and both link providers read one row at a time — so a wrapped
+  path was two fragments and neither one worked. The head opened a preview
+  that couldn't read it; the tail (`…/test-note.md`) matched as a *bare*
+  relative name and got hunted for inside the project. Both tabs were visible
+  in the same screenshot, one erroring.
+
+  Pre-existing, but #85 turned it from occasional into constant: absolute
+  paths are long, and Claude prints them all the time.
+
+  Providers now read the whole **logical** line — walk back to the row that
+  started the wrap, join the continuations, and give each match an
+  `ILinkRange` whose ends may sit on different rows, which xterm underlines
+  across the wrap. Matches are filtered to the row being asked about, or one
+  link would register once per row it crosses.
+
+  The offset→cell mapping is what the range math rests on, so rows are joined
+  untrimmed and every cell contributes exactly one character: an emoji is two
+  code units in one cell, and the second cell of a double-width character is
+  empty. Both would otherwise slide later offsets onto the wrong cell — and,
+  once rows are joined, onto the wrong row. `makeBareUrlLinkProvider` had the
+  identical flaw and gets the same fix.
+
 ## [1.10.0] — 2026-08-07
 
 ### Added

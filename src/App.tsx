@@ -78,6 +78,8 @@ import {
 } from "@/lib/terminal-focus-bus";
 import { selectedFile } from "@/lib/selected-file-bus";
 import { looksBinaryByExtension } from "@/lib/cm-language";
+import { isAbsoluteish } from "@/lib/resolve-file";
+import { toast } from "@/lib/toast";
 import {
   isMarkdownPath,
   toggleMarkdownPreviewMode,
@@ -424,6 +426,15 @@ function Shell() {
           : undefined;
         if (active && active.kind === "file") {
           if (looksBinaryByExtension(active.path)) return;
+          // Reads reach outside the project, writes don't (#85). Say so
+          // rather than opening an editor that would only fail at ⌘S.
+          if (isAbsoluteish(active.path)) {
+            e.preventDefault();
+            toast(
+              "This file lives outside the project — open it in your editor to change it.",
+            );
+            return;
+          }
           e.preventDefault();
           diffPanel.openEdit(p, active.path);
           return;

@@ -1,4 +1,9 @@
-import type { ILink, ILinkProvider, IBufferLine, Terminal } from "@xterm/xterm";
+import type { ILink, ILinkProvider, Terminal } from "@xterm/xterm";
+import {
+  cellRange,
+  rangeSpansRow,
+  readLogicalLine,
+} from "@/lib/xterm-logical-line";
 import { openUrlInSystemBrowser } from "@/lib/open-url";
 
 /** TLDs we treat as "this is a URL, not a file path". Kept conservative on
@@ -41,9 +46,11 @@ const TRAILING_PUNCT = /[.,;:!?)\]'"`]+$/;
 export function makeBareUrlLinkProvider(term: Terminal): ILinkProvider {
   return {
     provideLinks(bufferLineNumber, callback) {
-      const line = term.buffer.active.getLine(bufferLineNumber - 1);
-      if (!line) return callback(undefined);
-      const text = stringifyLine(line);
+      // Same wrapping problem as the file provider (#87): a URL long enough
+      // to wrap was seen as two fragments, neither of which resolved.
+      const logical = readLogicalLine(term, bufferLineNumber);
+      if (!logical) return callback(undefined);
+      const text = logical.text;
       if (!text.trim()) return callback(undefined);
 
       const links: ILink[] = [];
@@ -54,12 +61,11 @@ export function makeBareUrlLinkProvider(term: Terminal): ILinkProvider {
         const trimmed = raw.replace(TRAILING_PUNCT, "");
         if (!trimmed) continue;
         const matchStart = m.index + m[0].length - raw.length;
+        const range = cellRange(logical, matchStart, trimmed.length);
+        if (!rangeSpansRow(range, bufferLineNumber)) continue;
         const uri = `https://${trimmed}`;
         links.push({
-          range: {
-            start: { x: matchStart + 1, y: bufferLineNumber },
-            end: { x: matchStart + trimmed.length, y: bufferLineNumber },
-          },
+          range,
           text: trimmed,
           activate(event) {
             openUrlInSystemBrowser(event, uri);
@@ -72,14 +78,3 @@ export function makeBareUrlLinkProvider(term: Terminal): ILinkProvider {
   };
 }
 
-function stringifyLine(line: IBufferLine): string {
-  let out = "";
-  for (let i = 0; i < line.length; i++) {
-    const cell = line.getCell(i);
-    if (!cell) continue;
-    const chars = cell.getChars();
-    if (chars) out += chars;
-    else out += " ";
-  }
-  return out.replace(/\s+$/, "");
-}

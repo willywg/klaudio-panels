@@ -1,4 +1,9 @@
-import type { ILink, ILinkProvider, IBufferLine, Terminal } from "@xterm/xterm";
+import type { ILink, ILinkProvider, Terminal } from "@xterm/xterm";
+import {
+  cellRange,
+  rangeSpansRow,
+  readLogicalLine,
+} from "@/lib/xterm-logical-line";
 
 /** Matches tokens that look like source paths, optionally trailed by a
  *  `:line[:col]` suffix. Accepts `./foo.ts`, `src/lib/bar.rs`, `foo.ts:42`,
@@ -26,9 +31,12 @@ export function makeFileLinkProvider(
 ): ILinkProvider {
   return {
     provideLinks(bufferLineNumber, callback) {
-      const line = term.buffer.active.getLine(bufferLineNumber - 1);
-      if (!line) return callback(undefined);
-      const text = stringifyLine(line);
+      // The whole logical line, not just this row: an absolute path is long
+      // enough that it usually wraps, and reading one row sees a truncated
+      // fragment that opens nothing (#87).
+      const logical = readLogicalLine(term, bufferLineNumber);
+      if (!logical) return callback(undefined);
+      const text = logical.text;
       if (!text.trim()) return callback(undefined);
 
       const links: ILink[] = [];
@@ -37,6 +45,11 @@ export function makeFileLinkProvider(
       while ((m = PATH_RE.exec(text)) !== null) {
         const full = m[1];
         const matchStart = m.index + m[0].length - full.length;
+        const range = cellRange(logical, matchStart, full.length);
+        // Every row of the group produces the same match list; keep only the
+        // ones touching the row being asked about, or the same link would be
+        // registered once per row.
+        if (!rangeSpansRow(range, bufferLineNumber)) continue;
         // Split file:line[:col]
         const colonIdx = full.indexOf(":");
         let path = full;
@@ -47,10 +60,7 @@ export function makeFileLinkProvider(
           lineNum = Number.parseInt(lineStr, 10) || undefined;
         }
         links.push({
-          range: {
-            start: { x: matchStart + 1, y: bufferLineNumber },
-            end: { x: matchStart + full.length, y: bufferLineNumber },
-          },
+          range,
           text: full,
           activate(event) {
             // Require a modifier; a bare click shouldn't hijack selection.
@@ -71,14 +81,3 @@ export function makeFileLinkProvider(
   };
 }
 
-function stringifyLine(line: IBufferLine): string {
-  let out = "";
-  for (let i = 0; i < line.length; i++) {
-    const cell = line.getCell(i);
-    if (!cell) continue;
-    const chars = cell.getChars();
-    if (chars) out += chars;
-    else out += " ";
-  }
-  return out.replace(/\s+$/, "");
-}

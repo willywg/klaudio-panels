@@ -21,6 +21,12 @@ export function needleOf(rel: string): string {
   return rel.startsWith("./") ? rel.slice(2) : rel;
 }
 
+/** True for a path that already says where it lives, so no project is needed
+ *  to interpret it. Tilde expansion happens host-side. */
+export function isAbsoluteish(path: string): boolean {
+  return path.startsWith("/") || path.startsWith("~/");
+}
+
 /**
  * Every file in the project whose relative path ends with `rel`, best-first.
  *
@@ -77,12 +83,16 @@ export async function projectFileCandidates(
  *  - **None** — hand back the original path so the preview reports the missing
  *    file itself, rather than the click doing nothing at all.
  *
+ * An absolute or `~/` path skips all of it: it already says where it lives,
+ * and the preview reads it directly (`resolve_readable`, #85).
+ *
  * Returns `null` only when the user dismissed the question.
  */
 export async function resolveProjectFile(
   projectPath: string,
   rel: string,
 ): Promise<string | null> {
+  if (isAbsoluteish(rel)) return rel;
   const needle = needleOf(rel);
   const candidates = await projectFileCandidates(projectPath, rel);
   if (candidates.length === 0) return needle;

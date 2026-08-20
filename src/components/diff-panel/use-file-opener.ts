@@ -2,6 +2,7 @@ import { useDiffPanel, tabKey } from "@/context/diff-panel";
 import { useEditorPty } from "@/context/editor-pty";
 import { useOpenIn } from "@/context/open-in";
 import { focusTerminal } from "@/lib/terminal-focus-bus";
+import { isAbsoluteish } from "@/lib/resolve-file";
 import type { OpenInApp } from "@/lib/open-in";
 
 /** "Open this file in X" for a project-relative path, shared by the tab
@@ -17,6 +18,9 @@ export function createFileOpener(projectPath: () => string) {
   const editorPty = useEditorPty();
 
   function absFor(rel: string): string {
+    // A preview tab can hold a path outside the project (#85); joining it
+    // onto the root would hand Finder or nvim a path that doesn't exist.
+    if (isAbsoluteish(rel)) return rel;
     const p = projectPath();
     const base = p.endsWith("/") ? p.slice(0, -1) : p;
     return `${base}/${rel}`;
