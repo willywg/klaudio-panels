@@ -325,13 +325,19 @@ export function TerminalView(props: Props) {
         // resolved first, since Claude usually names them without a
         // directory and they may live outside the project.
         if (isImagePath(rel)) {
-          void resolveImagePath(tab.projectPath, rel).then((abs) => {
-            if (!abs) return;
-            diffPanel.openFile(
-              tab.projectPath,
-              relativizeToProject(tab.projectPath, abs),
-            );
-          });
+          // `ask` only here: a click can afford the "which one?" modal, and
+          // an image under two sub-projects is as ambiguous as a source file
+          // under two. The hover path below stays silent.
+          void resolveImagePath(tab.projectPath, rel, { ask: true }).then(
+            (abs) => {
+              // null also covers a dismissed picker.
+              if (!abs) return;
+              diffPanel.openFile(
+                tab.projectPath,
+                relativizeToProject(tab.projectPath, abs),
+              );
+            },
+          );
           return;
         }
         // The path may be relative to the session's cwd rather than to the

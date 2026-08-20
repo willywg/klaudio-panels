@@ -11,6 +11,51 @@ const MAX_CACHED = 200;
  *  cannot collide with either half of the key. */
 const SEP = "\u0000";
 
+/** Strip a trailing slash so `${base}/${rel}` never doubles up. */
+export function projectBase(projectPath: string): string {
+  return projectPath.endsWith("/") ? projectPath.slice(0, -1) : projectPath;
+}
+
+/** The path as the backend wants it: no `./` prefix, nothing else touched. */
+export function needleOf(rel: string): string {
+  return rel.startsWith("./") ? rel.slice(2) : rel;
+}
+
+/**
+ * Every file in the project whose relative path ends with `rel`, best-first.
+ *
+ * The one place that asks the backend where a printed path really lives —
+ * source files and images alike. Keeping two resolvers with their own ranking
+ * and their own caches is precisely how images kept the bug that files had
+ * already had fixed (#83).
+ *
+ * An empty array means nothing matched, including the case where the backend
+ * refused the path outright (traversal, no such project). Callers decide what
+ * that should look like; this only reports.
+ */
+export async function projectFileCandidates(
+  projectPath: string,
+  rel: string,
+): Promise<string[]> {
+  const base = projectBase(projectPath);
+  const needle = needleOf(rel);
+  const key = `${base}${SEP}${needle}`;
+
+  const hit = candidateCache.get(key);
+  if (hit !== undefined) return hit;
+  try {
+    const matches = await invoke<string[]>("resolve_project_file", {
+      projectPath: base,
+      rel: needle,
+    });
+    remember(key, matches);
+    return matches;
+  } catch {
+    remember(key, []);
+    return [];
+  }
+}
+
 /**
  * Turn a path printed in the terminal into one that exists in the project.
  *
@@ -38,13 +83,8 @@ export async function resolveProjectFile(
   projectPath: string,
   rel: string,
 ): Promise<string | null> {
-  const base = projectPath.endsWith("/")
-    ? projectPath.slice(0, -1)
-    : projectPath;
-  const needle = rel.startsWith("./") ? rel.slice(2) : rel;
-  const key = `${base}${SEP}${needle}`;
-
-  const candidates = await candidatesFor(key, base, needle);
+  const needle = needleOf(rel);
+  const candidates = await projectFileCandidates(projectPath, rel);
   if (candidates.length === 0) return needle;
   if (candidates.length === 1) return candidates[0];
 
@@ -54,26 +94,6 @@ export async function resolveProjectFile(
   // one click later. Ambiguous paths are rare enough that asking each time
   // costs little.
   return askWhichFile(needle, candidates);
-}
-
-async function candidatesFor(
-  key: string,
-  base: string,
-  needle: string,
-): Promise<string[]> {
-  const hit = candidateCache.get(key);
-  if (hit !== undefined) return hit;
-  try {
-    const matches = await invoke<string[]>("resolve_project_file", {
-      projectPath: base,
-      rel: needle,
-    });
-    remember(key, matches);
-    return matches;
-  } catch {
-    remember(key, []);
-    return [];
-  }
 }
 
 function remember(key: string, value: string[]): void {
