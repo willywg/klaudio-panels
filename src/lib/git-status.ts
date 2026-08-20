@@ -82,3 +82,57 @@ export const BADGE_COLOR: Record<FileStatusKind, string> = {
   untracked: "text-sky-400",
   conflicted: "text-red-500",
 };
+
+/** Where a diff's two sides come from.
+ *
+ *  The working tree (HEAD's blob against what's on disk) or one commit (its
+ *  first parent's blob against its own). `DiffPayload` is identical either
+ *  way, which is what lets one row component render both. */
+export type DiffSource = { kind: "worktree" } | { kind: "commit"; sha: string };
+
+export const WORKTREE: DiffSource = { kind: "worktree" };
+
+/** `files / + / −` against the first parent. Absent for a merge — see
+ *  `commit_stats` in `git.rs` for why the number would mislead. */
+export type CommitStats = {
+  files: number;
+  adds: number;
+  dels: number;
+};
+
+export type CommitInfo = {
+  sha: string;
+  short_sha: string;
+  subject: string;
+  author: string;
+  /** Unix **seconds** (git's own unit), not millis. */
+  timestamp: number;
+  /** Not yet on the branch's upstream. Always false when there is no
+   *  upstream, since then nothing is knowably pushed. */
+  unpushed: boolean;
+  parent_count: number;
+  stats: CommitStats | null;
+};
+
+export type HistoryPayload = {
+  commits: CommitInfo[];
+  branch: string | null;
+  /** Commits ahead of upstream; `null` when the branch has no upstream. */
+  ahead: number | null;
+  has_more: boolean;
+};
+
+export type CommitDetail = {
+  sha: string;
+  short_sha: string;
+  subject: string;
+  /** Message past the subject line. Empty when there is none. */
+  body: string;
+  author: string;
+  email: string;
+  timestamp: number;
+  parent_count: number;
+  files: FileStatus[];
+  adds: number;
+  dels: number;
+};

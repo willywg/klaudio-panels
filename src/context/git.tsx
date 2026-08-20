@@ -8,9 +8,13 @@ import { createStore, produce } from "solid-js/store";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
+  CommitDetail,
+  CommitInfo,
   DiffPayload,
+  DiffSource,
   FileStatus,
   GitSummary,
+  HistoryPayload,
   RepoInfo,
   StatusPayload,
 } from "@/lib/git-status";
@@ -25,6 +29,28 @@ type ProjectGitState = {
 
 type GitStore = Record<string, ProjectGitState>;
 
+type ProjectHistoryState = {
+  commits: CommitInfo[];
+  branch: string | null;
+  ahead: number | null;
+  hasMore: boolean;
+  loading: boolean;
+  /** Message from the backend — "not a git repository" is the common one,
+   *  and swallowing it leaves the History tab looking merely empty. */
+  error: string | null;
+  /** A first page has been asked for. Distinguishes "no commits" from
+   *  "nobody has opened History yet", which decides whether an fs event
+   *  should refetch. */
+  loaded: boolean;
+};
+
+/** Commits per page, and the increment "Load more" adds. */
+const HISTORY_PAGE = 30;
+
+/** Commit details held at once. A commit is immutable, so a cached detail can
+ *  never go stale — the cap is about memory, not freshness. */
+const MAX_CACHED_DETAILS = 50;
+
 const EMPTY_SUMMARY: GitSummary = {
   file_count: 0,
   adds: 0,
@@ -33,6 +59,16 @@ const EMPTY_SUMMARY: GitSummary = {
 };
 
 const REFRESH_DEBOUNCE_MS = 300;
+
+const EMPTY_HISTORY: ProjectHistoryState = Object.freeze({
+  commits: [],
+  branch: null,
+  ahead: null,
+  hasMore: false,
+  loading: false,
+  error: null,
+  loaded: false,
+}) as ProjectHistoryState;
 
 function emptyState(): ProjectGitState {
   return {
@@ -53,8 +89,24 @@ function joinAbs(projectPath: string, rel: string): string {
   return `${base}/${rel}`;
 }
 
+function emptyHistory(): ProjectHistoryState {
+  return {
+    commits: [],
+    branch: null,
+    ahead: null,
+    hasMore: false,
+    loading: false,
+    error: null,
+    loaded: false,
+  };
+}
+
 function makeGitContext() {
   const [store, setStore] = createStore<GitStore>({});
+  const [history, setHistory] = createStore<Record<string, ProjectHistoryState>>(
+    {},
+  );
+  const details = new Map<string, CommitDetail>();
   const unlisteners = new Map<string, UnlistenFn>();
   const timers = new Map<string, number>();
 
@@ -86,6 +138,10 @@ function makeGitContext() {
     const t = window.setTimeout(() => {
       timers.delete(projectPath);
       void fetchNow(projectPath);
+      // A commit changes no file in the working tree, so the History list
+      // would otherwise sit on the pre-commit page until manually refreshed —
+      // which is the exact moment the user wants to look at it.
+      void refreshHistory(projectPath);
     }, REFRESH_DEBOUNCE_MS);
     timers.set(projectPath, t);
   }
@@ -140,11 +196,104 @@ function makeGitContext() {
   async function fetchDiff(
     projectPath: string,
     relPath: string,
+    source: DiffSource = { kind: "worktree" },
   ): Promise<DiffPayload> {
+    if (source.kind === "commit") {
+      return invoke<DiffPayload>("git_diff_commit_file", {
+        projectPath,
+        sha: source.sha,
+        relPath,
+      });
+    }
     return invoke<DiffPayload>("git_diff_file", {
       projectPath,
       relPath,
     });
+  }
+
+  function historyFor(projectPath: string): ProjectHistoryState {
+    return history[projectPath] ?? EMPTY_HISTORY;
+  }
+
+  /** Fetch `count` commits from the top, replacing what's there.
+   *
+   *  Always a single call rather than one per page appended: a refetch after
+   *  a commit has to re-anchor the whole list anyway (everything shifted by
+   *  one), and re-requesting the same count is what keeps a user who pressed
+   *  "Load more" three times from being snapped back to page one. */
+  async function fetchHistory(projectPath: string, count: number) {
+    setHistory(projectPath, "loading", true);
+    try {
+      const payload = await invoke<HistoryPayload>("git_history", {
+        projectPath,
+        skip: 0,
+        limit: count,
+      });
+      setHistory(
+        projectPath,
+        produce((h: ProjectHistoryState) => {
+          h.commits = payload.commits;
+          h.branch = payload.branch;
+          h.ahead = payload.ahead;
+          h.hasMore = payload.has_more;
+          h.loading = false;
+          h.loaded = true;
+          h.error = null;
+        }),
+      );
+    } catch (err) {
+      setHistory(
+        projectPath,
+        produce((h: ProjectHistoryState) => {
+          h.loading = false;
+          h.loaded = true;
+          h.error = String(err);
+        }),
+      );
+    }
+  }
+
+  /** First page, unless one is already loaded. Called when History opens. */
+  async function loadHistory(projectPath: string): Promise<void> {
+    if (!history[projectPath]) setHistory(projectPath, emptyHistory());
+    if (history[projectPath].loaded || history[projectPath].loading) return;
+    await fetchHistory(projectPath, HISTORY_PAGE);
+  }
+
+  async function loadMoreCommits(projectPath: string): Promise<void> {
+    const current = history[projectPath];
+    if (!current || current.loading || !current.hasMore) return;
+    await fetchHistory(projectPath, current.commits.length + HISTORY_PAGE);
+  }
+
+  /** Re-read what's already on screen. No-op until History has been opened,
+   *  so projects whose panel never left Changes pay nothing per fs event. */
+  async function refreshHistory(projectPath: string): Promise<void> {
+    const current = history[projectPath];
+    if (!current?.loaded || current.loading) return;
+    await fetchHistory(
+      projectPath,
+      Math.max(HISTORY_PAGE, current.commits.length),
+    );
+  }
+
+  async function fetchCommitDetail(
+    projectPath: string,
+    sha: string,
+  ): Promise<CommitDetail> {
+    const key = `${projectPath}\u0000${sha}`;
+    const hit = details.get(key);
+    if (hit) return hit;
+    const detail = await invoke<CommitDetail>("git_commit_detail", {
+      projectPath,
+      sha,
+    });
+    if (details.size >= MAX_CACHED_DETAILS) {
+      const oldest = details.keys().next().value;
+      if (oldest !== undefined) details.delete(oldest);
+    }
+    details.set(key, detail);
+    return detail;
   }
 
   /** Manual refetch of git_status + git_summary. Skips if a fetch is already
@@ -174,6 +323,12 @@ function makeGitContext() {
     statusByAbsPath,
     fetchDiff,
     store,
+    // History
+    historyFor,
+    loadHistory,
+    loadMoreCommits,
+    refreshHistory,
+    fetchCommitDetail,
   };
 }
 

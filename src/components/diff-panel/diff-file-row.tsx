@@ -8,6 +8,8 @@ import {
   BADGE_COLOR,
   BADGE_LETTER,
   shortSha,
+  WORKTREE,
+  type DiffSource,
   type FileStatus,
 } from "@/lib/git-status";
 import { createFileOpener } from "./use-file-opener";
@@ -20,6 +22,13 @@ type Props = {
    *  header already says it. Keys (expand, focus, diff fetch) keep the full
    *  project-relative path. */
   stripPrefix?: string;
+  /** Which two sides to diff. Defaults to the working tree; a commit tab
+   *  passes its own sha and the row renders through the identical path. */
+  source?: DiffSource;
+  /** Expand/focus key. Defaults to the path, which is right for the single
+   *  working-tree view — but the same file appears in many commits, and one
+   *  shared key would expand every one of them at once. */
+  expandKey?: string;
 };
 
 function basename(rel: string): string {
@@ -50,7 +59,9 @@ export function DiffFileRow(props: Props) {
    *  look at the file at all. */
   const [notice, setNotice] = createSignal<string | null>(null);
 
-  const expanded = () => panel.isExpanded(props.status.path);
+  const source = () => props.source ?? WORKTREE;
+  const rowKey = () => props.expandKey ?? props.status.path;
+  const expanded = () => panel.isExpanded(rowKey());
 
   /** Path as shown to the user: repo-relative inside a submodule group,
    *  project-relative otherwise. */
@@ -89,7 +100,11 @@ export function DiffFileRow(props: Props) {
       return;
     }
 
-    const payload = await git.fetchDiff(props.projectPath, props.status.path);
+    const payload = await git.fetchDiff(
+      props.projectPath,
+      props.status.path,
+      source(),
+    );
     if (payload.too_large) {
       setNotice("File larger than 512 KB — diff skipped.");
       return;
@@ -100,7 +115,11 @@ export function DiffFileRow(props: Props) {
     }
 
     if (payload.old_contents === null && payload.new_contents === null) {
-      setNotice("File not found on disk or in HEAD.");
+      setNotice(
+        source().kind === "commit"
+          ? "File not found in this commit or its parent."
+          : "File not found on disk or in HEAD.",
+      );
       return;
     }
 
@@ -150,7 +169,7 @@ export function DiffFileRow(props: Props) {
   // Scroll into view when focused from file-tree double-click.
   createEffect(
     on(panel.focused, (f) => {
-      if (f === props.status.path && rowRef) {
+      if (f === rowKey() && rowRef) {
         rowRef.scrollIntoView({ behavior: "smooth", block: "start" });
         panel.clearFocus();
       }
@@ -162,7 +181,7 @@ export function DiffFileRow(props: Props) {
   return (
     <div ref={rowRef} class="border-b border-neutral-800/80">
       <button
-        onClick={() => panel.toggleFile(props.status.path)}
+        onClick={() => panel.toggleFile(rowKey())}
         class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-neutral-900/60 transition"
       >
         {expanded() ? (
