@@ -7,6 +7,45 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 ## [Unreleased]
 
 ### Added
+- **Past commits in the Git panel** ([#88](https://github.com/willywg/klaudio-panels/issues/88)).
+  The panel only ever knew about the working tree, so the moment Claude
+  committed, the tree went clean and the review you were in the middle of
+  disappeared. That is not an edge case here — Claude commits and opens the PR
+  on its own, so by the time you want to look, the changes are already
+  committed.
+
+  The git tab now has a **Changes | History** toggle, the way GitHub Desktop
+  splits its two tabs. History lists the branch's commits — short sha, subject,
+  author, relative time, `+/−` — and **marks the ones that are not pushed yet**,
+  which is the exact state you are left in after Claude commits. Clicking a
+  commit opens it in its own tab with its message and its files, expandable
+  into the same diffs as the working-tree view.
+
+  Commits, not PRs, and deliberately no `gh`: a merged PR is a range of commits
+  the repo already has, and reaching for GitHub would add an external binary
+  that may not be authenticated, a network round-trip, and a dependency on the
+  remote being GitHub — for data git holds locally.
+
+  It cost little because nothing needed reinventing. `DiffPayload` is unchanged:
+  the working-tree view diffs HEAD's blob against the file on disk, a commit
+  diffs its first parent's blob against its own, and the same row component and
+  the same `@pierre/diffs` instance render both. The per-file `+/−` accounting
+  was pulled out of the status walk into one `files_from_diff` rather than
+  copied — a second copy is how the two views would drift into disagreeing
+  about the same file.
+
+  A long commit message — a squash merge's, typically — scrolls inside its own
+  region rather than pushing the file list off the bottom, and the divider
+  between the two is draggable: how much of the message you want to read at a
+  glance is a preference, and it is remembered.
+
+  Details worth knowing: a merge is shown against its **first parent**, as
+  `git show` does, and its list row says `merge` instead of a line count
+  (`git log --stat` omits merge stats for the same reason — the number would
+  describe the branch, not the merge). History covers the project's own repo
+  only; a submodule's history belongs to its own project. And an fs event
+  refreshes the list, so a commit made in the terminal shows up without
+  touching the refresh button.
 - **Clipboard history in the titlebar** ([#79](https://github.com/willywg/klaudio-panels/issues/79),
   PRP 022). Working several projects at once makes the clipboard lossy: Claude
   runs `pbcopy` to hand something over, and before it reaches an email or

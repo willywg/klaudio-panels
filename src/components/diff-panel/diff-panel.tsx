@@ -5,6 +5,7 @@ import {
   FileText,
   FolderOpen,
   GitBranch,
+  GitCommitHorizontal,
   Pencil,
   RotateCw,
   Terminal as TerminalIcon,
@@ -24,7 +25,10 @@ import type { FileStatus } from "@/lib/git-status";
 import { focusTerminal } from "@/lib/terminal-focus-bus";
 import { looksBinaryByExtension } from "@/lib/cm-language";
 import { isAbsoluteish } from "@/lib/resolve-file";
+import { CommitList } from "./commit-list";
+import { CommitTab } from "./commit-tab";
 import { DiffFileRow } from "./diff-file-row";
+import { DiffStyleToggle } from "./diff-style-toggle";
 import { createFileOpener } from "./use-file-opener";
 import { FilePreview } from "./file-preview";
 import { EditorPtyView } from "./editor-pty-view";
@@ -80,6 +84,21 @@ export function DiffPanel(props: Props) {
       };
     });
   });
+
+  const isHistory = () => panel.gitViewFor(props.projectPath) === "history";
+  const history = () => git.historyFor(props.projectPath);
+
+  /** One spinner and one button for both views — which one it drives is
+   *  whichever is on screen. */
+  const busy = () =>
+    isHistory()
+      ? history().loading
+      : !!git.store[props.projectPath]?.loading;
+
+  async function refreshView() {
+    if (isHistory()) await git.refreshHistory(props.projectPath);
+    else await git.refresh(props.projectPath);
+  }
 
   const anyExpanded = () =>
     statuses().some((s) => panel.isExpanded(s.path));
@@ -154,73 +173,93 @@ export function DiffPanel(props: Props) {
           <Match when={activeTab()?.kind === "diff"}>
             <div class="h-full flex flex-col">
               <div class="h-9 shrink-0 border-b border-neutral-800 flex items-center gap-2 px-3">
-                <span class="text-[11px] font-mono text-neutral-500">
-                  {statuses().length} file{statuses().length === 1 ? "" : "s"}
-                </span>
-                <span class="text-[11px] font-mono flex items-center gap-1.5">
-                  <span class="text-emerald-400">+{summary().adds}</span>
-                  <span class="text-rose-400">−{summary().dels}</span>
-                </span>
-                <div class="flex-1" />
                 <div
-                  class="flex items-center rounded border border-neutral-800 overflow-hidden text-[11px]"
+                  class="flex items-center rounded border border-neutral-800 overflow-hidden text-[11px] shrink-0"
                   role="group"
                 >
                   <button
-                    onClick={() => panel.setDiffStyle("unified")}
+                    onClick={() => panel.setGitView(props.projectPath, "changes")}
                     class={
                       "px-2 h-5 transition " +
-                      (panel.diffStyle() === "unified"
-                        ? "bg-neutral-800 text-neutral-100"
-                        : "text-neutral-400 hover:text-neutral-200")
+                      (isHistory()
+                        ? "text-neutral-400 hover:text-neutral-200"
+                        : "bg-neutral-800 text-neutral-100")
                     }
-                    title="Unified diff"
+                    title="Uncommitted changes"
                   >
-                    Unified
+                    Changes
                   </button>
                   <button
-                    onClick={() => panel.setDiffStyle("split")}
+                    onClick={() => panel.setGitView(props.projectPath, "history")}
                     class={
                       "px-2 h-5 transition border-l border-neutral-800 " +
-                      (panel.diffStyle() === "split"
+                      (isHistory()
                         ? "bg-neutral-800 text-neutral-100"
                         : "text-neutral-400 hover:text-neutral-200")
                     }
-                    title="Split diff"
+                    title="Past commits on this branch"
                   >
-                    Split
+                    History
                   </button>
                 </div>
+                <Show
+                  when={!isHistory()}
+                  fallback={
+                    <span class="text-[11px] font-mono text-neutral-500 truncate">
+                      {history().branch ?? ""}
+                    </span>
+                  }
+                >
+                  <span class="text-[11px] font-mono text-neutral-500">
+                    {statuses().length} file{statuses().length === 1 ? "" : "s"}
+                  </span>
+                  <span class="text-[11px] font-mono flex items-center gap-1.5">
+                    <span class="text-emerald-400">+{summary().adds}</span>
+                    <span class="text-rose-400">−{summary().dels}</span>
+                  </span>
+                </Show>
+                <div class="flex-1" />
+                <Show when={!isHistory()}>
+                  <DiffStyleToggle />
+                </Show>
                 <button
-                  onClick={() => void git.refresh(props.projectPath)}
-                  disabled={!!git.store[props.projectPath]?.loading}
+                  onClick={() => void refreshView()}
+                  disabled={busy()}
                   class="w-6 h-6 rounded flex items-center justify-center text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/80 transition disabled:opacity-50 disabled:cursor-not-allowed"
                   title="Refresh"
                 >
                   <RotateCw
                     size={13}
                     strokeWidth={2}
-                    class={
-                      git.store[props.projectPath]?.loading
-                        ? "animate-spin"
-                        : ""
-                    }
+                    class={busy() ? "animate-spin" : ""}
                   />
                 </button>
-                <button
-                  onClick={toggleAll}
-                  class="w-6 h-6 rounded flex items-center justify-center text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/80 transition"
-                  title={anyExpanded() ? "Collapse all" : "Expand all"}
-                >
-                  <Show
-                    when={anyExpanded()}
-                    fallback={<ChevronsUpDown size={13} strokeWidth={2} />}
+                <Show when={!isHistory()}>
+                  <button
+                    onClick={toggleAll}
+                    class="w-6 h-6 rounded flex items-center justify-center text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/80 transition"
+                    title={anyExpanded() ? "Collapse all" : "Expand all"}
                   >
-                    <ChevronsDownUp size={13} strokeWidth={2} />
-                  </Show>
-                </button>
+                    <Show
+                      when={anyExpanded()}
+                      fallback={<ChevronsUpDown size={13} strokeWidth={2} />}
+                    >
+                      <ChevronsDownUp size={13} strokeWidth={2} />
+                    </Show>
+                  </button>
+                </Show>
               </div>
-              <div class="flex-1 min-h-0 overflow-y-auto">
+              <Show when={isHistory()}>
+                <CommitList projectPath={props.projectPath} />
+              </Show>
+              {/* Hidden rather than unmounted: every expanded row owns a
+                  `FileDiff` with its own Shiki highlighter, and tearing them
+                  down to glance at History would drop the scroll position
+                  and re-render the lot on the way back. */}
+              <div
+                class="flex-1 min-h-0 overflow-y-auto"
+                classList={{ hidden: isHistory() }}
+              >
                 <Show
                   when={statuses().length > 0}
                   fallback={
@@ -272,6 +311,15 @@ export function DiffPanel(props: Props) {
                 </Show>
               </div>
             </div>
+          </Match>
+          <Match when={activeTab()?.kind === "commit"}>
+            {(() => {
+              const t = activeTab();
+              if (!t || t.kind !== "commit") return null;
+              return (
+                <CommitTab projectPath={props.projectPath} sha={t.sha} />
+              );
+            })()}
           </Match>
           <Match when={activeTab()?.kind === "file"}>
             {(() => {
@@ -513,17 +561,31 @@ function TabItem(props: {
     if (props.tab.kind === "diff") return "Git changes";
     if (props.tab.kind === "file") return basename(props.tab.path);
     if (props.tab.kind === "edit") return basename(props.tab.path);
+    if (props.tab.kind === "commit") return props.tab.sha.slice(0, 7);
     return `${props.tab.editorId} ${basename(props.tab.path)}`;
   };
   const isDirty = () =>
     props.tab.kind === "edit" &&
     buffers.dirty(props.projectPath, props.tab.path);
 
+  /* The tab shows a basename — which since #85 can belong to a file anywhere
+     on disk — or a seven-character sha. Either way the label alone doesn't
+     say which one, so the full thing lives in the tooltip. */
+  const tabTitle = () => {
+    if (props.tab.kind === "diff") return undefined;
+    if (props.tab.kind === "commit") {
+      return `${props.tab.sha.slice(0, 7)} ${props.tab.subject}`.trim();
+    }
+    return props.tab.path;
+  };
+
   // Drag publisher: file/editor tabs carry a `rel` path; the diff tab does
   // not and returns null so the drag never starts on it. Absolute path is
   // computed inline so we don't bind to a stale projectPath.
   const drag = createInternalDrag(() => {
-    if (props.tab.kind === "diff") return null;
+    // Neither the diff tab nor a commit tab names a file on disk, so there
+    // is nothing to hand a drop target and the drag never starts.
+    if (props.tab.kind === "diff" || props.tab.kind === "commit") return null;
     const base = props.projectPath.endsWith("/")
       ? props.projectPath.slice(0, -1)
       : props.projectPath;
@@ -571,6 +633,13 @@ function TabItem(props: {
         <Match when={props.tab.kind === "edit"}>
           <Pencil size={12} strokeWidth={1.75} class="shrink-0 text-indigo-400" />
         </Match>
+        <Match when={props.tab.kind === "commit"}>
+          <GitCommitHorizontal
+            size={12}
+            strokeWidth={1.75}
+            class="shrink-0 text-amber-400"
+          />
+        </Match>
       </Switch>
       <Show when={isDirty()}>
         <span
@@ -580,13 +649,7 @@ function TabItem(props: {
           •
         </span>
       </Show>
-      {/* The tab shows a basename, which since #85 can belong to a file
-          anywhere on disk — the full path is the only thing that says which
-          one, so it lives in the tooltip. */}
-      <span
-        class="truncate max-w-[180px]"
-        title={props.tab.kind === "diff" ? undefined : props.tab.path}
-      >
+      <span class="truncate max-w-[180px]" title={tabTitle()}>
         {label()}
       </span>
       <Show when={props.tab.kind !== "diff"}>

@@ -1,8 +1,11 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use git2::{Delta, DiffOptions, Repository, Status, StatusOptions};
+use git2::{
+    BranchType, Commit, Delta, Diff, DiffOptions, Oid, Repository, Sort, Status, StatusOptions,
+    Tree,
+};
 use serde::Serialize;
 
 const MAX_DIFF_BYTES: usize = 512 * 1024;
@@ -112,6 +115,77 @@ fn classify_delta(delta: Delta) -> FileStatusKind {
     }
 }
 
+/// One row per delta, with `+`/`−` counts summed from the line callback.
+///
+/// Shared by the working-tree status and a commit's file list: the two differ
+/// only in which trees the diff was built from, and in whether `staged` means
+/// anything (for a commit it does not, and the caller passes a closure saying
+/// so). A second copy of this accounting is how the two views would drift into
+/// disagreeing about the same file.
+fn files_from_diff(
+    diff: &Diff<'_>,
+    staged_for: &dyn Fn(&str) -> bool,
+) -> Result<Vec<FileStatus>, String> {
+    let rows: RefCell<HashMap<String, FileStatus>> = RefCell::new(HashMap::new());
+
+    diff.foreach(
+        &mut |delta, _progress| {
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
+                .and_then(|p| p.to_str())
+                .map(String::from)
+                .unwrap_or_default();
+            if path.is_empty() {
+                return true;
+            }
+            let kind = classify_delta(delta.status());
+            let is_binary = delta.new_file().is_binary() || delta.old_file().is_binary();
+            let staged = staged_for(&path);
+            rows.borrow_mut().insert(
+                path.clone(),
+                FileStatus {
+                    path,
+                    repo: String::new(),
+                    kind,
+                    staged,
+                    adds: 0,
+                    dels: 0,
+                    is_binary,
+                    submodule: None,
+                },
+            );
+            true
+        },
+        None,
+        None,
+        Some(&mut |delta, _hunk, line| {
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
+                .and_then(|p| p.to_str())
+                .map(String::from)
+                .unwrap_or_default();
+            if let Some(row) = rows.borrow_mut().get_mut(&path) {
+                match line.origin() {
+                    '+' => row.adds += 1,
+                    '-' => row.dels += 1,
+                    _ => {}
+                }
+            }
+            true
+        }),
+    )
+    .map_err(|e| e.to_string())?;
+
+    let mut out: Vec<FileStatus> = rows.into_inner().into_values().collect();
+    out.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(out)
+}
+
+
 /// Status of a single repo, with paths relative to *that* repo's workdir.
 /// `repo` is left empty here; `scan_repo` rewrites both fields once it knows
 /// where this repo sits inside the project.
@@ -153,74 +227,20 @@ fn raw_status(repo: &Repository) -> Result<Vec<FileStatus>, String> {
         .diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut diff_opts))
         .map_err(|e| e.to_string())?;
 
-    let rows: RefCell<HashMap<String, FileStatus>> = RefCell::new(HashMap::new());
-
-    diff.foreach(
-        &mut |delta, _progress| {
-            let path = delta
-                .new_file()
-                .path()
-                .or_else(|| delta.old_file().path())
-                .and_then(|p| p.to_str())
-                .map(String::from)
-                .unwrap_or_default();
-            if path.is_empty() {
-                return true;
-            }
-            let kind = classify_delta(delta.status());
-            let is_binary = delta.new_file().is_binary() || delta.old_file().is_binary();
-            let staged = flags_by_path
-                .get(&path)
-                .map(|f| {
-                    f.intersects(
-                        Status::INDEX_NEW
-                            | Status::INDEX_MODIFIED
-                            | Status::INDEX_DELETED
-                            | Status::INDEX_RENAMED
-                            | Status::INDEX_TYPECHANGE,
-                    )
-                })
-                .unwrap_or(false);
-            rows.borrow_mut().insert(
-                path.clone(),
-                FileStatus {
-                    path,
-                    repo: String::new(),
-                    kind,
-                    staged,
-                    adds: 0,
-                    dels: 0,
-                    is_binary,
-                    submodule: None,
-                },
-            );
-            true
-        },
-        None,
-        None,
-        Some(&mut |delta, _hunk, line| {
-            let path = delta
-                .new_file()
-                .path()
-                .or_else(|| delta.old_file().path())
-                .and_then(|p| p.to_str())
-                .map(String::from)
-                .unwrap_or_default();
-            if let Some(row) = rows.borrow_mut().get_mut(&path) {
-                match line.origin() {
-                    '+' => row.adds += 1,
-                    '-' => row.dels += 1,
-                    _ => {}
-                }
-            }
-            true
-        }),
-    )
-    .map_err(|e| e.to_string())?;
-
-    let mut out: Vec<FileStatus> = rows.into_inner().into_values().collect();
-    out.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(out)
+    files_from_diff(&diff, &|path| {
+        flags_by_path
+            .get(path)
+            .map(|f| {
+                f.intersects(
+                    Status::INDEX_NEW
+                        | Status::INDEX_MODIFIED
+                        | Status::INDEX_DELETED
+                        | Status::INDEX_RENAMED
+                        | Status::INDEX_TYPECHANGE,
+                )
+            })
+            .unwrap_or(false)
+    })
 }
 
 /// Branch label for a repo header. Detached HEAD gets the short sha instead
@@ -391,6 +411,53 @@ fn repo_relative(repo: &Repository, full: &Path, fallback: &str) -> PathBuf {
     PathBuf::from(fallback)
 }
 
+/// One side of a diff, from its raw bytes: the text, or why there isn't any.
+/// `None` bytes mean the side doesn't exist — the file was added, or deleted.
+fn diff_side(bytes: Option<Vec<u8>>) -> DiffSide {
+    match bytes {
+        None => DiffSide::default(),
+        Some(b) if b.len() > MAX_DIFF_BYTES => DiffSide {
+            too_large: true,
+            ..DiffSide::default()
+        },
+        Some(b) if is_binary_bytes(&b) => DiffSide {
+            is_binary: true,
+            ..DiffSide::default()
+        },
+        Some(b) => DiffSide {
+            contents: Some(String::from_utf8_lossy(&b).into_owned()),
+            ..DiffSide::default()
+        },
+    }
+}
+
+#[derive(Default)]
+struct DiffSide {
+    contents: Option<String>,
+    is_binary: bool,
+    too_large: bool,
+}
+
+fn payload(path: String, old: DiffSide, new: DiffSide) -> DiffPayload {
+    DiffPayload {
+        path,
+        old_contents: old.contents,
+        new_contents: new.contents,
+        is_binary: old.is_binary || new.is_binary,
+        too_large: old.too_large || new.too_large,
+    }
+}
+
+/// A file's bytes as of some tree, or `None` when the tree doesn't have it.
+fn tree_blob(repo: &Repository, tree: Option<&Tree<'_>>, path: &Path) -> Option<Vec<u8>> {
+    tree?
+        .get_path(path)
+        .ok()
+        .and_then(|entry| entry.to_object(repo).ok())
+        .and_then(|obj| obj.into_blob().ok())
+        .map(|blob| blob.content().to_vec())
+}
+
 #[tauri::command]
 pub fn git_diff_file(
     project_path: String,
@@ -409,49 +476,316 @@ pub fn git_diff_file(
     let rel = rel_buf.as_path();
 
     // Workdir side — may be absent if the file was deleted.
-    let (new_contents, new_is_binary, new_too_large) = match std::fs::read(&full) {
-        Ok(bytes) => {
-            if bytes.len() > MAX_DIFF_BYTES {
-                (None, false, true)
-            } else if is_binary_bytes(&bytes) {
-                (None, true, false)
-            } else {
-                (Some(String::from_utf8_lossy(&bytes).into_owned()), false, false)
-            }
-        }
-        Err(_) => (None, false, false),
-    };
+    let new_side = diff_side(std::fs::read(&full).ok());
+    // HEAD side — may be absent on a fresh repo or for untracked files.
+    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+    let old_side = diff_side(tree_blob(&repo, head_tree.as_ref(), rel));
 
-    // HEAD side — may be absent on fresh repo or for untracked files.
-    let head_blob_bytes = repo
-        .head()
+    Ok(payload(rel_path, old_side, new_side))
+}
+
+/// One commit in the history list.
+#[derive(Debug, Serialize, Clone)]
+pub struct CommitInfo {
+    pub sha: String,
+    pub short_sha: String,
+    pub subject: String,
+    pub author: String,
+    /// Committer time as Unix seconds. Formatting is the frontend's job —
+    /// it already renders relative times for sessions.
+    pub timestamp: i64,
+    /// Not yet on the branch's upstream. Always false when there is no
+    /// upstream to compare against, since then nothing is knowably pushed.
+    pub unpushed: bool,
+    /// A merge has more than one parent; the diff we show is against the
+    /// first, so the panel can say as much rather than quietly picking.
+    pub parent_count: usize,
+    /// `files_changed / +/ −` against the first parent, or `None` for a
+    /// merge. `git log --stat` leaves merges out for the same reason: the
+    /// first-parent diff of a merge restates every commit it brought in, so
+    /// the number describes the branch, not the merge.
+    pub stats: Option<CommitStats>,
+}
+
+#[derive(Debug, Serialize, Clone, Copy)]
+pub struct CommitStats {
+    pub files: usize,
+    pub adds: usize,
+    pub dels: usize,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct HistoryPayload {
+    pub commits: Vec<CommitInfo>,
+    pub branch: Option<String>,
+    /// Commits ahead of upstream, or `None` when there is no upstream — a
+    /// local-only branch, or a detached HEAD.
+    pub ahead: Option<usize>,
+    /// Another page exists past what was returned.
+    pub has_more: bool,
+}
+
+/// A commit's message and the files it touched.
+#[derive(Debug, Serialize, Clone)]
+pub struct CommitDetail {
+    pub sha: String,
+    pub short_sha: String,
+    pub subject: String,
+    /// Message past the subject line, trimmed. Empty when there is none.
+    pub body: String,
+    pub author: String,
+    pub email: String,
+    pub timestamp: i64,
+    pub parent_count: usize,
+    pub files: Vec<FileStatus>,
+    pub adds: usize,
+    pub dels: usize,
+}
+
+/// Largest page `git_history` will hand back in one call. The list is
+/// virtual-scroll-free and every row costs a `find_commit`, so a caller
+/// asking for ten thousand gets clamped rather than obeyed.
+const MAX_HISTORY_PAGE: usize = 200;
+
+/// How far back we bother resolving "is this pushed yet?". A branch that has
+/// drifted this far from its remote is past the point where marking each row
+/// individually tells you anything; the `ahead` count still does.
+const MAX_UNPUSHED_SCAN: usize = 1000;
+
+fn short_sha(sha: &str) -> String {
+    sha[..7.min(sha.len())].to_string()
+}
+
+/// The upstream's tip, or `None` when the branch has none — a local-only
+/// branch or a detached HEAD, both of which have nothing to be "ahead" of.
+fn upstream_oid(repo: &Repository) -> Option<Oid> {
+    if repo.head_detached().unwrap_or(false) {
+        return None;
+    }
+    let head = repo.head().ok()?;
+    let name = head.shorthand()?;
+    let branch = repo.find_branch(name, BranchType::Local).ok()?;
+    branch.upstream().ok()?.get().target()
+}
+
+/// Commits on HEAD the upstream doesn't have yet, plus how many there are.
+///
+/// The set is walked rather than inferred from the count: `ahead` alone would
+/// only identify the unpushed commits on a linear branch, and merging the
+/// remote in is exactly when you most want to know what is still local.
+fn unpushed_set(repo: &Repository, head_oid: Oid) -> (HashSet<Oid>, Option<usize>) {
+    let Some(upstream) = upstream_oid(repo) else {
+        return (HashSet::new(), None);
+    };
+    let ahead = repo
+        .graph_ahead_behind(head_oid, upstream)
         .ok()
-        .and_then(|h| h.peel_to_tree().ok())
-        .and_then(|tree| tree.get_path(rel).ok())
-        .and_then(|entry| entry.to_object(&repo).ok())
-        .and_then(|obj| obj.into_blob().ok())
-        .map(|blob| blob.content().to_vec());
-
-    let (old_contents, old_is_binary, old_too_large) = match head_blob_bytes {
-        Some(bytes) => {
-            if bytes.len() > MAX_DIFF_BYTES {
-                (None, false, true)
-            } else if is_binary_bytes(&bytes) {
-                (None, true, false)
-            } else {
-                (Some(String::from_utf8_lossy(&bytes).into_owned()), false, false)
+        .map(|(a, _)| a);
+    let mut set = HashSet::new();
+    if let Ok(mut walk) = repo.revwalk() {
+        if walk.push(head_oid).is_ok() && walk.hide(upstream).is_ok() {
+            for oid in walk.take(MAX_UNPUSHED_SCAN).flatten() {
+                set.insert(oid);
             }
         }
-        None => (None, false, false),
+    }
+    (set, ahead)
+}
+
+/// Resolve a full or abbreviated sha to a commit.
+///
+/// Deliberately not `revparse_single`: that accepts a whole revspec grammar
+/// (`HEAD~3`, `:/subject`, `branch@{yesterday}`), and the only thing that
+/// should ever reach here is an id this module handed the frontend. Rejecting
+/// anything non-hex keeps the command's input surface to exactly that.
+fn find_commit<'r>(repo: &'r Repository, sha: &str) -> Result<Commit<'r>, String> {
+    if sha.len() < 4 || sha.len() > 40 || !sha.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("invalid commit id".to_string());
+    }
+    let obj = repo
+        .revparse_single(sha)
+        .map_err(|_| "no such commit".to_string())?;
+    obj.peel_to_commit()
+        .map_err(|_| "not a commit".to_string())
+}
+
+/// Totals for a commit against its first parent. `None` for a merge.
+///
+/// One `diff_tree_to_tree` per row: the same work `git log --stat` does, and
+/// bounded by the page size the caller is already clamped to.
+fn commit_stats(repo: &Repository, commit: &Commit<'_>) -> Option<CommitStats> {
+    if commit.parent_count() > 1 {
+        return None;
+    }
+    let new_tree = commit.tree().ok()?;
+    let old_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
+    let mut opts = DiffOptions::new();
+    opts.context_lines(0);
+    let diff = repo
+        .diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), Some(&mut opts))
+        .ok()?;
+    let stats = diff.stats().ok()?;
+    Some(CommitStats {
+        files: stats.files_changed(),
+        adds: stats.insertions(),
+        dels: stats.deletions(),
+    })
+}
+
+/// The trees a commit is shown as the difference between.
+///
+/// A merge is diffed against its **first parent** — what `git show` does, and
+/// the only choice that makes "what did this commit change" answerable at all
+/// (against all parents, everything looks unchanged on one side or the other).
+/// A root commit has no parent, so every line in it is new.
+fn commit_trees<'r>(
+    commit: &Commit<'r>,
+) -> Result<(Option<Tree<'r>>, Tree<'r>), String> {
+    let new_tree = commit.tree().map_err(|e| e.to_string())?;
+    let old_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
+    Ok((old_tree, new_tree))
+}
+
+/// Commits reachable from HEAD, newest first, one page at a time.
+///
+/// The project's **own** repo only. A nested repo's history is its own
+/// project's to show, and `git_status`' habit of descending into submodules
+/// would produce a single list interleaving two unrelated histories.
+#[tauri::command]
+pub fn git_history(
+    project_path: String,
+    skip: usize,
+    limit: usize,
+) -> Result<HistoryPayload, String> {
+    let repo = Repository::open(&project_path).map_err(|e| e.to_string())?;
+    let branch = head_label(&repo);
+
+    // A repo with no commits yet has a HEAD that resolves to nothing. That's
+    // an empty history, not a failure — `git log` says the same thing.
+    let Some(head_oid) = repo.head().ok().and_then(|h| h.target()) else {
+        return Ok(HistoryPayload {
+            commits: Vec::new(),
+            branch,
+            ahead: None,
+            has_more: false,
+        });
     };
 
-    Ok(DiffPayload {
-        path: rel_path,
-        old_contents,
-        new_contents,
-        is_binary: new_is_binary || old_is_binary,
-        too_large: new_too_large || old_too_large,
+    let (unpushed, ahead) = unpushed_set(&repo, head_oid);
+    let limit = limit.clamp(1, MAX_HISTORY_PAGE);
+
+    let mut walk = repo.revwalk().map_err(|e| e.to_string())?;
+    walk.set_sorting(Sort::TOPOLOGICAL | Sort::TIME)
+        .map_err(|e| e.to_string())?;
+    walk.push(head_oid).map_err(|e| e.to_string())?;
+
+    let mut commits = Vec::with_capacity(limit);
+    let mut has_more = false;
+    for oid in walk.skip(skip).flatten() {
+        // Read one past the page so "load more" knows whether to offer
+        // itself, without a second walk to count the rest.
+        if commits.len() == limit {
+            has_more = true;
+            break;
+        }
+        let Ok(commit) = repo.find_commit(oid) else {
+            continue;
+        };
+        let sha = oid.to_string();
+        commits.push(CommitInfo {
+            short_sha: short_sha(&sha),
+            sha,
+            subject: commit.summary().unwrap_or_default().to_string(),
+            author: commit
+                .author()
+                .name()
+                .unwrap_or_default()
+                .to_string(),
+            timestamp: commit.time().seconds(),
+            unpushed: unpushed.contains(&oid),
+            parent_count: commit.parent_count(),
+            stats: commit_stats(&repo, &commit),
+        });
+    }
+
+    Ok(HistoryPayload {
+        commits,
+        branch,
+        ahead,
+        has_more,
     })
+}
+
+/// A commit's message plus the files it touched, with per-file `+`/`−`.
+#[tauri::command]
+pub fn git_commit_detail(
+    project_path: String,
+    sha: String,
+) -> Result<CommitDetail, String> {
+    let repo = Repository::open(&project_path).map_err(|e| e.to_string())?;
+    let commit = find_commit(&repo, &sha)?;
+    let (old_tree, new_tree) = commit_trees(&commit)?;
+
+    let mut opts = DiffOptions::new();
+    opts.context_lines(0);
+    let diff = repo
+        .diff_tree_to_tree(old_tree.as_ref(), Some(&new_tree), Some(&mut opts))
+        .map_err(|e| e.to_string())?;
+    // `staged` has no meaning for a commit: everything in it is committed.
+    let files = files_from_diff(&diff, &|_| false)?;
+    let (adds, dels) = files
+        .iter()
+        .fold((0usize, 0usize), |(a, d), f| (a + f.adds, d + f.dels));
+
+    let full = commit.id().to_string();
+    let message = commit.message().unwrap_or_default();
+    let subject = commit.summary().unwrap_or_default().to_string();
+    let body = message
+        .strip_prefix(&subject)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    // Bound before the struct literal: a `Signature` borrows the commit, and
+    // as a temporary in the tail expression it would outlive it.
+    let author = commit.author();
+    let name = author.name().unwrap_or_default().to_string();
+    let email = author.email().unwrap_or_default().to_string();
+
+    Ok(CommitDetail {
+        short_sha: short_sha(&full),
+        sha: full,
+        subject,
+        body,
+        author: name,
+        email,
+        timestamp: commit.time().seconds(),
+        parent_count: commit.parent_count(),
+        files,
+        adds,
+        dels,
+    })
+}
+
+/// One file as the commit changed it: the parent's blob against the commit's.
+///
+/// Same `DiffPayload` the working-tree view renders, so the panel draws a
+/// historical diff through exactly the same path as a live one.
+#[tauri::command]
+pub fn git_diff_commit_file(
+    project_path: String,
+    sha: String,
+    rel_path: String,
+) -> Result<DiffPayload, String> {
+    let repo = Repository::open(&project_path).map_err(|e| e.to_string())?;
+    let commit = find_commit(&repo, &sha)?;
+    let (old_tree, new_tree) = commit_trees(&commit)?;
+    let rel = Path::new(&rel_path);
+
+    let old_side = diff_side(tree_blob(&repo, old_tree.as_ref(), rel));
+    let new_side = diff_side(tree_blob(&repo, Some(&new_tree), rel));
+
+    Ok(payload(rel_path, old_side, new_side))
 }
 
 #[cfg(test)]
@@ -542,6 +876,217 @@ mod tests {
         );
         git(&root, &["commit", "-qm", "add submodule"]);
         (root, child)
+    }
+
+    /// A repo with `n` commits, each adding one line to `f.txt`.
+    fn linear_repo(tmp: &TempDir, label: &str, n: usize) -> PathBuf {
+        let root = tmp.path().join(label);
+        init_repo(&root);
+        let mut body = String::new();
+        for i in 0..n {
+            body.push_str(&format!("line {i}\n"));
+            fs::write(root.join("f.txt"), &body).unwrap();
+            git(&root, &["add", "."]);
+            git(&root, &["commit", "-qm", &format!("commit {i}")]);
+        }
+        root
+    }
+
+    fn history(root: &Path, skip: usize, limit: usize) -> HistoryPayload {
+        git_history(root.to_str().unwrap().to_string(), skip, limit).unwrap()
+    }
+
+    #[test]
+    fn history_lists_commits_newest_first() {
+        let tmp = TempDir::new("history");
+        let root = linear_repo(&tmp, "r", 3);
+
+        let payload = history(&root, 0, 10);
+        let subjects: Vec<&str> = payload.commits.iter().map(|c| c.subject.as_str()).collect();
+        assert_eq!(subjects, vec!["commit 2", "commit 1", "commit 0"]);
+        assert_eq!(payload.branch.as_deref(), Some("main"));
+        assert!(!payload.has_more);
+        assert_eq!(payload.commits[0].short_sha.len(), 7);
+        assert_eq!(payload.commits[0].parent_count, 1);
+        let stats = payload.commits[0].stats.expect("a plain commit has stats");
+        assert_eq!((stats.files, stats.adds, stats.dels), (1, 1, 0));
+        // No remote configured, so "pushed" is not a question we can answer.
+        assert_eq!(payload.ahead, None);
+        assert!(payload.commits.iter().all(|c| !c.unpushed));
+    }
+
+    #[test]
+    fn history_pages_and_says_when_more_is_left() {
+        let tmp = TempDir::new("history-page");
+        let root = linear_repo(&tmp, "r", 5);
+
+        let first = history(&root, 0, 2);
+        assert_eq!(first.commits.len(), 2);
+        assert!(first.has_more, "more commits exist past the first page");
+
+        let second = history(&root, 2, 2);
+        assert_eq!(
+            second.commits[0].subject, "commit 2",
+            "the second page continues where the first stopped"
+        );
+
+        let last = history(&root, 4, 2);
+        assert_eq!(last.commits.len(), 1);
+        assert!(!last.has_more, "the final page must not offer another");
+    }
+
+    #[test]
+    fn an_empty_repo_has_an_empty_history_rather_than_an_error() {
+        let tmp = TempDir::new("history-empty");
+        let root = tmp.path().join("fresh");
+        init_repo(&root);
+
+        // HEAD exists as a symref pointing at nothing. `git log` calls this
+        // an empty history, and so do we — a hard error would make the panel
+        // look broken on a repo the user just created.
+        let payload = history(&root, 0, 10);
+        assert!(payload.commits.is_empty());
+        assert!(!payload.has_more);
+    }
+
+    #[test]
+    fn commits_above_the_upstream_are_marked_unpushed() {
+        let tmp = TempDir::new("history-ahead");
+        let root = linear_repo(&tmp, "r", 2);
+        let bare = tmp.path().join("origin.git");
+        fs::create_dir_all(&bare).unwrap();
+        git(&bare, &["init", "-q", "--bare"]);
+        git(&root, &["remote", "add", "origin", bare.to_str().unwrap()]);
+        git(&root, &["push", "-q", "-u", "origin", "main"]);
+
+        fs::write(root.join("g.txt"), "new\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-qm", "after push"]);
+
+        let payload = history(&root, 0, 10);
+        assert_eq!(payload.ahead, Some(1));
+        // Exactly the one commit made after the push, and not the ones the
+        // remote already has.
+        let unpushed: Vec<&str> = payload
+            .commits
+            .iter()
+            .filter(|c| c.unpushed)
+            .map(|c| c.subject.as_str())
+            .collect();
+        assert_eq!(unpushed, vec!["after push"]);
+    }
+
+    #[test]
+    fn commit_detail_reports_the_files_that_commit_touched() {
+        let tmp = TempDir::new("detail");
+        let root = linear_repo(&tmp, "r", 1);
+        fs::write(root.join("added.txt"), "a\nb\n").unwrap();
+        fs::write(root.join("f.txt"), "changed\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-qm", "subject line\n\nbody line one\nbody line two"]);
+
+        let head = history(&root, 0, 1).commits[0].sha.clone();
+        let detail =
+            git_commit_detail(root.to_str().unwrap().to_string(), head.clone()).unwrap();
+
+        let paths: Vec<&str> = detail.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["added.txt", "f.txt"]);
+        assert_eq!(detail.subject, "subject line");
+        assert_eq!(detail.body, "body line one\nbody line two");
+        assert_eq!(detail.sha, head);
+        // +2 for the new file, +1/−1 for the rewritten one.
+        assert_eq!(detail.adds, 3);
+        assert_eq!(detail.dels, 1);
+        // Nothing in a commit is "staged" — it is already in.
+        assert!(detail.files.iter().all(|f| !f.staged));
+    }
+
+    #[test]
+    fn a_merge_is_shown_against_its_first_parent() {
+        let tmp = TempDir::new("merge");
+        let root = linear_repo(&tmp, "r", 1);
+        git(&root, &["checkout", "-q", "-b", "side"]);
+        fs::write(root.join("side.txt"), "s\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-qm", "side work"]);
+        git(&root, &["checkout", "-q", "main"]);
+        fs::write(root.join("main.txt"), "m\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-qm", "main work"]);
+        git(&root, &["merge", "-q", "--no-ff", "-m", "merge side", "side"]);
+
+        let head = history(&root, 0, 1).commits[0].sha.clone();
+        assert_eq!(
+            history(&root, 0, 1).commits[0].parent_count,
+            2,
+            "the panel needs to know this is a merge"
+        );
+        assert!(
+            history(&root, 0, 1).commits[0].stats.is_none(),
+            "a merge's first-parent stats restate the branch, so we don't show them"
+        );
+        let detail = git_commit_detail(root.to_str().unwrap().to_string(), head).unwrap();
+        // Against the first parent (main), the merge brings in side's file
+        // and nothing else. Against the second it would look empty.
+        let paths: Vec<&str> = detail.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["side.txt"]);
+    }
+
+    #[test]
+    fn a_commits_file_diff_uses_the_parent_as_the_old_side() {
+        let tmp = TempDir::new("commit-diff");
+        let root = linear_repo(&tmp, "r", 2);
+        let head = history(&root, 0, 1).commits[0].sha.clone();
+
+        let payload = git_diff_commit_file(
+            root.to_str().unwrap().to_string(),
+            head,
+            "f.txt".to_string(),
+        )
+        .unwrap();
+        assert_eq!(payload.old_contents.as_deref(), Some("line 0\n"));
+        assert_eq!(payload.new_contents.as_deref(), Some("line 0\nline 1\n"));
+        assert!(!payload.is_binary);
+        assert!(!payload.too_large);
+    }
+
+    #[test]
+    fn a_root_commit_has_no_old_side() {
+        let tmp = TempDir::new("root-commit");
+        let root = linear_repo(&tmp, "r", 1);
+        let first = history(&root, 0, 10).commits.pop().unwrap();
+
+        let payload = git_diff_commit_file(
+            root.to_str().unwrap().to_string(),
+            first.sha,
+            "f.txt".to_string(),
+        )
+        .unwrap();
+        // No parent, so every line is new — the panel renders it all-added
+        // rather than showing a blank diff.
+        assert_eq!(payload.old_contents, None);
+        assert_eq!(payload.new_contents.as_deref(), Some("line 0\n"));
+    }
+
+    #[test]
+    fn only_a_hex_object_id_is_accepted_as_a_commit() {
+        let tmp = TempDir::new("revspec");
+        let root = linear_repo(&tmp, "r", 2);
+        let path = root.to_str().unwrap().to_string();
+
+        // git's revspec grammar would happily resolve all of these. The
+        // command's input is an id this module handed out, so anything else
+        // is refused rather than interpreted.
+        for bad in ["HEAD", "HEAD~1", "main", ":/commit", "", "zzzzzzz"] {
+            assert!(
+                git_commit_detail(path.clone(), bad.to_string()).is_err(),
+                "{bad:?} should not resolve to a commit"
+            );
+        }
+
+        // An abbreviated id still works — it is hex, and it is ours.
+        let head = history(&root, 0, 1).commits[0].short_sha.clone();
+        assert!(git_commit_detail(path, head).is_ok());
     }
 
     #[test]

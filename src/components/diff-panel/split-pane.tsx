@@ -87,3 +87,71 @@ export function SplitDivider(props: Props) {
     />
   );
 }
+
+type StackProps = {
+  /** Current height of the pane above this divider, in px. */
+  height: number;
+  onResize: (nextHeight: number) => void;
+  onResizeEnd: () => void;
+  min: number;
+  /** Read at drag time, not at mount: the ceiling depends on how tall the
+   *  panel currently is, and the panel is itself resizable. */
+  max: () => number;
+};
+
+/** The horizontal sibling of `SplitDivider`: a 4px handle for redistributing
+ *  height between two stacked panes. Same pointer-capture approach, so the
+ *  drag survives the cursor leaving the hit area.
+ *
+ *  Height is tracked as a delta from where the drag started rather than from
+ *  the pointer's absolute position: the handle rarely sits flush against the
+ *  pane it resizes (padding, borders), and measuring absolutely makes the
+ *  pane's edge trail the cursor by however much sits between them.
+ */
+export function StackDivider(props: StackProps) {
+  const [dragging, setDragging] = createSignal(false);
+  let startY = 0;
+  let startHeight = 0;
+
+  function onPointerDown(e: PointerEvent) {
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    startY = e.clientY;
+    startHeight = props.height;
+    setDragging(true);
+  }
+
+  function onPointerMove(e: PointerEvent) {
+    if (!dragging()) return;
+    const proposed = startHeight + (e.clientY - startY);
+    props.onResize(Math.max(props.min, Math.min(proposed, props.max())));
+  }
+
+  function onPointerUp(e: PointerEvent) {
+    if (!dragging()) return;
+    setDragging(false);
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+    props.onResizeEnd();
+  }
+
+  onCleanup(() => setDragging(false));
+
+  return (
+    <div
+      class={
+        "h-1 cursor-ns-resize shrink-0 select-none transition-colors " +
+        (dragging()
+          ? "bg-indigo-500/40"
+          : "bg-transparent hover:bg-neutral-700/60")
+      }
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+    />
+  );
+}

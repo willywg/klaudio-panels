@@ -36,3 +36,28 @@ export function setDiffPanelWidth(projectPath: string, px: number): void {
     // ignore
   }
 }
+
+const COMMIT_MESSAGE_HEIGHT = "commitMessageHeight";
+
+/** How much room a commit message gets before it scrolls, in px.
+ *
+ *  Not keyed by project: it says how much of a commit message you want to
+ *  read at a glance, which is about you and not about the repo. */
+export function getCommitMessageHeight(): number | null {
+  try {
+    const raw = localStorage.getItem(COMMIT_MESSAGE_HEIGHT);
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+export function setCommitMessageHeight(px: number): void {
+  try {
+    localStorage.setItem(COMMIT_MESSAGE_HEIGHT, String(Math.round(px)));
+  } catch {
+    // ignore
+  }
+}

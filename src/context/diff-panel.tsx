@@ -17,6 +17,11 @@ const DEFAULT_WIDTH = 640;
 
 export type DiffStyle = "unified" | "split";
 
+/** Which half of the git tab is showing: the working tree, or the branch's
+ *  commits. Two views of one tab rather than two tabs, the way GitHub
+ *  Desktop splits Changes and History. */
+export type GitView = "changes" | "history";
+
 export type PanelTab =
   | { kind: "diff" }
   | { kind: "file"; path: string; line?: number; openedAt: number }
@@ -27,12 +32,21 @@ export type PanelTab =
       ptyId: string;
       openedAt: number;
     }
-  | { kind: "edit"; path: string; openedAt: number };
+  | { kind: "edit"; path: string; openedAt: number }
+  | {
+      kind: "commit";
+      sha: string;
+      /** Carried so the tab can label and title itself without refetching
+       *  the detail just to know what the commit was called. */
+      subject: string;
+      openedAt: number;
+    };
 
 export function tabKey(t: PanelTab): string {
   if (t.kind === "diff") return "diff";
   if (t.kind === "file") return `file:${t.path}`;
   if (t.kind === "edit") return `edit:${t.path}`;
+  if (t.kind === "commit") return `commit:${t.sha}`;
   return `editor:${t.editorId}:${t.path}`;
 }
 
@@ -45,10 +59,13 @@ export type CloseGuard = (tab: PanelTab) => Promise<"close" | "keep">;
 type ProjectPanelState = {
   tabs: PanelTab[];
   activeKey: string;
+  /** Deliberately not persisted. Changes is what you want on the session you
+   *  are about to start; History is where you go for a specific question. */
+  gitView: GitView;
 };
 
 function freshState(): ProjectPanelState {
-  return { tabs: [{ kind: "diff" }], activeKey: "diff" };
+  return { tabs: [{ kind: "diff" }], activeKey: "diff", gitView: "changes" };
 }
 
 function makeDiffPanelContext() {
@@ -103,6 +120,40 @@ function makeDiffPanelContext() {
   function setActiveTab(projectPath: string, key: string) {
     ensureProject(projectPath);
     setPanels(projectPath, "activeKey", key);
+  }
+
+  function gitViewFor(projectPath: string): GitView {
+    ensureProject(projectPath);
+    return panels[projectPath].gitView;
+  }
+
+  function setGitView(projectPath: string, view: GitView) {
+    ensureProject(projectPath);
+    setPanels(projectPath, "gitView", view);
+  }
+
+  /** Open (or re-focus) a tab showing one commit. */
+  function openCommit(projectPath: string, sha: string, subject: string) {
+    ensureProject(projectPath);
+    const key = `commit:${sha}`;
+    const existing = panels[projectPath].tabs.find((t) => tabKey(t) === key);
+    if (!existing) {
+      setPanels(
+        projectPath,
+        produce((state: ProjectPanelState) => {
+          state.tabs.push({
+            kind: "commit",
+            sha,
+            subject,
+            openedAt: Date.now(),
+          });
+          state.activeKey = key;
+        }),
+      );
+    } else {
+      setPanels(projectPath, "activeKey", key);
+    }
+    if (!isOpen(projectPath)) writeOpen(projectPath, true);
   }
 
   function openFile(projectPath: string, rel: string, line?: number) {
@@ -344,6 +395,23 @@ function makeDiffPanelContext() {
     setFocused(null);
   }
 
+  /** Expand or collapse a known set of keys in one write.
+   *
+   *  `expandAll`/`collapseAll` replace the whole set, which is right for the
+   *  one working-tree list but would fold every other view along with it.
+   *  Toggling each key separately instead costs a store write and a render
+   *  per file. */
+  function setManyExpanded(keys: string[], expand: boolean) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      for (const k of keys) {
+        if (expand) next.add(k);
+        else next.delete(k);
+      }
+      return next;
+    });
+  }
+
   function expandAll(rels: string[]) {
     setExpanded(new Set(rels));
   }
@@ -378,6 +446,7 @@ function makeDiffPanelContext() {
     focusFile,
     expandAll,
     collapseAll,
+    setManyExpanded,
     openPanel,
     close,
     toggle,
@@ -397,6 +466,9 @@ function makeDiffPanelContext() {
     addEditorTab,
     openEdit,
     findEditTabKey,
+    openCommit,
+    gitViewFor,
+    setGitView,
     onBeforeClose,
     registerCloseGuard,
   };
