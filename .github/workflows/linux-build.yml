@@ -1,0 +1,102 @@
+# Builds the Linux bundles and attaches them to a published release.
+#
+# Why CI and not the maintainer's machine: cross-compiling a Tauri app from
+# macOS to Linux is impractical — the build links against the target's
+# webkit2gtk, so it has to happen on Linux. Nobody on the team runs Linux
+# daily (#1), and a hosted runner is the way to ship a binary anyway.
+#
+# Why `release: published` and not `push: tags`: the macOS DMG is built and
+# uploaded by hand (see docs/release-flow.md), and the tag is pushed *before*
+# the release exists. Hanging off the published event means the release is
+# always there to upload into, with no race and nothing that could create a
+# second, conflicting draft.
+#
+# The artifacts are named `-untested` on purpose. Klaudio has never been run
+# on Linux end to end: it should compile, but notifications shell out to
+# `osascript`, clipboard history depends on a `pbcopy` shim, and the titlebar
+# still reserves 72px for macOS traffic lights. A file sitting next to a
+# tested .dmg with no such marking would read as supported. Drop the suffix
+# in the same PR that closes #1.
+name: Linux build
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to attach the artifacts to (e.g. v1.10.1)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-build-${{ github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: true
+
+jobs:
+  bundle:
+    # Pinned to the oldest runner that carries webkit2gtk-4.1, because the
+    # glibc it builds against is the floor for every distro downstream.
+    # Moving to 24.04 silently drops users on older LTS releases.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag }}
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            patchelf \
+            wget
+
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: bun install --frozen-lockfile
+
+      - run: bun tauri build
+
+      - name: Attach the bundles to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          out=$(mktemp -d)
+          for f in src-tauri/target/release/bundle/appimage/*.AppImage \
+                   src-tauri/target/release/bundle/deb/*.deb; do
+            base=$(basename "$f")
+            cp "$f" "$out/${base%.*}-untested.${base##*.}"
+          done
+          built=("$out"/*)
+          if [ ${#built[@]} -eq 0 ]; then
+            echo "::error::no Linux bundles were produced" >&2
+            exit 1
+          fi
+          printf '%s\n' "${built[@]}"
+          gh release upload "$TAG" "${built[@]}" --clobber
+
+      - name: Summary
+        run: |
+          {
+            echo "### Linux bundles attached"
+            echo
+            echo "Built on \`ubuntu-22.04\`, **never validated end to end** — see"
+            echo "[#1](https://github.com/willywg/klaudio-panels/issues/1)."
+          } >> "$GITHUB_STEP_SUMMARY"

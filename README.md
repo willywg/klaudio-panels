@@ -69,7 +69,7 @@ Both warnings are Gatekeeper defaults for unsigned apps, not signs that anything
 | OS | Status | Notes |
 | --- | --- | --- |
 | **macOS 14+** (Sonoma, Sequoia) | ✅ primary target | Tested on Apple Silicon and Intel. Universal `.dmg` is what the maintainer ships. |
-| **Linux** | 🧪 untested | Should build via `bun tauri build` (Tauri is cross-platform). Help validating is very welcome — see [#1](https://github.com/willywg/klaudio-panels/issues/1). |
+| **Linux** | 🧪 untested | Every release carries an `.AppImage` and a `.deb` built by CI, named `-untested` because that is exactly what they are — they compile, but nobody has run them end to end. Notifications, clipboard history and "Open in…" take macOS-only paths that have no Linux equivalent yet. Help validating is very welcome — see [#1](https://github.com/willywg/klaudio-panels/issues/1). |
 | **Windows** | ❌ not supported yet | Several backend modules are stubbed on Windows. Help porting is welcome — see [#2](https://github.com/willywg/klaudio-panels/issues/2). |
 
 **About code signing.** Apple's Developer Program is US$99/year. We'll pay it once the project has real usage; until then, the first-launch workaround above is the cost of keeping the project free. Apple has been tightening the unsigned-app escape hatches with each macOS release, so this is a temporary state, not a permanent stance.
@@ -192,6 +192,30 @@ Full design doc: [`PROJECT.md`](./PROJECT.md).
 - [Rust](https://rustup.rs) stable toolchain
 - The [`claude` CLI](https://docs.anthropic.com/en/docs/claude-code) installed and authenticated (run `claude` once in a terminal first).
 - macOS is the primary development target. See [Platform support](#platform-support) for Linux / Windows status.
+
+### Building on Linux
+
+The Rust side links against the system webview, so a few `-dev` packages have
+to be there before `bun tauri build` will get past the linker. On Ubuntu 22.04
+or newer:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y \
+  build-essential curl file wget patchelf \
+  libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
+  librsvg2-dev libssl-dev libxdo-dev
+```
+
+Fedora and Arch carry the same libraries under their own names —
+[Tauri's prerequisites page](https://v2.tauri.app/start/prerequisites/) lists
+each distro. Note the **4.1** in `libwebkit2gtk`: Tauri v2 needs it, and the
+`4.0` package that some guides still mention is for Tauri v1.
+
+Bundles land in `src-tauri/target/release/bundle/` as `.AppImage`, `.deb` and
+`.rpm`. This is the same thing CI does on every release
+([`.github/workflows/linux-build.yml`](.github/workflows/linux-build.yml)), so
+building by hand is only worth it if you are working on a fix.
 
 ## Development
 
