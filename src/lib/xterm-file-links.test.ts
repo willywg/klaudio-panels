@@ -38,6 +38,50 @@ describe("PATH_RE", () => {
   test("a bare tilde is not a path", () => {
     expect(matches("cd ~ then run")).toEqual([]);
   });
+
+  // #91: the extension was required on every branch, so a path whose last
+  // segment had none was invisible — while a sibling in the same printed
+  // list linkified, which is what made it look random rather than absent.
+  test("an absolute path needs no file extension", () => {
+    expect(matches("  /Users/me/proj/.env")).toEqual(["/Users/me/proj/.env"]);
+    expect(matches("  /Users/me/proj/.kamal/secrets")).toEqual([
+      "/Users/me/proj/.kamal/secrets",
+    ]);
+    expect(matches("edit /etc/hosts now")).toContain("/etc/hosts");
+  });
+
+  test("a home or explicitly relative path needs no extension either", () => {
+    expect(matches("open ~/.zshrc please")).toContain("~/.zshrc");
+    expect(matches("run ../bin/run first")).toContain("../bin/run");
+  });
+
+  test("a slash command is not an absolute path", () => {
+    // Claude's own TUI prints these, and its status line ends in `/rc`. One
+    // segment is the line between them and a real path — no file worth
+    // opening lives at the root.
+    expect(matches("usa /compact para limpiar")).toEqual([]);
+    expect(matches("/model opus")).toEqual([]);
+  });
+
+  test("a bare relative token still needs an extension", () => {
+    // Load-bearing: this is the only branch with no prefix vouching for it.
+    expect(matches("and/or, input/output")).toEqual([]);
+    expect(matches("el 2026/08/20 salio")).toEqual([]);
+  });
+
+  test("a number is not a filename with an extension", () => {
+    // All three are printed constantly by Claude and by our own status line;
+    // `195.9KB` sits directly beside a real image path.
+    expect(matches("tok: 1193.8M (out: 6.8M)")).toEqual([]);
+    expect(matches("klaudio v1.10.1 salio")).toEqual([]);
+    expect(matches("  > [image] ~/proj/qa.jpeg (195.9KB)")).toEqual([
+      "~/proj/qa.jpeg",
+    ]);
+  });
+
+  test("a URL is left to the web-links addon", () => {
+    expect(matches("ver https://example.com/a/b ahi")).toEqual([]);
+  });
 });
 
 /** A terminal whose single logical line is `s`, wrapped at `cols` — what

@@ -6,14 +6,32 @@ import {
 } from "@/lib/xterm-logical-line";
 
 /** Matches tokens that look like source paths, optionally trailed by a
- *  `:line[:col]` suffix. Accepts `./foo.ts`, `src/lib/bar.rs`, `foo.ts:42`,
- *  bare filenames with extension like `CLAUDE.md:12`, and — since #73 —
- *  home-relative and absolute paths (`~/shots/a.png`, `/tmp/a.png`). Claude
- *  prints image references as `[image] ~/…`, and without the `~/` branch
- *  the leading `~` fell outside the character class, so those tokens matched
- *  nothing at all. URLs are skipped (handled by WebLinksAddon). */
+ *  `:line[:col]` suffix. URLs are skipped (handled by WebLinksAddon).
+ *
+ *  Three branches, because how much evidence a token needs depends on how
+ *  much it already announces about itself:
+ *
+ *  1. **Absolute**, two segments or more — `/etc/hosts`,
+ *     `/Users/me/proj/.env`. No extension required: nothing in prose starts
+ *     with `/Users/`. Two segments rather than one so Claude's own slash
+ *     commands (`/compact`, `/model`) stay plain text (#91).
+ *  2. **Home or explicitly relative** — `~/.zshrc`, `./foo.ts:42`,
+ *     `../bin/run`. Also no extension: the prefix is unambiguous, so one
+ *     segment is enough.
+ *  3. **Bare relative** — `src/lib/bar.rs`, `CLAUDE.md:12`. Here the
+ *     extension is *load-bearing*: drop it and `and/or`, `input/output` and
+ *     `2026/08/20` all become links.
+ *
+ *  Requiring only branch 3's evidence everywhere is what made a dotfile or an
+ *  extensionless file unclickable — `.env` has no second dot to spend on an
+ *  extension, and `.kamal/secrets` has none at all (#91).
+ *
+ *  The extension must **start with a letter**. Claude prints `tok: 1193.8M`,
+ *  `(195.9KB)` and `v1.10.1` constantly, and a digits-only "extension" turned
+ *  each of them into a link to a file that was never there — the last one
+ *  right beside a real image path. */
 export const PATH_RE =
-  /(?:^|[\s(["'`])((?:~\/|\.{0,2}\/)?[\w.@-]+(?:\/[\w.@-]+)*\.[\w]{1,10}(?::\d+(?::\d+)?)?)/g;
+  /(?:^|[\s(["'`])((?:\/[\w.@-]+(?:\/[\w.@-]+)+|(?:~\/|\.{1,2}\/)[\w.@-]+(?:\/[\w.@-]+)*|[\w.@-]+(?:\/[\w.@-]+)*\.[a-zA-Z][\w]{0,9})(?::\d+(?::\d+)?)?)/g;
 
 export type XtermFileClick = { rel: string; line?: number };
 

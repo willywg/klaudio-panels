@@ -4,6 +4,33 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [Unreleased]
+
+### Fixed
+- **Paths without a file extension are clickable again**
+  ([#91](https://github.com/willywg/klaudio-panels/issues/91)). Claude printed
+  `/Users/…/constructai-workspaces/.env` and `…/.kamal/secrets` as "rutas para
+  abrir en tu editor" and neither linkified — while `…/config/deploy.yml`, two
+  lines up in the same list, did. That inconsistency was the tell.
+
+  `PATH_RE` required every match to end in a dot-extension, whatever the token
+  looked like otherwise, so a path was only a path if its **last segment had an
+  extension**. That silently excluded dotfiles (`.env`, `.zshrc` — the leading
+  dot is eaten by the segment class, leaving no second dot to spend) and
+  extensionless files (`.kamal/secrets`, `/etc/hosts`, `Makefile`).
+
+  The rule was right, but only for the case it was written for. A *bare
+  relative* token has nothing vouching for it, and without the extension
+  `and/or`, `input/output` and `2026/08/20` all become links. A token starting
+  with `/`, `~/` or `./` already announces itself. So the requirement is now
+  scoped to that third case, and an absolute path needs two segments or more —
+  which is what keeps Claude's own slash commands (`/compact`, `/model`) from
+  turning into links.
+
+  The extension must now also **start with a letter**. `tok: 1193.8M`,
+  `(195.9KB)` and `v1.10.1` were all being matched as filenames — the second
+  one sitting directly beside a real image path.
+
 ## [1.10.1] — 2026-08-20
 
 ### Added
