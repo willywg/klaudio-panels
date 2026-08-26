@@ -17,6 +17,9 @@ function statusDotClass(tab: TerminalTab): string {
   // not stay green. Cleared by activation / typing / close (PRP 018 §4).
   if (tab.needsAttention) return "bg-amber-400 animate-pulse";
   switch (tab.status) {
+    case "dormant":
+      // Hollow: remembered from the last run, no PTY behind it yet.
+      return "bg-transparent ring-1 ring-inset ring-neutral-600";
     case "opening":
       return "bg-indigo-400 animate-pulse";
     case "running":
@@ -43,7 +46,11 @@ export function TabStrip(props: Props) {
                   : "text-neutral-400 hover:bg-neutral-900/50 hover:text-neutral-200")
               }
               onClick={() => props.onActivate(tab.id)}
-              title={tab.label}
+              title={
+                tab.status === "dormant"
+                  ? `${tab.label} — click to resume`
+                  : tab.label
+              }
             >
               <span
                 class={

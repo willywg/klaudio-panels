@@ -8,7 +8,12 @@ import { createStore, produce } from "solid-js/store";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export type TabStatus = "opening" | "running" | "exited" | "error";
+/** `dormant` is a tab restored from the remembered workspace that has never
+ *  been given a PTY. It exists in the strip with its label so reopening a
+ *  project brings the whole workspace back, but `claude --resume` only runs
+ *  when the user activates it (see `wakeTab`) — restoring N sessions must
+ *  not mean spawning N processes on window open (decision #9). */
+export type TabStatus = "dormant" | "opening" | "running" | "exited" | "error";
 
 export type TerminalTab = {
   id: string;
@@ -102,33 +107,28 @@ export function makeTerminalContext() {
     exitHandlers.delete(id);
   }
 
-  async function openTab(
+  /** Gives a PTY to a tab that is already in the store. Shared by `openTab`
+   *  (fresh tab) and `wakeTab` (restored dormant tab) so both paths agree on
+   *  listener ordering and on what an `pty_open` failure leaves behind. */
+  async function spawn(
+    id: string,
     projectPath: string,
     args: string[],
-    opts: OpenTabOpts,
-  ): Promise<string> {
-    const id = newId();
+    profileId: string,
+  ): Promise<void> {
     // CRITICAL: subscribe BEFORE invoking pty_open. Otherwise Rust starts
     // emitting pty:data:<id> immediately and initial bytes (Claude's welcome,
     // ANSI init, prompt line) are lost — resulting in a blank terminal.
     await attachListeners(id);
 
-    const tab: TerminalTab = {
-      id,
-      projectPath,
-      sessionId: opts.sessionId,
-      profileId: opts.profileId,
-      label: opts.label,
-      status: "opening",
-      exitCode: null,
-      error: null,
-      spawnedAt: Date.now(),
-      needsAttention: false,
-    };
     setStore(
-      produce((s) => {
-        s.tabs.push(tab);
-        s.activeTabId = id;
+      "tabs",
+      (t) => t.id === id,
+      produce((tab: TerminalTab) => {
+        tab.status = "opening";
+        tab.exitCode = null;
+        tab.error = null;
+        tab.spawnedAt = Date.now();
       }),
     );
 
@@ -137,7 +137,7 @@ export function makeTerminalContext() {
         id,
         projectPath,
         args,
-        expectedProfileId: opts.profileId,
+        expectedProfileId: profileId,
       });
     } catch (err) {
       const msg = String(err);
@@ -162,15 +162,99 @@ export function makeTerminalContext() {
         tab.status = "running";
       }),
     );
+  }
 
+  async function openTab(
+    projectPath: string,
+    args: string[],
+    opts: OpenTabOpts,
+  ): Promise<string> {
+    const id = newId();
+    const tab: TerminalTab = {
+      id,
+      projectPath,
+      sessionId: opts.sessionId,
+      profileId: opts.profileId,
+      label: opts.label,
+      status: "opening",
+      exitCode: null,
+      error: null,
+      spawnedAt: Date.now(),
+      needsAttention: false,
+    };
+    setStore(
+      produce((s) => {
+        s.tabs.push(tab);
+        s.activeTabId = id;
+      }),
+    );
+
+    await spawn(id, projectPath, args, opts.profileId);
     return id;
   }
 
+  /** Rebuilds a remembered workspace: pushes one dormant tab per entry, in
+   *  order, without spawning anything. Synchronous on purpose — the strip
+   *  must settle in its stored order before the caller wakes one of them,
+   *  otherwise the woken tab would race ahead of its siblings. Does not
+   *  touch `activeTabId`; the caller decides which tab to activate. */
+  function restoreTabs(
+    projectPath: string,
+    profileId: string,
+    entries: { sessionId: string; label: string }[],
+  ): string[] {
+    const ids: string[] = [];
+    setStore(
+      produce((s) => {
+        for (const e of entries) {
+          const id = newId();
+          ids.push(id);
+          s.tabs.push({
+            id,
+            projectPath,
+            sessionId: e.sessionId,
+            profileId,
+            label: e.label,
+            status: "dormant",
+            exitCode: null,
+            error: null,
+            spawnedAt: 0,
+            needsAttention: false,
+          });
+        }
+      }),
+    );
+    return ids;
+  }
+
+  /** Spawns `claude --resume <id>` for a dormant tab, in place — it keeps its
+   *  position in the strip and its tab id. A no-op on any other status, so
+   *  activation paths can call it unconditionally. */
+  async function wakeTab(id: string): Promise<void> {
+    const tab = store.tabs.find((t) => t.id === id);
+    if (!tab || tab.status !== "dormant" || !tab.sessionId) return;
+    // Leave `dormant` synchronously, before the first await: the restore path
+    // wakes its tab explicitly *and* activating it trips the auto-wake effect
+    // in App.tsx. Without this both would still see `dormant` and spawn a
+    // second PTY for the same tab. `spawn` sets the status again itself.
+    setStore("tabs", (t) => t.id === id, "status", "opening");
+    await spawn(
+      id,
+      tab.projectPath,
+      ["--resume", tab.sessionId],
+      tab.profileId,
+    );
+  }
+
   async function closeTab(id: string): Promise<void> {
-    try {
-      await invoke("pty_kill", { id });
-    } catch (err) {
-      console.warn("pty_kill failed", err);
+    // A dormant tab never spawned, so there is nothing on the Rust side to
+    // kill — invoking would just log an unknown-id warning per closed tab.
+    if (store.tabs.find((t) => t.id === id)?.status !== "dormant") {
+      try {
+        await invoke("pty_kill", { id });
+      } catch (err) {
+        console.warn("pty_kill failed", err);
+      }
     }
     await detachListeners(id);
     setStore(
@@ -313,6 +397,8 @@ export function makeTerminalContext() {
   return {
     store,
     openTab,
+    restoreTabs,
+    wakeTab,
     closeTab,
     closeAll,
     setActiveTab,

@@ -33,7 +33,9 @@ import {
   setLastSessionId,
   clearLegacyLastSessionId,
 } from "@/components/last-session";
+import { getOpenTabIds, setOpenTabIds } from "@/components/open-tabs";
 import { resolveAutoResumeTarget } from "@/lib/auto-resume";
+import { resolveRestoredTabs } from "@/lib/restore-tabs";
 import { ProjectsProvider, useProjects } from "@/context/projects";
 import { TerminalProvider, useTerminal } from "@/context/terminal";
 import { SidebarProvider, useSidebar } from "@/context/sidebar";
@@ -715,6 +717,53 @@ function Shell() {
     if (a.sessionId) setLastSessionId(p, a.profileId, a.sessionId);
   });
 
+  // A dormant tab is a remembered session with no PTY behind it. The moment
+  // one becomes the visible tab — by any route: strip click, ⌘⌥1..9,
+  // Ctrl+Tab, a sidebar session click, a notification, a project switch that
+  // lands on it — it has to become real. Doing it here instead of at each of
+  // those call sites keeps the invariant in one place: the active Claude tab
+  // always has a PTY. `wakeTab` leaves `dormant` synchronously, so this
+  // can't double-spawn against the restore path's own explicit wake.
+  createEffect(() => {
+    const id = term.store.activeTabId;
+    if (!id) return;
+    const tab = term.store.tabs.find((t) => t.id === id);
+    if (!tab || tab.status !== "dormant") return;
+    if (tab.projectPath !== activeProjectPath()) return;
+    void term.wakeTab(id).catch((err) => {
+      console.warn("wakeTab failed", err);
+    });
+  });
+
+  // Remember the shape of each project's workspace — the ordered session ids
+  // in its strip — so reopening restores every tab, not just the last active
+  // one (#98). Dormant tabs count: they're part of the workspace even though
+  // no PTY is behind them. A project with no resumable tabs right now is
+  // skipped rather than cleared, so closing the last tab (or the project)
+  // leaves the remembered workspace intact — same contract as lastSessionId.
+  createEffect(() => {
+    // Grouped by project AND profile, not by project alone: an `.envrc` edited
+    // mid-session can leave one project holding tabs from two profiles, and
+    // filing those under one key would restore someone else's workspace.
+    const groups = new Map<
+      string,
+      { projectPath: string; profileId: string; ids: string[] }
+    >();
+    for (const t of term.store.tabs) {
+      if (!t.sessionId) continue;
+      const key = `${t.profileId}\n${t.projectPath}`;
+      let entry = groups.get(key);
+      if (!entry) {
+        entry = { projectPath: t.projectPath, profileId: t.profileId, ids: [] };
+        groups.set(key, entry);
+      }
+      entry.ids.push(t.sessionId);
+    }
+    for (const { projectPath, profileId, ids } of groups.values()) {
+      setOpenTabIds(projectPath, profileId, ids);
+    }
+  });
+
   async function openNewTab() {
     const p = activeProjectPath();
     if (!p) return;
@@ -808,30 +857,35 @@ function Shell() {
         return;
       }
 
+      // One listing answers both questions — which session to wake, and
+      // which remembered tabs still exist — so memoize it rather than
+      // paying for two `list_sessions_for_project` round trips on open.
+      let listing: Promise<SessionMeta[]> | null = null;
+      const listSessions = () =>
+        (listing ??= invoke("list_sessions_for_project", {
+          projectPath,
+        }) as Promise<SessionMeta[]>);
+
       const decision = await resolveAutoResumeTarget(profileId, {
         getNamespaced: () => getLastSessionId(projectPath, profileId),
         getLegacy: () => getLegacyLastSessionId(projectPath),
-        listSessions: () =>
-          invoke("list_sessions_for_project", {
-            projectPath,
-          }) as Promise<SessionMeta[]>,
+        listSessions,
       });
 
+      // "none" is also what a failed listing looks like, which is exactly
+      // when restoring a workspace would be guesswork — bail on both.
       if (decision.action === "none") return;
 
       if (decision.action === "stale") {
         // Session listing succeeded and the id it named no longer exists —
-        // clear only the pointer it actually came from.
+        // clear only the pointer it actually came from. The rest of the
+        // remembered workspace may still be valid, so don't bail here.
         if (decision.source === "namespaced") {
           setLastSessionId(projectPath, profileId, null);
         } else {
           clearLegacyLastSessionId(projectPath);
         }
-        return;
-      }
-
-      // decision.action === "open"
-      if (decision.source === "legacy") {
+      } else if (decision.source === "legacy") {
         // Validated against the current (profile-scoped) session list —
         // migrate it under the namespaced key and retire the legacy
         // pointer so it can't resurrect a stale id on a later launch.
@@ -839,23 +893,37 @@ function Shell() {
         clearLegacyLastSessionId(projectPath);
       }
 
+      const wanted = decision.action === "open" ? decision.sessionId : null;
+      const restored = resolveRestoredTabs(
+        getOpenTabIds(projectPath, profileId),
+        await listSessions(),
+        wanted,
+      );
+      if (restored.length === 0) return;
+
+      // Rebuild the whole strip dormant and in its remembered order, then
+      // give a PTY to one tab only: the session that was active at quit, or
+      // — if that one is gone — the first survivor, so the pane isn't empty.
+      const tabIds = term.restoreTabs(projectPath, profileId, restored);
+      const wakeSessionId = wanted ?? restored[0].sessionId;
+      const wakeIdx = restored.findIndex((r) => r.sessionId === wakeSessionId);
+      const tabId = tabIds[wakeIdx] ?? tabIds[0];
+
+      term.setActiveTab(tabId);
+      // The project-switch effect ran before tabs existed for this project
+      // and skipped its focus call. Now that the restore materialised a
+      // tab, hand the cursor to it — the user just opened the project to
+      // use Claude.
+      focusTerminal(tabId);
+
       const spawnedAt = Date.now();
       try {
-        const tabId = await term.openTab(
-          projectPath,
-          ["--resume", decision.sessionId],
-          { label: decision.label, sessionId: decision.sessionId, profileId },
-        );
-        // The project-switch effect ran before tabs existed for this project
-        // and skipped its focus call. Now that auto-resume materialised a
-        // tab, hand the cursor to it — the user just opened the project to
-        // use Claude.
-        focusTerminal(tabId);
+        await term.wakeTab(tabId);
         const detach = term.onExit(tabId, (code) => {
           const elapsed = Date.now() - spawnedAt;
           if (elapsed < AUTO_RESUME_FAIL_WINDOW_MS && code !== 0) {
             console.info(
-              `auto-resume failed for ${decision.sessionId} (exit ${code} after ${elapsed}ms). Clearing lastSessionId.`,
+              `auto-resume failed for ${wakeSessionId} (exit ${code} after ${elapsed}ms). Clearing lastSessionId.`,
             );
             setLastSessionId(projectPath, profileId, null);
             void term.closeTab(tabId);
@@ -863,7 +931,7 @@ function Shell() {
           detach();
         });
       } catch (err) {
-        console.warn("auto-resume openTab threw", err);
+        console.warn("auto-resume wakeTab threw", err);
         setLastSessionId(projectPath, profileId, null);
       } finally {
         setSessionsRefresh((k) => k + 1);
@@ -1115,7 +1183,10 @@ function Shell() {
                         }}
                       >
                         <Show
-                          when={tab.status !== "opening"}
+                          when={
+                            tab.status !== "opening" &&
+                            tab.status !== "dormant"
+                          }
                           fallback={<LoadingPanel label={tab.label} />}
                         >
                           <TerminalView id={tab.id} active={visible()} />

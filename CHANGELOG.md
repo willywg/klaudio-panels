@@ -6,6 +6,36 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
 ## [Unreleased]
 
+### Added
+- **Reopening a project brings back the whole workspace, not one tab**
+  ([#98](https://github.com/willywg/klaudio-panels/issues/98)). Four sessions
+  open — `Proxy`, `ai-service`, `workspaces`, `landing` — and reopening the
+  project restored a single one. The other three had to be hunted down in the
+  Sessions list and re-opened by hand.
+
+  Only `lastSessionId` was persisted, on purpose: restoring N tabs was read as
+  spawning N `claude --resume` processes at window open, each reloading its
+  full context. That objection is about the *processes*, not about the *tabs*.
+
+  So the strip is now remembered and the processes are not. Every tab comes
+  back with its label; exactly one — the session that was active at quit —
+  gets a PTY. The rest are **dormant**: a hollow status dot, no child process,
+  and `claude --resume` runs on the first click. Cost on open stays where it
+  was, at one process.
+
+  Labels and existence come from the live session listing rather than from
+  storage, so a `/rename` made while the app was closed shows up, and a
+  session that no longer exists is dropped instead of being restored into a
+  tab that would fail the moment it woke. If the session that was active at
+  quit is the one that's gone, the first surviving tab wakes instead, so the
+  pane is never blank. The remembered list is namespaced by profile like
+  `lastSessionId` already was, so a project pinned to a different
+  `CLAUDE_CONFIG_DIR` never restores another profile's workspace.
+
+  Waking is one effect watching the active tab rather than a call at each of
+  the five places a tab can be activated, which leaves a single invariant to
+  hold: the active Claude tab always has a PTY.
+
 ## [1.10.2] — 2026-08-26
 
 ### Fixed
