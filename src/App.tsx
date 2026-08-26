@@ -356,6 +356,11 @@ function Shell() {
     if (sidebar.activeTab(r.projectPath) !== "files") {
       sidebar.setTab(r.projectPath, "files");
     }
+    // A file reveal is a side effect of opening that file in the panel, so a
+    // collapsed sidebar staying collapsed is fine — the file is on screen
+    // either way. Revealing a directory *is* the action (#93); leaving it
+    // invisible would make the click do nothing at all.
+    if (r.kind === "directory") sidebar.setCollapsed(false);
   });
 
   // Cmd+B toggles the sidebar, Cmd+Shift+D toggles the diff panel. Listening

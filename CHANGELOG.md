@@ -7,6 +7,27 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 ## [Unreleased]
 
 ### Fixed
+- **Clicking a directory reveals it in the file tree**
+  ([#93](https://github.com/willywg/klaudio-panels/issues/93)). It used to open
+  a preview tab that immediately failed with `read: Is a directory`. Reachable
+  since the fix below: before it, a directory had no extension and so was never
+  linkified at all, and accepting extensionless paths let files and folders in
+  together.
+
+  The link itself is right — nothing in the *text* separates them.
+  `src-tauri/scripts/klaudio` is an extensionless file, `app/projects` is a
+  directory, and they are the same shape. Only the filesystem knows, and the
+  matcher runs on every row on every hover, so a `stat` there would be paid
+  constantly to avoid an occasional error. It is asked once per **click**
+  instead, and a directory now expands, scrolls into view and selects itself in
+  the Files tab — which is what the click was asking for.
+
+  A directory reveal also forces the sidebar open. A file reveal doesn't, and
+  shouldn't: it is a side effect of opening that file in the panel, where you
+  can already see it. Here, revealing *is* the action, and doing nothing
+  visible would be worse than the error it replaced. A folder outside the open
+  project gets a toast saying so — the tree has nowhere to put it.
+
 - **Paths without a file extension are clickable again**
   ([#91](https://github.com/willywg/klaudio-panels/issues/91)). Claude printed
   `/Users/…/constructai-workspaces/.env` and `…/.kamal/secrets` as "rutas para

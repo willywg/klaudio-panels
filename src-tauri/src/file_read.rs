@@ -317,6 +317,29 @@ pub(crate) fn resolve_rel(project_path: &str, rel: &str) -> Result<PathBuf, Stri
     Ok(canon)
 }
 
+/// Whether a resolved path is a file, a directory, or neither.
+///
+/// Exists because nothing in a *printed* path says which it is —
+/// `src-tauri/scripts/klaudio` is an extensionless file and `app/projects` is
+/// a directory, and they are the same shape. The terminal's link matcher
+/// can't tell them apart without touching disk, and it runs on every hover,
+/// so the question is answered once per **click** instead (#93).
+///
+/// Never `Err`: a path that escapes the project, or doesn't resolve, is
+/// reported as missing. The caller has one thing to branch on, and a refused
+/// path and an absent one lead to the same place anyway.
+#[tauri::command]
+pub fn path_kind(project_path: String, rel_path: String) -> String {
+    let Ok(abs) = resolve_readable(&project_path, &rel_path) else {
+        return "missing".to_string();
+    };
+    match std::fs::metadata(&abs) {
+        Ok(meta) if meta.is_dir() => "directory".to_string(),
+        Ok(_) => "file".to_string(),
+        Err(_) => "missing".to_string(),
+    }
+}
+
 #[tauri::command]
 pub fn read_file_bytes(project_path: String, rel_path: String) -> Result<FilePayload, String> {
     let abs = resolve_readable(&project_path, &rel_path)?;
@@ -660,4 +683,30 @@ mod tests {
         assert!(!ends_with_segments("c.py", "a/c.py"));
     }
 
+    #[test]
+    fn path_kind_tells_a_directory_from_a_file() {
+        let project = TempDir::new("path-kind");
+        fs::create_dir_all(project.path().join("app/projects")).unwrap();
+        fs::write(project.path().join("app/projects/main.py"), "x = 1\n").unwrap();
+        // Extensionless, so it is exactly the shape a directory has.
+        fs::write(project.path().join("app/run"), "#!/bin/sh\n").unwrap();
+        let root = project.path().display().to_string();
+
+        assert_eq!(path_kind(root.clone(), "app/projects".into()), "directory");
+        assert_eq!(path_kind(root.clone(), "app/projects/main.py".into()), "file");
+        assert_eq!(path_kind(root.clone(), "app/run".into()), "file");
+        assert_eq!(path_kind(root, "app/nope".into()), "missing");
+    }
+
+    #[test]
+    fn path_kind_reports_a_refused_path_as_missing_rather_than_erroring() {
+        // A relative path climbing out is still refused by `resolve_readable`.
+        // The caller branches on three values, not on a Result it would have
+        // to map back onto the same three anyway.
+        let project = TempDir::new("path-kind-escape");
+        assert_eq!(
+            path_kind(project.path().display().to_string(), "../../etc/passwd".into()),
+            "missing"
+        );
+    }
 }

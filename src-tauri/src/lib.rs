@@ -145,6 +145,7 @@ pub fn run() {
             open_in::open_path_with,
             open_in::get_app_icon,
             file_read::read_file_bytes,
+            file_read::path_kind,
             file_read::read_image,
             file_read::resolve_project_file,
             file_write::write_file_bytes,

@@ -31,7 +31,13 @@ import {
   resolveImagePath,
 } from "@/lib/image-files";
 import { recordClip } from "@/lib/record-clip";
-import { resolveProjectFile } from "@/lib/resolve-file";
+import {
+  isAbsoluteish,
+  pathKind,
+  resolveProjectFile,
+} from "@/lib/resolve-file";
+import { useReveal } from "@/context/reveal";
+import { toast } from "@/lib/toast";
 
 const THEME = {
   background: "#0b0b0c",
@@ -68,6 +74,7 @@ type Props = {
 export function TerminalView(props: Props) {
   const ctx = useTerminal();
   const diffPanel = useDiffPanel();
+  const reveal = useReveal();
   let container: HTMLDivElement | undefined;
   let term: Terminal | undefined;
   let fit: FitAddon | undefined;
@@ -344,10 +351,27 @@ export function TerminalView(props: Props) {
         // project root — see `resolveProjectFile`. Resolving first means the
         // preview tab gets a path that actually exists.
         void resolveProjectFile(tab.projectPath, normalizeRel(rel)).then(
-          // null means the user dismissed the "which one?" picker.
-          (target) => {
-            if (target !== null)
-              diffPanel.openFile(tab.projectPath, target, line);
+          async (target) => {
+            // null means the user dismissed the "which one?" picker.
+            if (target === null) return;
+            // A printed path names a directory as readily as a file, and its
+            // text says nothing about which — `scripts/klaudio` is a file,
+            // `app/projects` is a folder, same shape. One stat decides, here
+            // at click time rather than in the matcher, which runs on every
+            // hover (#93).
+            if ((await pathKind(tab.projectPath, target)) === "directory") {
+              const inProject = relativizeToProject(tab.projectPath, target);
+              if (isAbsoluteish(inProject)) {
+                // The tree only renders the open project, so there is
+                // nowhere to reveal it — say so instead of opening a preview
+                // that can only fail.
+                toast("That folder is outside this project.");
+                return;
+              }
+              reveal.request(tab.projectPath, inProject, "directory");
+              return;
+            }
+            diffPanel.openFile(tab.projectPath, target, line);
           },
         );
       },

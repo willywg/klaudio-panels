@@ -106,6 +106,33 @@ export async function resolveProjectFile(
   return askWhichFile(needle, candidates);
 }
 
+/** What a resolved path actually is on disk.
+ *
+ *  Nothing in a printed path says whether it names a file or a directory —
+ *  `src-tauri/scripts/klaudio` is an extensionless file and `app/projects` is
+ *  a directory, and they are the same shape. The link matcher can't tell them
+ *  apart, and it runs on every hover, so this is asked once per **click**
+ *  instead (#93).
+ *
+ *  Never throws: an IPC failure reports "missing", which routes to the same
+ *  "couldn't open that" the caller already handles.
+ */
+export async function pathKind(
+  projectPath: string,
+  rel: string,
+): Promise<PathKind> {
+  try {
+    return await invoke<PathKind>("path_kind", {
+      projectPath: projectBase(projectPath),
+      relPath: rel,
+    });
+  } catch {
+    return "missing";
+  }
+}
+
+export type PathKind = "file" | "directory" | "missing";
+
 function remember(key: string, value: string[]): void {
   // Oldest insertion first — Map preserves insertion order, so this is plain
   // FIFO eviction rather than a true LRU. Good enough for a cache whose only

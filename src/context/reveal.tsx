@@ -22,14 +22,24 @@ export type RevealRequest = {
   projectPath: string;
   rel: string;
   id: number;
+  /** What sits at the end of `rel`. A directory target is expanded rather
+   *  than just scrolled to, and it forces the sidebar open — when revealing
+   *  *is* the whole action (⌘-clicking a directory in the terminal, #93)
+   *  rather than a side effect of opening a file, doing nothing visible is
+   *  worse than the error it replaced. */
+  kind: "file" | "directory";
 };
 
 function makeRevealContext() {
   let nextId = 1;
   const [pending, setPending] = createSignal<RevealRequest | null>(null);
 
-  function request(projectPath: string, rel: string) {
-    setPending({ projectPath, rel, id: nextId++ });
+  function request(
+    projectPath: string,
+    rel: string,
+    kind: RevealRequest["kind"] = "file",
+  ) {
+    setPending({ projectPath, rel, id: nextId++, kind });
   }
 
   return { pending, request };

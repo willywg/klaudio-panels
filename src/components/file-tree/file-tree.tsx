@@ -274,15 +274,17 @@ export function FileTree(props: Props) {
    *  no scroll, no highlight, just a console warn so we don't tear the
    *  whole tree on transient races.
    */
-  async function runReveal(rel: string) {
+  async function runReveal(rel: string, kind: "file" | "directory" = "file") {
     const segments = rel.split("/").filter(Boolean);
     if (segments.length === 0) return;
     const base = stripTrailingSlash(props.projectPath);
     let walkPath = base;
     const s = store();
-    // Expand every ancestor (everything up to the leaf — the leaf itself
-    // is a file, can't be expanded).
-    for (let i = 0; i < segments.length - 1; i++) {
+    // Expand every ancestor. The leaf is included only when it is itself a
+    // directory (#93) — for a file there is nothing to open, and expanding
+    // it would ask the backend to list a path that isn't a directory.
+    const last = kind === "directory" ? segments.length : segments.length - 1;
+    for (let i = 0; i < last; i++) {
       walkPath = `${walkPath}/${segments[i]}`;
       try {
         await s.expandTo(walkPath);
@@ -317,7 +319,7 @@ export function FileTree(props: Props) {
     // Sidebar tab-switch is handled in App.tsx so it can fire even when this
     // component isn't mounted (sidebar on Sessions). Once the tab flips to
     // Files, this component mounts and picks up the same pending reveal.
-    void runReveal(r.rel);
+    void runReveal(r.rel, r.kind);
   });
 
   function openContextMenu(e: MouseEvent, path: string, isDir: boolean) {
