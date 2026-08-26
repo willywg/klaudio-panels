@@ -471,8 +471,14 @@ export function TerminalView(props: Props) {
   const tab = () => ctx.getTab(props.id);
 
   function normalizeRel(rel: string): string {
-    if (rel.startsWith("./")) return rel.slice(2);
-    return rel;
+    // A directory is often printed with a trailing slash, and that slash is
+    // what made the matcher accept it (#95). Everything downstream — the
+    // resolver, and the tree reveal that splits on "/" — wants the name
+    // without it; `"web/".split("/")` ends in an empty segment that reveals
+    // nothing.
+    const trimmed = rel.length > 1 && rel.endsWith("/") ? rel.slice(0, -1) : rel;
+    if (trimmed.startsWith("./")) return trimmed.slice(2);
+    return trimmed;
   }
 
   function hideThumbnail() {

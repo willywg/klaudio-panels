@@ -63,10 +63,47 @@ describe("PATH_RE", () => {
     expect(matches("/model opus")).toEqual([]);
   });
 
-  test("a bare relative token still needs an extension", () => {
-    // Load-bearing: this is the only branch with no prefix vouching for it.
+  test("a bare relative token still needs evidence beyond a slash", () => {
+    // Load-bearing: these forms have no prefix vouching for them, so a slash
+    // alone can never be enough — this is ordinary prose.
     expect(matches("and/or, input/output")).toEqual([]);
     expect(matches("el 2026/08/20 salio")).toEqual([]);
+  });
+
+  // #95: the extension was the *only* evidence a bare relative path could
+  // offer, so half of what Claude prints in a project inventory — every
+  // dotfile, every directory — was dead text sitting beside links that worked.
+  test("a dot-leading segment stands in for an extension", () => {
+    expect(matches("mira web/.env ahi")).toContain("web/.env");
+    expect(matches("no hay .env en la raiz")).toContain(".env");
+    expect(matches("y .kamal/secrets tambien")).toContain(".kamal/secrets");
+    // The dot may sit in any segment, not just the last one.
+    expect(matches("core/.github/workflows/test.yml corre")).toContain(
+      "core/.github/workflows/test.yml",
+    );
+  });
+
+  test("a trailing slash stands in for an extension", () => {
+    expect(matches("ver docs/assets/brand/ ahi")).toContain(
+      "docs/assets/brand/",
+    );
+    // One segment is enough when the slash is trailing: `web/` is a directory,
+    // and unlike `and/or` there is nothing after the slash to be a second word.
+    expect(matches("- web/ no tiene workflow de CI.")).toContain("web/");
+  });
+
+  test("a sed expression is a known, accepted false positive", () => {
+    // `s/foo/bar/` is the same shape as `docs/assets/brand/` and nothing in
+    // the text separates them. Pinned rather than fixed: ruling it out means
+    // ruling out one-segment directories, which Claude prints far more often.
+    // It resolves to nothing and the preview says so.
+    expect(matches("ejecuta s/foo/bar/ ahi")).toEqual(["s/foo/bar/"]);
+  });
+
+  test("an ellipsis run into a word is not a file with an extension", () => {
+    // `..` was a legal segment, so this read as the file `..` with the
+    // extension `.continua`.
+    expect(matches("algo ...continua aca")).toEqual([]);
   });
 
   test("a number is not a filename with an extension", () => {
