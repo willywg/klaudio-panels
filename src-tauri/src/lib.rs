@@ -158,6 +158,7 @@ pub fn run() {
             clipboard_history::clipboard_history_list,
             clipboard_history::clipboard_history_clear,
             clipboard_history::clipboard_history_set_enabled,
+            clipboard_history::clipboard_shim_active,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

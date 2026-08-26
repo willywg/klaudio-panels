@@ -7,6 +7,34 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 ## [Unreleased]
 
 ### Fixed
+- **Clipboard history no longer stops recording when a second Klaudio starts**
+  ([#96](https://github.com/willywg/klaudio-panels/issues/96)). A day of clips
+  went missing with no sign anything was wrong: entries frozen at one
+  timestamp, "Record clipboard" still green, no error. A message copied to send
+  to someone was simply never listed.
+
+  Every instance bound one fixed socket, `clip.sock`, doing `remove_file` then
+  `bind` on boot. The unlink was deliberate — a socket left by a crash makes
+  `bind` fail with `EADDRINUSE` even though nothing is listening — but an
+  unconditional `remove_file` cannot tell an abandoned socket from a live one.
+  So the newest instance always won, unlinking the name out from under whoever
+  was already listening, whose listener then survived on a socket nothing could
+  reach. Not a dev-only problem: running a new build from a mounted DMG beside
+  the installed copy is the same thing, and it is how people try a new version.
+
+  Three changes. The socket is now **per installation**, named from the
+  executable's path, so the app in `/Applications` and a dev build each get
+  their own and **both record at once** — the shim already takes the path from
+  `$KLAUDIO_CLIP_SOCK`, so nothing else had to move. A **live socket is never
+  stolen**: the boot probe connects first, and only unlinks when nothing
+  answers, which is exactly the crash leftover the unlink was written for. And
+  an instance that doesn't own the socket **says so** — the panel shows it, and
+  its terminals don't get `KLAUDIO_CLIP_SOCK` at all, so a copy falls through
+  to the real `pbcopy` instead of surfacing in a different window's list.
+
+  The silence was the real defect. A rare bug that shouts costs less than a
+  rare one that says nothing.
+
 - **Dotfiles and directories printed by Claude are clickable**
   ([#95](https://github.com/willywg/klaudio-panels/issues/95)). Ask Claude for
   a project inventory and half the table came back as dead text sitting beside

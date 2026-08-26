@@ -57,7 +57,15 @@ fn log_startup_bytes(id: &str, bytes: &[u8]) {
 /// Applied *after* direnv, so a project's `.envrc` cannot displace the shim.
 /// Leaves the env untouched when the cache dir is unavailable: no shim simply
 /// means no clipboard history, never a broken `PATH`.
+///
+/// Also left untouched when another Klaudio owns the socket. The shim would
+/// happily report to it, and the clip would surface in *that* window's panel —
+/// copied here, listed somewhere else. Withholding `KLAUDIO_CLIP_SOCK` makes
+/// the shim fall through to the real `pbcopy` instead (#96).
 fn clipboard_history_env(env: Vec<(String, String)>) -> Vec<(String, String)> {
+    if !crate::clipboard_history::shim_active() {
+        return env;
+    }
     let (Some(dir), Some(sock)) = (
         crate::clipboard_history::shim_dir(),
         crate::clipboard_history::socket_path(),

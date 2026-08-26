@@ -41,6 +41,11 @@ export function applyClip(
 function makeClipboardHistoryContext() {
   const [entries, setEntries] = createSignal<readonly ClipEntry[]>([]);
   const [enabled, setEnabledSignal] = createSignal(getClipboardEnabled());
+  // Whether terminal copies reach *this* window. False when another Klaudio
+  // booted first and owns the socket the `pbcopy` shim reports to (#96).
+  // Optimistic until the backend answers: the common case is true, and
+  // flashing a warning on every launch would be its own kind of lie.
+  const [shimActive, setShimActive] = createSignal(true);
 
   onMount(() => {
     // Push the persisted choice down before anything can be recorded — the
@@ -49,6 +54,10 @@ function makeClipboardHistoryContext() {
     void invoke("clipboard_history_set_enabled", {
       enabled: getClipboardEnabled(),
     }).catch((err) => console.warn("clipboard_history_set_enabled failed", err));
+
+    void invoke<boolean>("clipboard_shim_active")
+      .then(setShimActive)
+      .catch((err) => console.warn("clipboard_shim_active failed", err));
 
     void invoke<ClipEntry[]>("clipboard_history_list")
       .then((list) => setEntries(list))
@@ -99,7 +108,7 @@ function makeClipboardHistoryContext() {
     );
   }
 
-  return { entries, enabled, setEnabled, recopy, clear };
+  return { entries, enabled, shimActive, setEnabled, recopy, clear };
 }
 
 const Ctx = createContext<ReturnType<typeof makeClipboardHistoryContext>>();

@@ -124,6 +124,17 @@ export function ClipboardHistoryButton() {
               </Show>
             </div>
 
+            {/* The failure this replaces was silent: the toggle stayed green
+                while nothing was recorded, and it took a day to notice. If
+                terminal copies are going somewhere else, the panel has to be
+                the thing that says so (#96). */}
+            <Show when={!clips.shimActive()}>
+              <p class="px-3 py-2 border-t border-neutral-800 shrink-0 text-[11px] text-amber-300/90 leading-relaxed">
+                Another Klaudio window is recording terminal copies. Copies
+                made in this one's terminals won't be listed here; ⌘C still is.
+              </p>
+            </Show>
+
             <label class="px-3 py-2 border-t border-neutral-800 flex items-center justify-between gap-2 shrink-0 cursor-pointer">
               <span class="text-[11px] text-neutral-400">Record clipboard</span>
               <input

@@ -65,6 +65,24 @@ static ENABLED: AtomicBool = AtomicBool::new(true);
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Whether this instance owns the socket the `pbcopy` shim reports to.
+///
+/// False when another Klaudio got there first. It gates two things that would
+/// otherwise be lies: the panel says recording is unavailable, and `pty.rs`
+/// withholds `KLAUDIO_CLIP_SOCK` so a terminal copy falls through to the real
+/// `pbcopy` rather than surfacing in a different window's list (#96).
+static SHIM_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// Whether terminal copies reach this window's history.
+pub fn shim_active() -> bool {
+    SHIM_ACTIVE.load(Ordering::Relaxed)
+}
+
+#[tauri::command]
+pub fn clipboard_shim_active() -> bool {
+    shim_active()
+}
+
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -154,10 +172,57 @@ pub fn shim_dir() -> Option<PathBuf> {
     dirs::cache_dir().map(|c| c.join("klaudio-panels/bin"))
 }
 
+/// FNV-1a, folded to 32 bits and rendered as 8 hex characters.
+///
+/// Written out rather than reaching for `DefaultHasher`: that one is
+/// explicitly not stable across Rust releases, and this value names a file
+/// that has to survive a toolchain upgrade. An unstable hash would strand the
+/// previous socket in the cache dir on every rebuild.
+fn short_hash(s: &str) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{:08x}", (h ^ (h >> 32)) as u32)
+}
+
+/// Identifies this *installation* — the bundle the running process came from.
+///
+/// Two Klaudios on one machine are ordinary: the one in `/Applications`
+/// alongside a `tauri dev` build, or a copy still running from a mounted DMG
+/// while the installed one is open. They are different installs and must not
+/// share a socket, or the second to boot takes the first one's `pbcopy` away
+/// (#96). Keyed on the executable path, so it is stable across restarts —
+/// one socket per install, not one per run.
+fn install_key() -> String {
+    std::env::current_exe()
+        .map(|p| short_hash(&p.to_string_lossy()))
+        .unwrap_or_else(|_| "default".to_string())
+}
+
 /// Socket the shim reports to. Kept in the cache dir so the whole path stays
 /// well under the ~104 byte `sun_path` limit.
 pub fn socket_path() -> Option<PathBuf> {
+    dirs::cache_dir()
+        .map(|c| c.join(format!("klaudio-panels/clip-{}.sock", install_key())))
+}
+
+/// The single shared socket every version through v1.10.1 used. Left behind
+/// on upgrade, and nothing will ever bind it again.
+fn legacy_socket_path() -> Option<PathBuf> {
     dirs::cache_dir().map(|c| c.join("klaudio-panels/clip.sock"))
+}
+
+/// Whether a socket file has a live listener behind it.
+///
+/// This is the distinction the old unconditional `remove_file` could not
+/// make. Removing an *abandoned* socket is necessary — `bind` fails with
+/// `EADDRINUSE` on a leftover from a crash even though nothing is listening.
+/// Removing a *live* one unlinks the name out from under a running instance,
+/// whose listener then survives on a socket nothing can reach (#96).
+fn has_live_listener(path: &std::path::Path) -> bool {
+    std::os::unix::net::UnixStream::connect(path).is_ok()
 }
 
 /// `pbcopy` replacement placed ahead of `/usr/bin` on the PTY's `PATH`.
@@ -180,15 +245,29 @@ exec /usr/bin/pbcopy "$@"
 "#;
 
 /// Write the shim and start the listener. Safe to call once at boot.
+///
+/// The bind happens here, synchronously, and only the accept loop is
+/// backgrounded. `pty.rs` reads `shim_active()` to decide whether to hand a
+/// child `KLAUDIO_CLIP_SOCK`, and binding on the worker thread would leave a
+/// PTY opened in the first instants after boot reading a flag that had not
+/// settled yet.
 pub fn install(app: AppHandle) {
     if let Err(e) = write_shim() {
         debug_log::write("clipboard", &format!("shim install failed: {e}"));
     }
-    std::thread::spawn(move || {
-        if let Err(e) = listen(app) {
+    match bind_listener() {
+        Ok(Some(listener)) => {
+            SHIM_ACTIVE.store(true, Ordering::Relaxed);
+            debug_log::write("clipboard", "shim listener ready");
+            std::thread::spawn(move || accept_loop(&app, &listener));
+        }
+        // Another Klaudio owns the socket. Already logged; leaving
+        // SHIM_ACTIVE false is what keeps us from claiming to record.
+        Ok(None) => {}
+        Err(e) => {
             debug_log::write("clipboard", &format!("listener failed: {e}"));
         }
-    });
+    }
 }
 
 fn write_shim() -> std::io::Result<()> {
@@ -204,20 +283,44 @@ fn write_shim() -> std::io::Result<()> {
     Ok(())
 }
 
-fn listen(app: AppHandle) -> std::io::Result<()> {
+/// Claim this installation's socket.
+///
+/// `Ok(None)` means another Klaudio is already listening on it — the same
+/// binary launched twice, since a second *install* gets its own path. We
+/// decline rather than take it over: stealing is what made a whole day of
+/// clips disappear from a window that still said it was recording (#96).
+fn bind_listener() -> std::io::Result<Option<UnixListener>> {
     let Some(path) = socket_path() else {
-        return Ok(());
+        return Ok(None);
     };
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    // A socket file left behind by a previous run (crash, SIGKILL) would make
-    // bind fail with EADDRINUSE even though nothing is listening.
+
+    // Tidy up the single shared socket older versions used, but only once it
+    // is certain nobody is behind it — during an upgrade the previous version
+    // may still be running on it.
+    if let Some(legacy) = legacy_socket_path() {
+        if legacy.exists() && !has_live_listener(&legacy) {
+            let _ = std::fs::remove_file(&legacy);
+        }
+    }
+
+    if has_live_listener(&path) {
+        debug_log::write(
+            "clipboard",
+            "another Klaudio owns this install's clipboard socket; not recording",
+        );
+        return Ok(None);
+    }
+    // Nothing listening, so whatever is here is a leftover from a crash or a
+    // SIGKILL. `bind` fails with EADDRINUSE on it otherwise.
     let _ = std::fs::remove_file(&path);
 
-    let listener = UnixListener::bind(&path)?;
-    debug_log::write("clipboard", "shim listener ready");
+    Ok(Some(UnixListener::bind(&path)?))
+}
 
+fn accept_loop(app: &AppHandle, listener: &UnixListener) {
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
         let app = app.clone();
@@ -240,7 +343,6 @@ fn listen(app: AppHandle) -> std::io::Result<()> {
             }
         });
     }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -326,6 +428,53 @@ mod tests {
         assert!(PBCOPY_SHIM.contains("command -v nc"));
         // bash, not sh — process substitution and PIPESTATUS need it.
         assert!(PBCOPY_SHIM.starts_with("#!/bin/bash\n"));
+    }
+
+    #[test]
+    fn each_install_gets_its_own_socket() {
+        // The whole point of #96: the app in /Applications and a dev build
+        // are different installs, and sharing one socket meant the second to
+        // boot took the first one's `pbcopy` away.
+        let installed = short_hash("/Applications/Klaudio Panels.app/Contents/MacOS/klaudio-panels");
+        let dev = short_hash("/Users/me/proyectos/claude-desktop/src-tauri/target/debug/klaudio-panels");
+        assert_ne!(installed, dev);
+    }
+
+    #[test]
+    fn the_install_key_is_stable_for_one_path() {
+        // It names a file that has to be found again after a restart, and
+        // after a toolchain upgrade — hence FNV rather than DefaultHasher.
+        let p = "/Applications/Klaudio Panels.app/Contents/MacOS/klaudio-panels";
+        assert_eq!(short_hash(p), short_hash(p));
+        assert_eq!(short_hash(p).len(), 8);
+        assert!(short_hash(p).chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn an_absent_socket_has_no_live_listener() {
+        // The predicate that replaced the unconditional `remove_file`. A
+        // missing path must read as "safe to bind", not as "someone is
+        // there", or a first run would decline to record at all.
+        let dir = std::env::temp_dir().join("klaudio-clip-probe-absent");
+        let _ = std::fs::remove_file(&dir);
+        assert!(!has_live_listener(&dir));
+    }
+
+    #[test]
+    fn a_bound_socket_reads_as_live_and_a_dead_one_does_not() {
+        let path = std::env::temp_dir().join("klaudio-clip-probe-live.sock");
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).expect("bind");
+        assert!(
+            has_live_listener(&path),
+            "a bound socket must be seen as live, or we would unlink it"
+        );
+        // Dropping the listener leaves the file behind — exactly the crash
+        // leftover the unlink exists for.
+        drop(listener);
+        assert!(path.exists());
+        assert!(!has_live_listener(&path));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
