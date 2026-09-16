@@ -6,6 +6,29 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
 ## [Unreleased]
 
+### Fixed
+- **Claude Code's `/voice` can reach the microphone**
+  ([#100](https://github.com/willywg/klaudio-panels/issues/100)). `/voice` did
+  nothing inside Klaudio Panels while working fine in iTerm with the same
+  `claude` binary, and the app never appeared under **Privacy & Security >
+  Microphone** — there was no toggle to turn on, because nothing had ever
+  asked for one.
+
+  macOS attributes a microphone request to the *responsible process* rather
+  than to the process opening the device. `claude` is our child, so the
+  request lands on our bundle — which declared no microphone use at all. We
+  codesign with the hardened runtime, which denies the access without
+  `com.apple.security.device.audio-input`, and we shipped no
+  `NSMicrophoneUsageDescription`, without which TCC cannot even draw the
+  consent prompt. It denied in silence.
+
+  The bundle now declares both, the way every app that hosts child processes
+  does — iTerm and Cursor carry exactly this pair, and Terminal.app, which
+  carries neither, is likewise absent from that list. The prompt appears the
+  first time `/voice` actually asks; the app does not request the microphone
+  at launch, because a terminal host has no business doing that for sessions
+  that will never record.
+
 ## [1.11.0] — 2026-08-26
 
 ### Added

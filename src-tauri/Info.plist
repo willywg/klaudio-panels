@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Klaudio Panels never opens the microphone itself. The child `claude`
+         process does, for /voice dictation, and macOS attributes that request
+         to the responsible process — us. Without this string TCC cannot even
+         show the prompt: it denies silently and the app never appears under
+         Privacy & Security > Microphone. Phrased from the host's point of
+         view, the way iTerm and Cursor phrase theirs, because the app the
+         user is really granting access to is the one running in the tab. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>A session running in Klaudio Panels wants to use your microphone, for Claude Code's /voice dictation.</string>
+</dict>
+</plist>
