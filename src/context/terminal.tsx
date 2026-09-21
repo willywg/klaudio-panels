@@ -8,6 +8,7 @@ import { createStore, produce } from "solid-js/store";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { AgentId } from "@/lib/agents";
+import { removeProjectTabs } from "@/lib/close-tabs";
 
 /** `dormant` is a tab restored from the remembered workspace that has never
  *  been given a PTY. It exists in the strip with its label so reopening a
@@ -296,12 +297,59 @@ export function makeTerminalContext() {
     );
   }
 
-  async function closeAll(): Promise<void> {
-    const ids = store.tabs.map((t) => t.id);
-    for (const id of ids) {
+  /** Tears down every tab of one project. The teardown is invisible to
+   *  anything watching the store: listeners come off first so a dying PTY's
+   *  exit event can't land mid-teardown, and the tabs then leave in a single
+   *  transition. Removing them one at a time is what truncated remembered
+   *  workspaces to their last-closed tab (#105) — see `removeProjectTabs`. */
+  async function closeTabsForProject(projectPath: string): Promise<void> {
+    const doomed = store.tabs.filter((t) => t.projectPath === projectPath);
+    if (doomed.length === 0) return;
+    for (const tab of doomed) {
       // eslint-disable-next-line no-await-in-loop
-      await closeTab(id);
+      await detachListeners(tab.id);
+      // A dormant tab never spawned, so there is nothing on the Rust side to
+      // kill — invoking would just log an unknown-id warning per closed tab.
+      if (tab.status === "dormant") continue;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await invoke("pty_kill", { id: tab.id });
+      } catch (err) {
+        console.warn("pty_kill failed", err);
+      }
     }
+    setStore(
+      produce((s) => {
+        const next = removeProjectTabs(s.tabs, s.activeTabId, projectPath);
+        s.tabs = next.tabs;
+        s.activeTabId = next.activeTabId;
+      }),
+    );
+  }
+
+  /** Same contract as `closeTabsForProject`, for every project at once. Runs
+   *  on provider teardown, where a per-tab walk would truncate *every*
+   *  remembered workspace on the way down (#105). */
+  async function closeAll(): Promise<void> {
+    const all = [...store.tabs];
+    if (all.length === 0) return;
+    for (const tab of all) {
+      // eslint-disable-next-line no-await-in-loop
+      await detachListeners(tab.id);
+      if (tab.status === "dormant") continue;
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await invoke("pty_kill", { id: tab.id });
+      } catch (err) {
+        console.warn("pty_kill failed", err);
+      }
+    }
+    setStore(
+      produce((s) => {
+        s.tabs = [];
+        s.activeTabId = null;
+      }),
+    );
   }
 
   function setActiveTab(id: string | null) {
@@ -411,6 +459,7 @@ export function makeTerminalContext() {
     restoreTabs,
     wakeTab,
     closeTab,
+    closeTabsForProject,
     closeAll,
     setActiveTab,
     write,

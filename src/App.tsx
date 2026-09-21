@@ -966,14 +966,11 @@ function Shell() {
     // returned `kept` count is non-zero and we abort the rest of the close.
     const { kept } = await diffPanel.clearProject(path);
     if (kept > 0) return;
-    // Kill all PTYs for the project.
-    const ids = term.store.tabs
-      .filter((t) => t.projectPath === path)
-      .map((t) => t.id);
-    for (const id of ids) {
-      // eslint-disable-next-line no-await-in-loop
-      await term.closeTab(id);
-    }
+    // Kill all PTYs for the project. One call, one store transition: walking
+    // the tabs and closing them individually let the workspace-persistence
+    // effect below observe the teardown in progress and remember a strip
+    // that was only half torn down (#105).
+    await term.closeTabsForProject(path);
     // Pivot away if it was active, BEFORE unpin, so the active-tab effect
     // has a valid target.
     if (activeProjectPath() === path) {
