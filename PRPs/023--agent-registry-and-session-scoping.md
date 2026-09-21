@@ -39,13 +39,14 @@ implements none of it — see PRP 024.
 
 ## Non-goals
 
-No `cursor-agent`. No picker. No agent badge. **No observable change of any
-kind**, including for a project pinned to a non-default `CLAUDE_CONFIG_DIR`.
-If a reviewer can tell this landed by using the app, something is wrong.
+No `cursor-agent`. No settings panel. No picker. No agent badge. **No
+observable change of any kind**, including for a project pinned to a
+non-default `CLAUDE_CONFIG_DIR`. If a reviewer can tell this landed by using
+the app, something is wrong.
 
-`list_agents` is deliberately absent: PRP 024's picker needs it, this one has
-no caller for it, and a command with no consumer is a promise nobody has
-checked.
+`list_agents` and the settings read/write commands are deliberately absent:
+024 needs them, this one has no caller for them, and a command with no
+consumer is a promise nobody has checked.
 
 ## The registry
 
@@ -59,7 +60,8 @@ checked.
    of the spec. The "not found" message, with its install hint, moves into the
    spec too; it is the one place in this PRP where a second agent would
    otherwise produce a message telling the user to `npm i -g
-   @anthropic-ai/claude-code`.
+   @anthropic-ai/claude-code`. The walk gains one step in front of all of
+   them: a user-configured path, if there is one — see below.
 2. **How do I start?** argv for new, continue, and resume-by-id. A constant
    flag is not enough — resume is `--resume <id>` for both Claude and Cursor
    but there is no reason to assume the third agent agrees — so this is a
@@ -75,6 +77,45 @@ checked.
 dynamic dispatch, and the exhaustive `match` is the point: when someone adds a
 variant, the compiler lists every question the new agent has failed to answer.
 That is the property this whole PRP is buying.
+
+## Agent settings, and why the store lands here
+
+Discovery is a heuristic and it will be wrong for someone. Cursor is the
+proof. Its installer writes **two** names pointing at the same versioned
+binary — `~/.local/bin/cursor-agent` and `~/.local/bin/agent`, both
+symlinks into `~/.local/share/cursor-agent/versions/<ver>/` — and Cursor's
+own docs now teach `agent`, a name generic enough that another CLI can
+legitimately own it. Meanwhile `~/.local/bin/cursor` is a third thing
+entirely: a shim that locates the Cursor **IDE** and launches it. Spawning
+that in a PTY opens a GUI editor instead of an agent. A field where someone
+can type a path is a field where someone can type that path.
+
+So a registry entry's binary becomes **override, else discovery**, and the
+override has to be readable **by Rust, at spawn time**. The existing
+precedent for pushing a preference from the frontend on mount
+(`clipboard_set_enabled`) does not transfer: that one degrades to "we miss a
+clip", this one decides which executable we run.
+
+`agent_settings.rs` owns a small JSON file in the app's config dir — `dirs`
+and `serde_json` are already dependencies, so nothing new is pulled in:
+
+```json
+{ "claude": { "enabled": true, "binaryPath": null } }
+```
+
+A missing file, a missing key and a missing field all read as "enabled,
+discover it", so the file does not exist until the user changes something.
+
+**This is a deliberate deviation from decision #6**, which reserves app
+settings for SQLite. There is no SQLite — `rusqlite` is not a dependency and
+every preference in the app today lives in `localStorage`. These two fields
+are exactly the ones that *cannot* live in the webview's storage, because
+they gate process spawning. A JSON file is the smallest thing that fixes
+that, and #6 is amended to say so rather than being quietly broken.
+
+023 ships the file format and the resolution order. The commands that read
+and write it arrive with the panel in 024, for the same reason `list_agents`
+does.
 
 ## `agentId` on the tab
 
@@ -177,6 +218,8 @@ anything for it to exclude, rather than after.
 
 - `agent.rs` (new) — the spec, the registry, `Launch`, and the session-provider
   enum with its single `Claude` variant.
+- `agent_settings.rs` (new) — the on-disk `{ enabled, binaryPath }` per agent,
+  read during binary resolution. No commands yet.
 - `binary.rs` — `find_claude_binary` generalizes to `find_agent_binary(&spec)`.
   The registered `get_claude_binary` command has no caller anywhere in `src/`;
   it goes.
@@ -204,7 +247,32 @@ anything for it to exclude, rather than after.
 
 **Docs** — `CLAUDE.md` decisions #1, #5, #9, #10 and #13 rewritten in
 agent-neutral terms, naming Claude as the only registered agent rather than as
-the architecture.
+the architecture, and #6 amended to record why spawn-gating settings are the
+one thing that does not live in `localStorage`.
+
+## What 024 picks up
+
+- **The Cursor provider** — discovery (`cursor-agent` first, then `agent`
+  only if it identifies itself by Cursor's date-shaped `--version`, and never
+  `cursor`), the `~/.cursor/chats/<md5(cwd)>/<chatId>/meta.json` reader, and
+  `create-chat` before spawn so the session id is known up front instead of
+  being correlated after the fact.
+- **The settings panel** — the app's first. Today every preference hides in a
+  titlebar dropdown; this one needs a real surface. Per agent: enabled, and a
+  binary path prefilled from discovery and overridable by hand.
+- **Agent identity in the Sessions tab.** Two providers make the list a
+  merge, which raises a question 023 does not have to answer. One list sorted
+  by recency with a per-row agent glyph — the user's question is "what was I
+  doing in this project", not "which CLI" — and one provider failing must not
+  blank the other's rows. That last part is not free: `list_sessions_for_project`
+  fails closed on a direnv error today, and in a merged list that `Err` would
+  take everything with it.
+- **The picker on `+` / New session** — and the rule that with exactly one
+  agent enabled there is no picker at all, not a dropdown holding one item.
+  Nobody running a single agent should pay for this feature.
+- **Disabling an agent hides it without destroying anything.** Because 023
+  namespaces the stored keys by agent, a disabled agent's remembered
+  workspace simply stops being read, and is intact when it is re-enabled.
 
 ## What this commits us to
 
@@ -224,6 +292,9 @@ invisible — but it is the door this opens.
   auto-resumes, and still only for the default profile.
 - Live `/rename`, tab-label correlation of a new session, and completion
   notifications all behave exactly as they do today.
+- With no settings file on disk, Claude resolves exactly as it does today;
+  with a `binaryPath` written by hand into the file, that path is what
+  spawns, and a bad one fails with the agent's own "not found" message.
 - `bun run typecheck`, `bun test`, `cargo clippy -- -D warnings`, `cargo test`
   clean.
 
