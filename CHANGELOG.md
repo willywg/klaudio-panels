@@ -6,6 +6,8 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
 ## [Unreleased]
 
+## [1.11.1] — 2026-09-21
+
 ### Fixed
 - **Claude Code's `/voice` can reach the microphone**
   ([#100](https://github.com/willywg/klaudio-panels/issues/100)). `/voice` did
@@ -28,6 +30,10 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   first time `/voice` actually asks; the app does not request the microphone
   at launch, because a terminal host has no business doing that for sessions
   that will never record.
+
+### Tracked work
+- PR: [#101](https://github.com/willywg/klaudio-panels/pull/101)
+- Issue: [#100](https://github.com/willywg/klaudio-panels/issues/100)
 
 ## [1.11.0] — 2026-08-26
 
