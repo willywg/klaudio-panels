@@ -15,6 +15,7 @@ import { MessageSquare, Search } from "lucide-solid";
 import { useCommandPalette } from "@/context/command-palette";
 import { useDiffPanel } from "@/context/diff-panel";
 import { displayLabel } from "@/lib/session-label";
+import { DEFAULT_AGENT } from "@/lib/agents";
 import { iconForFile } from "@/lib/file-icon";
 import type { SessionMeta } from "@/components/sessions-list";
 
@@ -66,6 +67,7 @@ export function CommandPalette(props: {
     async ({ path }) => {
       return (await invoke("list_sessions_for_project", {
         projectPath: path,
+        agentId: DEFAULT_AGENT,
       })) as SessionMeta[];
     },
   );

@@ -228,12 +228,14 @@ fn resolve_claude_config_dir_with(
 /// so two distinct non-UTF-8 paths could in principle encode identically.
 /// Every path direnv/the shell can plausibly produce is valid UTF-8 in
 /// practice.
+pub const DEFAULT_PROFILE_ID: &str = "default";
+
 pub fn profile_id_for_config_dir(config_dir: Option<&Path>) -> String {
     let Some(dir) = config_dir else {
-        return "default".to_string();
+        return DEFAULT_PROFILE_ID.to_string();
     };
     if is_default_claude_root(dir) {
-        return "default".to_string();
+        return DEFAULT_PROFILE_ID.to_string();
     }
     let encoded = URL_SAFE_NO_PAD.encode(dir.to_string_lossy().as_bytes());
     format!("custom:{encoded}")
@@ -266,7 +268,15 @@ fn is_default_claude_root(dir: &Path) -> bool {
 /// `list_sessions_for_project` (#60). No frontend change needed — every
 /// call site already `await`s it.
 #[tauri::command]
-pub async fn resolve_profile_id(project_path: String) -> Result<String, String> {
+pub async fn resolve_profile_id(project_path: String, agent_id: String) -> Result<String, String> {
+    let agent_id = crate::agent::AgentId::parse(&agent_id)?;
+    // An agent with no account concept of its own is always on the default
+    // profile, and never pays for a direnv evaluation to find that out. It
+    // cannot collide with Claude's "default" either — the agent id is a
+    // separate segment of every key this namespaces.
+    if !crate::agent::supports_profiles(agent_id) {
+        return Ok(DEFAULT_PROFILE_ID.to_string());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let config_dir = resolve_claude_config_dir(&project_path)?;
         Ok(profile_id_for_config_dir(config_dir.as_deref()))

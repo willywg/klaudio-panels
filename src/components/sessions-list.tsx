@@ -2,9 +2,13 @@ import { createResource, For, Show } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { RefreshCw } from "lucide-solid";
 import { displayLabel } from "@/lib/session-label";
+import { DEFAULT_AGENT, type AgentId } from "@/lib/agents";
 
 export type SessionMeta = {
   id: string;
+  /** Set by the provider that produced this row, never inferred here — with
+   *  more than one agent this list becomes a merge of several. */
+  agent: AgentId;
   created_at: string | null;
   updated_at: string | null;
   first_message_preview: string | null;
@@ -28,6 +32,7 @@ export function SessionsList(props: {
     async ({ path }) => {
       return (await invoke("list_sessions_for_project", {
         projectPath: path,
+        agentId: DEFAULT_AGENT,
       })) as SessionMeta[];
     },
   );

@@ -8,6 +8,7 @@ use notify_debouncer_full::{new_debouncer, DebounceEventResult};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
+use crate::agent::{self, AgentId};
 use crate::sessions::{
     canonicalize_rfc3339, last_assistant_complete, last_assistant_complete_from_tail, read_cwd,
     read_tail_lines, scan_session_file, session_updated_at, SessionMeta,
@@ -17,6 +18,12 @@ const DEBOUNCE_MS: u64 = 200;
 
 #[derive(Serialize, Clone)]
 pub struct SessionNewPayload {
+    /// The agent this session belongs to. Every consumer matches it against
+    /// the tab's own agent instead of assuming — this watcher only ever
+    /// looks at Claude's root, so today the comparison is always claude
+    /// against claude, and that is the point: the gate is structural before
+    /// there is anything for it to exclude.
+    pub agent: String,
     pub project_path: String,
     pub session_id: String,
     pub jsonl_created_at_ms: u64,
@@ -25,6 +32,7 @@ pub struct SessionNewPayload {
 
 #[derive(Serialize, Clone)]
 pub struct SessionCompletePayload {
+    pub agent: String,
     pub project_path: String,
     pub session_id: String,
     pub stop_reason: String,
@@ -39,10 +47,6 @@ static SEEN: LazyLock<Mutex<HashSet<PathBuf>>> = LazyLock::new(|| Mutex::new(Has
 /// times for the same end_turn message.
 static LAST_COMPLETED: LazyLock<Mutex<HashMap<String, String>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-
-fn claude_projects_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".claude/projects"))
-}
 
 fn is_jsonl(path: &Path) -> bool {
     path.extension()
@@ -98,6 +102,7 @@ fn emit_for_jsonl(app: &AppHandle, path: &Path) {
 
     if is_new {
         let payload = SessionNewPayload {
+            agent: AgentId::Claude.as_str().to_string(),
             project_path: cwd.clone(),
             session_id: session_id.clone(),
             jsonl_created_at_ms: file_birth_ms(path),
@@ -108,6 +113,7 @@ fn emit_for_jsonl(app: &AppHandle, path: &Path) {
 
     let meta = SessionMeta {
         id: session_id.clone(),
+        agent: AgentId::Claude.as_str().to_string(),
         created_at: scan.first_timestamp.map(|ts| canonicalize_rfc3339(&ts)),
         updated_at: session_updated_at(path, &tail_lines),
         first_message_preview: scan.first_preview,
@@ -137,6 +143,7 @@ fn emit_for_jsonl(app: &AppHandle, path: &Path) {
         };
         if should_emit {
             let payload = SessionCompletePayload {
+                agent: AgentId::Claude.as_str().to_string(),
                 project_path: cwd,
                 session_id,
                 stop_reason: complete.stop_reason,
@@ -187,7 +194,7 @@ fn seed_seen(root: &Path) {
 /// Install the global JSONL watcher. Runs in its own OS thread; the debouncer
 /// is moved into the thread and kept alive for the lifetime of the app.
 pub fn install(app: AppHandle) -> anyhow::Result<()> {
-    let root = claude_projects_dir()
+    let root = agent::watch_root(AgentId::Claude)
         .ok_or_else(|| anyhow::anyhow!("cannot resolve ~/.claude/projects"))?;
     std::fs::create_dir_all(&root)?;
 
