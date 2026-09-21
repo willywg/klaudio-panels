@@ -316,7 +316,28 @@ pub async fn pty_open(
         ("CLAUDE_DESKTOP".into(), "1".into()),
     ];
     extra_env.extend(crate::agent::extra_env(agent_id));
-    let env = crate::project_env::resolve_project_env(&project_path, shell_env, extra_env)?;
+    let mut env = crate::project_env::resolve_project_env(&project_path, shell_env, extra_env)?;
+
+    // Klaudio's own launch env reaches this point through the login-shell
+    // probe, which runs as a subprocess of Klaudio and re-exports whatever
+    // Klaudio was started with (#104). Started from inside a Claude Code
+    // session, that means the child would inherit the *launching* session's
+    // markers — and `CLAUDE_CODE_CHILD_SESSION` makes `claude` stop writing
+    // its transcript without saying so, which takes the Sessions list, tab
+    // correlation and resume down with it. Stripped last, so nothing can
+    // reintroduce one; names only in the log, never values.
+    let stripped = crate::agent::strip_blocked_env(agent_id, &mut env);
+    if !stripped.is_empty() {
+        debug_log::write(
+            "pty",
+            &format!(
+                "id={id} stripped {} inherited {} marker(s): {}",
+                stripped.len(),
+                spec.display_name,
+                stripped.join(" ")
+            ),
+        );
+    }
 
     // The frontend resolved `expected_profile_id` before spawning this tab
     // (see context/terminal.tsx) so it could be attached to the tab up

@@ -7,6 +7,34 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 ## [Unreleased]
 
 ### Fixed
+- **A session started from a Klaudio window launched inside another agent is
+  saved again**
+  ([#104](https://github.com/willywg/klaudio-panels/issues/104)). Sessions
+  created in such a window were never written to disk: they stayed unlabelled,
+  never reached the Sessions list, were not remembered on reopen and could not
+  be resumed. The work only existed in the terminal's scrollback.
+
+  Klaudio hands every child the hydrated login-shell env, and that env is
+  produced by running `$SHELL -l -c 'env -0'` as a subprocess of Klaudio — so
+  whatever Klaudio itself was launched with is re-exported by the login shell
+  and passed on. `project_env.rs` clears the ambient env first, but the
+  hydration that follows put it straight back. Launched from inside a Claude
+  Code session, the child `claude` therefore inherited the *launching*
+  session's markers, and `CLAUDE_CODE_CHILD_SESSION` makes Claude Code stop
+  saving its transcript — silently. The transcript is the only thing Klaudio
+  watches, so tab correlation, live `/rename`, the Sessions list and resume
+  all failed together, in a way indistinguishable from the app losing data.
+
+  The registry now declares, per agent, the env a child must *not* inherit
+  (`agent::strip_blocked_env`), applied in `pty_open` to the fully resolved
+  env as the last step before spawning, so no earlier stage can reintroduce
+  one. Exact names rather than a `CLAUDE_CODE_*` prefix, because
+  `CLAUDE_CONFIG_DIR` shares that prefix and decides which account a project
+  runs under.
+
+  Only ever affected windows launched from a terminal that was already inside
+  an agent session — an app opened from Finder or the Dock carries none of
+  these and was never affected.
 - **Closing a project no longer truncates its remembered workspace**
   ([#105](https://github.com/willywg/klaudio-panels/issues/105)). A project
   closed with several tabs came back with one: the last tab to be torn down.
