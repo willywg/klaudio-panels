@@ -6,6 +6,34 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
 ## [Unreleased]
 
+### Fixed
+- **Closing a project no longer truncates its remembered workspace**
+  ([#105](https://github.com/willywg/klaudio-panels/issues/105)). A project
+  closed with several tabs came back with one: the last tab to be torn down.
+
+  `handleCloseProject` walked the project's tabs and awaited `closeTab` on
+  each. Every removal mutates the tab store, which is exactly what the
+  workspace-persistence effect (#98) tracks — so it fired *between* removals
+  and wrote whatever was still there. The guard that was meant to prevent
+  this only ever covered the final step, from one tab to none; nothing
+  covered the descent from N to one, which is where the workspace was lost.
+
+  Teardown is now a single store transition (`closeTabsForProject`, backed by
+  the pure `removeProjectTabs`), so an observer only ever sees the whole
+  strip or none of it — and "none" is already the case the persistence effect
+  deliberately skips rather than records. `closeAll`, which runs on provider
+  teardown, had the same shape and would have truncated *every* project's
+  workspace on the way down; it batches the same way now.
+
+  This also closes a second hole the per-tab walk left open: pivoting the
+  active tab mid-teardown could land on a **dormant** sibling while the
+  project was still the active one, and the auto-wake effect would spawn a
+  `claude --resume` for a tab that was about to be closed.
+
+  Why it stayed hidden: quitting the app doesn't run the walk — the process
+  just dies and the stored key keeps its last steady state. It needed the
+  explicit *close project* action, which is the less common way to leave.
+
 ### Changed
 - **The session and tab layer is agent-aware**
   ([#102](https://github.com/willywg/klaudio-panels/issues/102)). Step 1 of
