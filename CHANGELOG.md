@@ -6,6 +6,57 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
 ## [Unreleased]
 
+### Changed
+- **The session and tab layer is agent-aware**
+  ([#102](https://github.com/willywg/klaudio-panels/issues/102)). Step 1 of
+  hosting more than one CLI agent, and it ships no new agent: Claude is still
+  the only entry in the registry and nothing in the UI changes.
+
+  `src-tauri/src/agent.rs` is now the one place that knows an agent exists.
+  Adding one means adding an `AgentId` variant and answering, in exhaustive
+  `match` arms, where its binary lives, how it is started, what env it needs,
+  where its sessions are kept, which root to watch, and whether it has a
+  per-project account concept — enum dispatch rather than a trait object
+  precisely so the compiler enumerates what a new agent has not answered yet.
+  Argv moved with it: `pty_open` takes an agent id and an optional session id
+  and asks the registry for the rest, so nothing on the frontend knows that
+  Claude spells resume `--resume`, and no caller can build an argv that
+  disagrees with the session its tab was created with.
+
+  Tabs, stored keys and live events all carry the agent now.
+  `lastSessionId:` and `openTabs:` gained an agent segment, and
+  `session:new` / `session:meta` / `session:complete` name the agent that
+  produced them so `findPromotionCandidate`, `shouldApplySessionMeta` and
+  `resolveCompleteTabId` match it instead of assuming. Every comparison is
+  claude against claude today — the point is that the gate is in place before
+  there is a second agent to misroute to. Session ids are each agent's own,
+  so two agents can mint the same one.
+
+  **The storage migration is why this could not wait.** A remembered
+  workspace assumed every id in it was resumable with `claude --resume`.
+  While Claude is the only agent that assumption is still true, so every
+  pre-agent key is unambiguously Claude's; after a second agent ships it
+  would be a migration racing new-generation writes. It runs lazily, per
+  project, on open: the path, agent and profile are all known by then, so
+  both spellings are constructed and nothing is parsed — a key's middle
+  segment is a filesystem path that may itself contain a colon. A write
+  retires the old spelling so it cannot resurrect. The older unnamespaced
+  `lastSessionId:<projectPath>` rung is untouched and still validated against
+  the live session list before it is trusted.
+
+### Added
+- **An agent's binary can be pinned explicitly.** `agent_settings.rs` reads
+  `{ enabled, binaryPath }` per agent from a JSON file in the app config dir
+  and that path, when set, wins over discovery; when it is set and does not
+  run, that is an error rather than a silent fall-through to a different
+  binary. Discovery is a heuristic and it will be wrong for someone — Cursor's
+  installer alone writes two names for the same binary (`cursor-agent` and the
+  generic `agent`, which another CLI can legitimately own), while `cursor` is
+  a third thing that launches the IDE. These two fields gate process spawning,
+  which is why they are the one preference that does not live in
+  `localStorage` (see decision #6). No commands and no panel yet — the
+  settings UI arrives with the second agent.
+
 ## [1.11.1] — 2026-09-21
 
 ### Fixed

@@ -1,3 +1,5 @@
+pub mod agent;
+pub mod agent_settings;
 pub mod binary;
 pub mod cli_agent;
 pub mod cli_args;
@@ -117,7 +119,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            binary::get_claude_binary,
             sessions::list_sessions_for_project,
             project_env::resolve_profile_id,
             pty::pty_open,

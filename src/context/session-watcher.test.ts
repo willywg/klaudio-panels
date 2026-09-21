@@ -1,12 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { findPromotionCandidate, shouldApplySessionMeta } from "./session-watcher";
 import type { TerminalTab } from "./terminal";
+import { CLAUDE } from "@/lib/agents";
 
 function makeTab(overrides: Partial<TerminalTab> = {}): TerminalTab {
   return {
     id: "tab-1",
     projectPath: "/replace",
     sessionId: null,
+    agentId: CLAUDE,
     profileId: "default",
     label: "New session",
     status: "opening",
@@ -22,6 +24,7 @@ describe("findPromotionCandidate", () => {
   test("promotes a matching pending default-profile tab", () => {
     const tab = makeTab({ profileId: "default" });
     const found = findPromotionCandidate([tab], {
+      agent: CLAUDE,
       project_path: "/replace",
       jsonl_created_at_ms: 1_500,
     });
@@ -31,6 +34,7 @@ describe("findPromotionCandidate", () => {
   test("never promotes a matching pending custom-profile tab — the backend watcher only observes the default root", () => {
     const tab = makeTab({ profileId: "custom:abc123" });
     const found = findPromotionCandidate([tab], {
+      agent: CLAUDE,
       project_path: "/replace",
       jsonl_created_at_ms: 1_500,
     });
@@ -45,7 +49,7 @@ describe("findPromotionCandidate", () => {
 
     const found = findPromotionCandidate(
       [wrongProject, alreadyResolved, tooOld, good],
-      { project_path: "/replace", jsonl_created_at_ms: 1_500 },
+      { agent: CLAUDE, project_path: "/replace", jsonl_created_at_ms: 1_500 },
     );
     expect(found?.id).toBe("d");
   });
@@ -53,16 +57,18 @@ describe("findPromotionCandidate", () => {
 
 describe("shouldApplySessionMeta", () => {
   test("true for a default-profile tab", () => {
-    expect(shouldApplySessionMeta(makeTab({ profileId: "default" }))).toBe(true);
-  });
-
-  test("false for a custom-profile tab", () => {
-    expect(shouldApplySessionMeta(makeTab({ profileId: "custom:abc123" }))).toBe(
-      false,
+    expect(shouldApplySessionMeta(makeTab({ profileId: "default" }), CLAUDE)).toBe(
+      true,
     );
   });
 
+  test("false for a custom-profile tab", () => {
+    expect(
+      shouldApplySessionMeta(makeTab({ profileId: "custom:abc123" }), CLAUDE),
+    ).toBe(false);
+  });
+
   test("false when no tab was found", () => {
-    expect(shouldApplySessionMeta(undefined)).toBe(false);
+    expect(shouldApplySessionMeta(undefined, CLAUDE)).toBe(false);
   });
 });

@@ -288,37 +288,35 @@ fn spawn_pty(
     Ok(())
 }
 
+/// Spawn an agent in a PTY. `session_id` is what decides how it starts: a
+/// session to resume, or `None` for a fresh one. The argv itself is the
+/// registry's business (`agent::argv`) — no caller needs to know that Claude
+/// spells resume `--resume`, and a caller that built the argv could disagree
+/// with the session id the tab was created with.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn pty_open(
     app: AppHandle,
     state: State<'_, PtyState>,
     id: String,
     project_path: String,
-    args: Vec<String>,
+    agent_id: String,
+    session_id: Option<String>,
     expected_profile_id: String,
 ) -> Result<(), String> {
-    let bin = crate::binary::find_claude_binary()?;
+    let agent_id = crate::agent::AgentId::parse(&agent_id)?;
+    let spec = crate::agent::spec(agent_id);
+    let bin = crate::binary::find_agent_binary(agent_id)?;
     let shell = crate::shell_env::get_user_shell();
     let shell_env = crate::shell_env::load_shell_env(&shell);
-    // Advertise warp's CLI-agent protocol so the warp@claude-code-warp
-    // plugin emits structured OSC 777 events instead of falling back to
-    // its "install Warp" legacy message. The plugin's gate is in
-    // `should-use-structured.sh`: it requires both env vars to be set,
-    // and rejects WARP_CLIENT_VERSION strings matching their broken
-    // *stable*/*preview*/*dev* releases. Our value avoids those
-    // substrings entirely, so the gate is bypassed and we get events.
-    let client_version = format!("klaudio-panels-{}", env!("CARGO_PKG_VERSION"));
-    let env = crate::project_env::resolve_project_env(
-        &project_path,
-        shell_env,
-        vec![
-            ("TERM".into(), "xterm-256color".into()),
-            ("COLORTERM".into(), "truecolor".into()),
-            ("CLAUDE_DESKTOP".into(), "1".into()),
-            ("WARP_CLI_AGENT_PROTOCOL_VERSION".into(), "1".into()),
-            ("WARP_CLIENT_VERSION".into(), client_version),
-        ],
-    )?;
+
+    let mut extra_env: Vec<(String, String)> = vec![
+        ("TERM".into(), "xterm-256color".into()),
+        ("COLORTERM".into(), "truecolor".into()),
+        ("CLAUDE_DESKTOP".into(), "1".into()),
+    ];
+    extra_env.extend(crate::agent::extra_env(agent_id));
+    let env = crate::project_env::resolve_project_env(&project_path, shell_env, extra_env)?;
 
     // The frontend resolved `expected_profile_id` before spawning this tab
     // (see context/terminal.tsx) so it could be attached to the tab up
@@ -326,27 +324,38 @@ pub async fn pty_open(
     // before the profile was known. Re-derive the profile from the *same*
     // env just resolved above (not a second direnv evaluation) and refuse
     // to spawn if the project's .envrc changed in between — never log or
-    // return either id, only that they diverged.
-    let config_dir = env
-        .iter()
-        .find(|(k, _)| k == "CLAUDE_CONFIG_DIR")
-        .map(|(_, v)| PathBuf::from(v));
-    let actual_profile_id = crate::project_env::profile_id_for_config_dir(config_dir.as_deref());
+    // return either id, only that they diverged. An agent with no account
+    // concept of its own is always on the default profile.
+    let actual_profile_id = if crate::agent::supports_profiles(agent_id) {
+        let config_dir = env
+            .iter()
+            .find(|(k, _)| k == "CLAUDE_CONFIG_DIR")
+            .map(|(_, v)| PathBuf::from(v));
+        crate::project_env::profile_id_for_config_dir(config_dir.as_deref())
+    } else {
+        crate::project_env::DEFAULT_PROFILE_ID.to_string()
+    };
     if actual_profile_id != expected_profile_id {
         debug_log::write(
             "pty",
             &format!("id={id} refused: resolved profile no longer matches the profile checked before spawn"),
         );
-        return Err(
-            "this project's Claude profile changed since it was last checked (its .envrc may \
-             have been edited) — reopen the project and try again"
-                .to_string(),
-        );
+        return Err(format!(
+            "this project's {} profile changed since it was last checked (its .envrc may \
+             have been edited) — reopen the project and try again",
+            spec.display_name
+        ));
     }
+
+    let launch = match session_id {
+        Some(s) => crate::agent::Launch::Resume(s),
+        None => crate::agent::Launch::New,
+    };
+    let args = crate::agent::argv(agent_id, &launch);
 
     let bin_str = bin
         .to_str()
-        .ok_or_else(|| "claude binary path is not valid UTF-8".to_string())?
+        .ok_or_else(|| format!("{} binary path is not valid UTF-8", spec.display_name))?
         .to_string();
     spawn_pty(app, &state, id, bin_str, args, project_path, env, None, None)
 }

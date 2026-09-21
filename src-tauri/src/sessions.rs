@@ -1,4 +1,6 @@
 use chrono::{DateTime, SecondsFormat, Utc};
+
+use crate::agent::AgentId;
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
@@ -18,6 +20,11 @@ const TAIL_BYTES: u64 = 4 * 1024 * 1024;
 #[derive(Serialize, Clone)]
 pub struct SessionMeta {
     pub id: String,
+    /// Which agent wrote this session. Set by the provider that produced it,
+    /// never inferred by a consumer: with more than one agent the sessions
+    /// list is a merge, and a row that cannot name its agent is a row we
+    /// cannot resume correctly.
+    pub agent: String,
     /// First real user message's timestamp. Never recomputed from later
     /// activity — see `updated_at` for recency.
     pub created_at: Option<String>,
@@ -345,23 +352,29 @@ pub(crate) fn session_updated_at(file: &Path, lines: &[String]) -> Option<String
 #[tauri::command]
 pub async fn list_sessions_for_project(
     project_path: String,
+    agent_id: String,
 ) -> Result<Vec<SessionMeta>, String> {
-    tauri::async_runtime::spawn_blocking(move || list_sessions_for_project_sync(project_path))
-        .await
-        .map_err(|e| e.to_string())?
+    let agent_id = crate::agent::AgentId::parse(&agent_id)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::agent::list_sessions(agent_id, &project_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-fn list_sessions_for_project_sync(project_path: String) -> Result<Vec<SessionMeta>, String> {
+/// Claude's session provider (`agent::list_sessions`). Kept here rather than
+/// in `agent.rs` because it is all Claude-specific JSONL knowledge.
+pub(crate) fn list_claude_sessions(project_path: &str) -> Result<Vec<SessionMeta>, String> {
     // Fails closed on a direnv evaluation error (see project_env.rs) — we
     // never fall back to the default ~/.claude/projects after a failure,
     // since that could show sessions from the wrong Claude account.
-    let config_dir = crate::project_env::resolve_claude_config_dir(&project_path)?;
+    let config_dir = crate::project_env::resolve_claude_config_dir(project_path)?;
     let projects_dir =
         projects_dir_for(config_dir).ok_or("cannot resolve Claude sessions directory")?;
     if !projects_dir.exists() {
         return Ok(vec![]);
     }
-    Ok(scan_projects_dir(&projects_dir, &project_path))
+    Ok(scan_projects_dir(&projects_dir, project_path))
 }
 
 /// Scans every encoded project dir under `projects_dir` for sessions whose
@@ -431,6 +444,7 @@ fn scan_projects_dir(projects_dir: &Path, project_path: &str) -> Vec<SessionMeta
                 let tail_lines = read_tail_lines(&p).unwrap_or_default();
                 out.push(SessionMeta {
                     id,
+                    agent: AgentId::Claude.as_str().to_string(),
                     created_at: scan.first_timestamp.map(|ts| canonicalize_rfc3339(&ts)),
                     updated_at: session_updated_at(&p, &tail_lines),
                     first_message_preview: scan.first_preview,

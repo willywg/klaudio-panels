@@ -2,45 +2,73 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-/// Discover the `claude` CLI binary. Strategy (first match wins):
-///   1. Anthropic's native installer paths (`~/.local/bin/claude` and
-///      `~/.claude/local/claude`). These are preferred over everything
-///      else because they ship the latest official build — users often
-///      have older copies lingering in Homebrew / bun-global / nvm from
-///      earlier install methods, and `which` would pick those up first
-///      if `/opt/homebrew/bin` comes before `~/.local/bin` in PATH.
+use crate::agent::{self, AgentId};
+
+/// Discover an agent's CLI binary. Strategy (first match wins):
+///   0. The path the user configured for this agent, if there is one. It is
+///      not a candidate among others: when it is set and does not work, that
+///      is an error the user can fix, and quietly falling through to
+///      discovery would run a *different* binary than the one they named.
+///   1. The agent's own installer paths (`agent::installer_candidates`).
+///      These are preferred over everything else because they ship the latest
+///      official build — users often have older copies lingering in Homebrew
+///      / bun-global / nvm from earlier install methods, and `which` would
+///      pick those up first if `/opt/homebrew/bin` comes before
+///      `~/.local/bin` in PATH.
 ///   2. Hydrated login-shell PATH via `which_in_shell` (critical for
 ///      Finder-launched GUI apps — macOS strips the launchd PATH so
 ///      `~/.nvm/versions/...` etc. aren't visible otherwise).
 ///   3. `which` crate against the process PATH (dev runs from terminal).
-///   4. Remaining static fallbacks (~/.bun/bin, ~/.volta, ~/.asdf, …).
-///   5. nvm-installed node bins under ~/.nvm/versions/node/*/bin/claude.
+///   4. The agent's remaining fallbacks (`agent::fallback_candidates`):
+///      package managers and version-manager shims.
 ///
-/// Returns the first candidate that responds to `claude --version` within 2s.
-pub fn find_claude_binary() -> Result<PathBuf, String> {
-    let candidates = candidates();
+/// Returns the first candidate that responds to `--version` within 2s.
+pub fn find_agent_binary(id: AgentId) -> Result<PathBuf, String> {
+    let spec = agent::spec(id);
+
+    if let Some(configured) = crate::agent_settings::load(id).override_path() {
+        if validate(&configured) {
+            crate::debug_log::write(
+                "binary",
+                &format!("{} resolved to configured {}", spec.bin_name, configured.display()),
+            );
+            return Ok(configured);
+        }
+        let err = format!(
+            "The {} binary configured in the agent settings ({}) could not be run. \
+             Fix the path, or clear it to search for {} again.",
+            spec.display_name,
+            configured.display(),
+            spec.bin_name,
+        );
+        crate::debug_log::write("binary", &err);
+        return Err(err);
+    }
+
+    let candidates = candidates(id);
     crate::debug_log::write(
         "binary",
-        &format!("claude candidates ({}): {candidates:?}", candidates.len()),
+        &format!(
+            "{} candidates ({}): {candidates:?}",
+            spec.bin_name,
+            candidates.len()
+        ),
     );
     for candidate in candidates {
         if validate(&candidate) {
             crate::debug_log::write(
                 "binary",
-                &format!("claude resolved to {}", candidate.display()),
+                &format!("{} resolved to {}", spec.bin_name, candidate.display()),
             );
             return Ok(candidate);
         }
     }
-    let err =
-        "Claude Code CLI not found. Install with `npm i -g @anthropic-ai/claude-code` \
-         or ensure `claude` is in PATH."
-            .to_string();
-    crate::debug_log::write("binary", &err);
-    Err(err)
+    crate::debug_log::write("binary", spec.not_found);
+    Err(spec.not_found.to_string())
 }
 
-fn candidates() -> Vec<PathBuf> {
+fn candidates(id: AgentId) -> Vec<PathBuf> {
+    let spec = agent::spec(id);
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let push = |p: PathBuf, acc: &mut Vec<PathBuf>, seen: &mut std::collections::HashSet<PathBuf>| {
@@ -49,14 +77,9 @@ fn candidates() -> Vec<PathBuf> {
         }
     };
 
-    let home = dirs::home_dir();
-
-    // 1. Native installer paths — preferred. These are where Anthropic's
-    // official installer drops the latest build; we want them to win over
-    // any stale Homebrew / bun / npm copy still on PATH.
-    if let Some(h) = &home {
-        push(h.join(".local/bin/claude"), &mut out, &mut seen);
-        push(h.join(".claude/local/claude"), &mut out, &mut seen);
+    // 1. The agent's installer paths — preferred, see above.
+    for p in agent::installer_candidates(id) {
+        push(p, &mut out, &mut seen);
     }
 
     // 2. Hydrated login-shell PATH. Finder-launched apps inherit the
@@ -65,40 +88,18 @@ fn candidates() -> Vec<PathBuf> {
     // PATH.
     let shell = crate::shell_env::get_user_shell();
     let shell_env = crate::shell_env::load_shell_env(&shell);
-    if let Some(resolved) = crate::shell_env::which_in_shell(shell_env.as_ref(), "claude") {
+    if let Some(resolved) = crate::shell_env::which_in_shell(shell_env.as_ref(), spec.bin_name) {
         push(PathBuf::from(resolved), &mut out, &mut seen);
     }
 
     // 3. which crate (searches process PATH; covers dev runs)
-    if let Ok(p) = which::which("claude") {
+    if let Ok(p) = which::which(spec.bin_name) {
         push(p, &mut out, &mut seen);
     }
 
-    // 4. Remaining static fallbacks
-    let mut statics: Vec<PathBuf> = vec![
-        PathBuf::from("/opt/homebrew/bin/claude"),
-        PathBuf::from("/usr/local/bin/claude"),
-        PathBuf::from("/usr/bin/claude"),
-    ];
-    if let Some(h) = &home {
-        statics.extend([
-            h.join(".bun/bin/claude"),
-            h.join(".volta/bin/claude"),
-            h.join(".asdf/shims/claude"),
-        ]);
-    }
-    for p in statics {
+    // 4. Package managers and version-manager shims.
+    for p in agent::fallback_candidates(id) {
         push(p, &mut out, &mut seen);
-    }
-
-    // 5. nvm-installed node versions
-    if let Some(h) = &home {
-        let nvm_root = h.join(".nvm/versions/node");
-        if let Ok(entries) = std::fs::read_dir(&nvm_root) {
-            for entry in entries.flatten() {
-                push(entry.path().join("bin/claude"), &mut out, &mut seen);
-            }
-        }
     }
 
     out
@@ -127,9 +128,4 @@ fn validate(path: &PathBuf) -> bool {
             Err(_) => return false,
         }
     }
-}
-
-#[tauri::command]
-pub fn get_claude_binary() -> Result<String, String> {
-    find_claude_binary().map(|p| p.to_string_lossy().into_owned())
 }

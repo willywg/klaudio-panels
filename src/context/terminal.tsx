@@ -7,10 +7,11 @@ import {
 import { createStore, produce } from "solid-js/store";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { AgentId } from "@/lib/agents";
 
 /** `dormant` is a tab restored from the remembered workspace that has never
  *  been given a PTY. It exists in the strip with its label so reopening a
- *  project brings the whole workspace back, but `claude --resume` only runs
+ *  project brings the whole workspace back, but the agent is only resumed
  *  when the user activates it (see `wakeTab`) — restoring N sessions must
  *  not mean spawning N processes on window open (decision #9). */
 export type TabStatus = "dormant" | "opening" | "running" | "exited" | "error";
@@ -19,6 +20,11 @@ export type TerminalTab = {
   id: string;
   projectPath: string;
   sessionId: string | null;
+  /** Which agent this tab runs. Resolved by the caller *before* the tab is
+   *  created — never assigned afterwards, for the same reason as
+   *  `profileId`: a tab that exists for even one tick without knowing its
+   *  agent is a tab a live session event can be misrouted to. */
+  agentId: AgentId;
   /** "default" or "custom:<...>" (see project_env::profile_id_for_config_dir),
    *  resolved *before* this tab is created (never assigned after the fact —
    *  that would leave a window where a live session event can't tell which
@@ -51,7 +57,12 @@ type ExitHandler = (code: number) => void;
 
 export type OpenTabOpts = {
   label: string;
+  /** The session to resume, or null for a fresh one. This is also what
+   *  decides the argv: the backend asks its registry for the agent's resume
+   *  flags rather than taking them from here, so a caller cannot build an
+   *  argv that disagrees with the session the tab was created with. */
   sessionId: string | null;
+  agentId: AgentId;
   /** Resolved by the caller via `resolve_profile_id` *before* calling
    *  `openTab` — see `TerminalTab.profileId`. */
   profileId: string;
@@ -113,7 +124,8 @@ export function makeTerminalContext() {
   async function spawn(
     id: string,
     projectPath: string,
-    args: string[],
+    agentId: AgentId,
+    sessionId: string | null,
     profileId: string,
   ): Promise<void> {
     // CRITICAL: subscribe BEFORE invoking pty_open. Otherwise Rust starts
@@ -136,7 +148,8 @@ export function makeTerminalContext() {
       await invoke("pty_open", {
         id,
         projectPath,
-        args,
+        agentId,
+        sessionId,
         expectedProfileId: profileId,
       });
     } catch (err) {
@@ -166,7 +179,6 @@ export function makeTerminalContext() {
 
   async function openTab(
     projectPath: string,
-    args: string[],
     opts: OpenTabOpts,
   ): Promise<string> {
     const id = newId();
@@ -174,6 +186,7 @@ export function makeTerminalContext() {
       id,
       projectPath,
       sessionId: opts.sessionId,
+      agentId: opts.agentId,
       profileId: opts.profileId,
       label: opts.label,
       status: "opening",
@@ -189,7 +202,7 @@ export function makeTerminalContext() {
       }),
     );
 
-    await spawn(id, projectPath, args, opts.profileId);
+    await spawn(id, projectPath, opts.agentId, opts.sessionId, opts.profileId);
     return id;
   }
 
@@ -200,6 +213,7 @@ export function makeTerminalContext() {
    *  touch `activeTabId`; the caller decides which tab to activate. */
   function restoreTabs(
     projectPath: string,
+    agentId: AgentId,
     profileId: string,
     entries: { sessionId: string; label: string }[],
   ): string[] {
@@ -213,6 +227,7 @@ export function makeTerminalContext() {
             id,
             projectPath,
             sessionId: e.sessionId,
+            agentId,
             profileId,
             label: e.label,
             status: "dormant",
@@ -227,9 +242,10 @@ export function makeTerminalContext() {
     return ids;
   }
 
-  /** Spawns `claude --resume <id>` for a dormant tab, in place — it keeps its
-   *  position in the strip and its tab id. A no-op on any other status, so
-   *  activation paths can call it unconditionally. */
+  /** Resumes a dormant tab's session, in place — it keeps its position in
+   *  the strip and its tab id. The argv comes from the tab's agent, in the
+   *  backend registry. A no-op on any other status, so activation paths can
+   *  call it unconditionally. */
   async function wakeTab(id: string): Promise<void> {
     const tab = store.tabs.find((t) => t.id === id);
     if (!tab || tab.status !== "dormant" || !tab.sessionId) return;
@@ -238,12 +254,7 @@ export function makeTerminalContext() {
     // in App.tsx. Without this both would still see `dormant` and spawn a
     // second PTY for the same tab. `spawn` sets the status again itself.
     setStore("tabs", (t) => t.id === id, "status", "opening");
-    await spawn(
-      id,
-      tab.projectPath,
-      ["--resume", tab.sessionId],
-      tab.profileId,
-    );
+    await spawn(id, tab.projectPath, tab.agentId, tab.sessionId, tab.profileId);
   }
 
   async function closeTab(id: string): Promise<void> {

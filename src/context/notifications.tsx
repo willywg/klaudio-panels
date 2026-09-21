@@ -17,8 +17,10 @@ import {
   type NotificationPrefs,
 } from "@/lib/notifications-prefs";
 import { useTerminal, type TerminalTab } from "@/context/terminal";
+import type { AgentId } from "@/lib/agents";
 
 type SessionCompletePayload = {
+  agent: AgentId;
   project_path: string;
   session_id: string;
   stop_reason: string;
@@ -135,12 +137,16 @@ function autoDismissMs(kind: ToastKind): number {
  *  standing up the Tauri event bus. */
 export function resolveCompleteTabId(
   tabs: readonly TerminalTab[],
+  agent: AgentId,
   projectPath: string,
   sessionId: string | null,
 ): string | null {
   if (!sessionId) return null;
   const tab = tabs.find(
-    (t) => t.projectPath === projectPath && t.sessionId === sessionId,
+    (t) =>
+      t.projectPath === projectPath &&
+      t.sessionId === sessionId &&
+      t.agentId === agent,
   );
   if (!tab || tab.profileId !== "default") return null;
   return tab.id;
@@ -459,6 +465,7 @@ function makeNotificationsContext() {
         : "Your turn — open Klaudio Panels.";
     const tabId = resolveCompleteTabId(
       term.store.tabs,
+      payload.agent,
       payload.project_path,
       payload.session_id,
     );

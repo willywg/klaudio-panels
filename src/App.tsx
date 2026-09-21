@@ -35,6 +35,7 @@ import {
 } from "@/components/last-session";
 import { getOpenTabIds, setOpenTabIds } from "@/components/open-tabs";
 import { resolveAutoResumeTarget } from "@/lib/auto-resume";
+import { DEFAULT_AGENT, type AgentId } from "@/lib/agents";
 import { resolveRestoredTabs } from "@/lib/restore-tabs";
 import { ProjectsProvider, useProjects } from "@/context/projects";
 import { TerminalProvider, useTerminal } from "@/context/terminal";
@@ -714,7 +715,7 @@ function Shell() {
     const p = activeProjectPath();
     const a = activeTab();
     if (!p || !a || a.projectPath !== p) return;
-    if (a.sessionId) setLastSessionId(p, a.profileId, a.sessionId);
+    if (a.sessionId) setLastSessionId(p, a.agentId, a.profileId, a.sessionId);
   });
 
   // A dormant tab is a remembered session with no PTY behind it. The moment
@@ -742,25 +743,31 @@ function Shell() {
   // skipped rather than cleared, so closing the last tab (or the project)
   // leaves the remembered workspace intact — same contract as lastSessionId.
   createEffect(() => {
-    // Grouped by project AND profile, not by project alone: an `.envrc` edited
-    // mid-session can leave one project holding tabs from two profiles, and
-    // filing those under one key would restore someone else's workspace.
+    // Grouped by project AND agent AND profile, not by project alone: an
+    // `.envrc` edited mid-session can leave one project holding tabs from two
+    // profiles, and a project can hold tabs from two agents at once. Filing
+    // any of those under one key would restore someone else's workspace.
     const groups = new Map<
       string,
-      { projectPath: string; profileId: string; ids: string[] }
+      { projectPath: string; agentId: AgentId; profileId: string; ids: string[] }
     >();
     for (const t of term.store.tabs) {
       if (!t.sessionId) continue;
-      const key = `${t.profileId}\n${t.projectPath}`;
+      const key = `${t.agentId}\n${t.profileId}\n${t.projectPath}`;
       let entry = groups.get(key);
       if (!entry) {
-        entry = { projectPath: t.projectPath, profileId: t.profileId, ids: [] };
+        entry = {
+          projectPath: t.projectPath,
+          agentId: t.agentId,
+          profileId: t.profileId,
+          ids: [],
+        };
         groups.set(key, entry);
       }
       entry.ids.push(t.sessionId);
     }
-    for (const { projectPath, profileId, ids } of groups.values()) {
-      setOpenTabIds(projectPath, profileId, ids);
+    for (const { projectPath, agentId, profileId, ids } of groups.values()) {
+      setOpenTabIds(projectPath, agentId, profileId, ids);
     }
   });
 
@@ -768,12 +775,15 @@ function Shell() {
     const p = activeProjectPath();
     if (!p) return;
     try {
+      const agentId = DEFAULT_AGENT;
       const profileId = await invoke<string>("resolve_profile_id", {
         projectPath: p,
+        agentId,
       });
-      const id = await term.openTab(p, [], {
+      const id = await term.openTab(p, {
         label: "New session",
         sessionId: null,
+        agentId,
         profileId,
       });
       focusTerminal(id);
@@ -790,12 +800,15 @@ function Shell() {
     label: string,
   ) {
     try {
+      const agentId = DEFAULT_AGENT;
       const profileId = await invoke<string>("resolve_profile_id", {
         projectPath,
+        agentId,
       });
-      const id = await term.openTab(projectPath, ["--resume", sessionId], {
+      const id = await term.openTab(projectPath, {
         label,
         sessionId,
+        agentId,
         profileId,
       });
       focusTerminal(id);
@@ -844,10 +857,12 @@ function Shell() {
     if (existing.length > 0) return;
 
     void (async () => {
+      const agentId = DEFAULT_AGENT;
       let profileId: string;
       try {
         profileId = await invoke<string>("resolve_profile_id", {
           projectPath,
+          agentId,
         });
       } catch (err) {
         // Could be a transient/blocked .envrc (e.g. `direnv allow` not run
@@ -864,10 +879,11 @@ function Shell() {
       const listSessions = () =>
         (listing ??= invoke("list_sessions_for_project", {
           projectPath,
+          agentId,
         }) as Promise<SessionMeta[]>);
 
-      const decision = await resolveAutoResumeTarget(profileId, {
-        getNamespaced: () => getLastSessionId(projectPath, profileId),
+      const decision = await resolveAutoResumeTarget(agentId, profileId, {
+        getNamespaced: () => getLastSessionId(projectPath, agentId, profileId),
         getLegacy: () => getLegacyLastSessionId(projectPath),
         listSessions,
       });
@@ -881,7 +897,7 @@ function Shell() {
         // clear only the pointer it actually came from. The rest of the
         // remembered workspace may still be valid, so don't bail here.
         if (decision.source === "namespaced") {
-          setLastSessionId(projectPath, profileId, null);
+          setLastSessionId(projectPath, agentId, profileId, null);
         } else {
           clearLegacyLastSessionId(projectPath);
         }
@@ -889,13 +905,13 @@ function Shell() {
         // Validated against the current (profile-scoped) session list —
         // migrate it under the namespaced key and retire the legacy
         // pointer so it can't resurrect a stale id on a later launch.
-        setLastSessionId(projectPath, profileId, decision.sessionId);
+        setLastSessionId(projectPath, agentId, profileId, decision.sessionId);
         clearLegacyLastSessionId(projectPath);
       }
 
       const wanted = decision.action === "open" ? decision.sessionId : null;
       const restored = resolveRestoredTabs(
-        getOpenTabIds(projectPath, profileId),
+        getOpenTabIds(projectPath, agentId, profileId),
         await listSessions(),
         wanted,
       );
@@ -904,7 +920,7 @@ function Shell() {
       // Rebuild the whole strip dormant and in its remembered order, then
       // give a PTY to one tab only: the session that was active at quit, or
       // — if that one is gone — the first survivor, so the pane isn't empty.
-      const tabIds = term.restoreTabs(projectPath, profileId, restored);
+      const tabIds = term.restoreTabs(projectPath, agentId, profileId, restored);
       const wakeSessionId = wanted ?? restored[0].sessionId;
       const wakeIdx = restored.findIndex((r) => r.sessionId === wakeSessionId);
       const tabId = tabIds[wakeIdx] ?? tabIds[0];
@@ -925,14 +941,14 @@ function Shell() {
             console.info(
               `auto-resume failed for ${wakeSessionId} (exit ${code} after ${elapsed}ms). Clearing lastSessionId.`,
             );
-            setLastSessionId(projectPath, profileId, null);
+            setLastSessionId(projectPath, agentId, profileId, null);
             void term.closeTab(tabId);
           }
           detach();
         });
       } catch (err) {
         console.warn("auto-resume wakeTab threw", err);
-        setLastSessionId(projectPath, profileId, null);
+        setLastSessionId(projectPath, agentId, profileId, null);
       } finally {
         setSessionsRefresh((k) => k + 1);
       }
@@ -997,12 +1013,15 @@ function Shell() {
     projects.touch(projectPath);
     setActiveProjectPath(projectPath);
     try {
+      const agentId = DEFAULT_AGENT;
       const profileId = await invoke<string>("resolve_profile_id", {
         projectPath,
+        agentId,
       });
-      await term.openTab(projectPath, [], {
+      await term.openTab(projectPath, {
         label: "New session",
         sessionId: null,
+        agentId,
         profileId,
       });
     } catch (err) {
