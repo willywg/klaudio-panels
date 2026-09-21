@@ -24,6 +24,16 @@ Every release ends with a cask bump in
 or brew users freeze on the previous version. Build the DMG with
 `--target universal-apple-darwin` — host-arch builds break Intel users.
 
+**The bundle declares microphone access (#100).** `NSMicrophoneUsageDescription`
+in `src-tauri/Info.plist` (merged by the bundler via `bundle.macOS.infoPlist`)
+plus `com.apple.security.device.audio-input` in `src-tauri/entitlements.plist`.
+macOS attributes a child process's microphone request to the responsible
+process — us, not `claude` — so Claude Code's `/voice` is denied in silence
+without both, and the app never even appears under Privacy & Security >
+Microphone. Don't drop either half. Not reproducible under `bun tauri dev`,
+which runs a bare binary with no bundle and so pins the request on whichever
+terminal launched it; QA needs a built `.app`.
+
 ## What this project is
 
 Tauri v2 + SolidJS desktop app that **embeds the real Claude Code TUI inside a native window** via PTY. The app is a shell around `claude`, not a reimplementation of it. The sidebar has two tabs per project: **Sessions** (past `~/.claude/projects/**/*.jsonl` rendered as a list; clicking resumes via `claude --resume <id>` in the PTY) and **Files** (a lazy-loaded project tree backed by `notify` + `ignore` crates). A background JSONL watcher propagates live `/rename` updates to open tab labels and correlates brand-new (non-resumed) tabs with their `sessionId` once Claude writes the first line.

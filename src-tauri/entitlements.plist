@@ -12,5 +12,12 @@
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <!-- We are codesigned with the hardened runtime, which denies microphone
+         access to the process chain unless this is present. Paired with
+         NSMicrophoneUsageDescription in Info.plist: the entitlement permits
+         the access, the string lets TCC ask for it. Both are what iTerm and
+         Cursor carry. No camera counterpart — nothing here wants one. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
 </dict>
 </plist>
