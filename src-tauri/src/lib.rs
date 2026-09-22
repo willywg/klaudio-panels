@@ -1,8 +1,10 @@
 pub mod agent;
+pub mod agent_commands;
 pub mod agent_settings;
 pub mod binary;
 pub mod cli_agent;
 pub mod cli_args;
+pub mod cursor_sessions;
 pub mod clipboard_history;
 pub mod debug_log;
 pub mod file_read;
@@ -120,6 +122,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             sessions::list_sessions_for_project,
+            agent_commands::list_agents,
+            agent_commands::discover_agent_binary,
+            agent_commands::set_agent_settings,
+            agent_commands::agent_create_session,
             project_env::resolve_profile_id,
             pty::pty_open,
             pty::pty_open_editor,

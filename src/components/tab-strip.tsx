@@ -1,14 +1,18 @@
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
 import { Plus, X } from "lucide-solid";
 import type { TerminalTab } from "@/context/terminal";
+import { AgentBadge } from "@/components/agent-badge";
 
 type Props = {
   tabs: TerminalTab[];
   activeTabId: string | null;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
-  onNew: () => void;
+  /** Receives the click so a picker can anchor to the button. */
+  onNew: (e: MouseEvent) => void;
   canOpenNew: boolean;
+  /** Badge each tab with its agent — only when more than one is enabled. */
+  showAgent: boolean;
 };
 
 function statusDotClass(tab: TerminalTab): string {
@@ -58,6 +62,9 @@ export function TabStrip(props: Props) {
                   statusDotClass(tab)
                 }
               />
+              <Show when={props.showAgent}>
+                <AgentBadge agent={tab.agentId} compact />
+              </Show>
               <span class="truncate flex-1">{tab.label}</span>
               <button
                 class={
@@ -78,7 +85,7 @@ export function TabStrip(props: Props) {
       </For>
       <button
         class="px-3 text-neutral-400 hover:text-neutral-100 hover:bg-neutral-900/60 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed flex items-center"
-        onClick={props.onNew}
+        onClick={(e) => props.onNew(e)}
         disabled={!props.canOpenNew}
         title="New session"
       >

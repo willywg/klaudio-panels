@@ -62,7 +62,7 @@ pub(crate) fn canonicalize_rfc3339(ts: &str) -> String {
 /// `DateTime<Utc>` so ordering is chronological, never lexicographic on the
 /// raw string (differing offsets or fractional-second widths would otherwise
 /// sort wrong). Missing or unparseable values sort last, same as before.
-fn ts_key(v: &Option<String>) -> Option<DateTime<Utc>> {
+pub(crate) fn ts_key(v: &Option<String>) -> Option<DateTime<Utc>> {
     v.as_deref().and_then(parse_rfc3339)
 }
 
@@ -76,7 +76,7 @@ fn projects_dir_for(config_dir: Option<PathBuf>) -> Option<PathBuf> {
     }
 }
 
-fn canonical(path: &str) -> String {
+pub(crate) fn canonical(path: &str) -> String {
     PathBuf::from(path)
         .canonicalize()
         .map(|p| p.to_string_lossy().into_owned())
@@ -124,7 +124,7 @@ fn is_noise_message(text: &str) -> bool {
         || text.contains("Caveat: The messages below were generated")
 }
 
-fn truncate(s: &str) -> String {
+pub(crate) fn truncate(s: &str) -> String {
     let trimmed = s.trim().replace('\n', " ");
     if trimmed.chars().count() <= PREVIEW_MAX_CHARS {
         trimmed

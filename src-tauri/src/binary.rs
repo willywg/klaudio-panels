@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -22,12 +23,13 @@ use crate::agent::{self, AgentId};
 ///   4. The agent's remaining fallbacks (`agent::fallback_candidates`):
 ///      package managers and version-manager shims.
 ///
-/// Returns the first candidate that responds to `--version` within 2s.
+/// Returns the first candidate that responds to `--version` within 2s *and*
+/// whose answer identifies it as this agent (`agent::accepts_version`).
 pub fn find_agent_binary(id: AgentId) -> Result<PathBuf, String> {
     let spec = agent::spec(id);
 
     if let Some(configured) = crate::agent_settings::load(id).override_path() {
-        if validate(&configured) {
+        if validate(id, &configured) {
             crate::debug_log::write(
                 "binary",
                 &format!("{} resolved to configured {}", spec.bin_name, configured.display()),
@@ -45,6 +47,14 @@ pub fn find_agent_binary(id: AgentId) -> Result<PathBuf, String> {
         return Err(err);
     }
 
+    discover(id)
+}
+
+/// Steps 1–4 alone, ignoring any configured path. This is what the settings
+/// panel shows as the placeholder of an empty binary field — "leave this
+/// blank and this is what runs".
+pub fn discover(id: AgentId) -> Result<PathBuf, String> {
+    let spec = agent::spec(id);
     let candidates = candidates(id);
     crate::debug_log::write(
         "binary",
@@ -55,7 +65,7 @@ pub fn find_agent_binary(id: AgentId) -> Result<PathBuf, String> {
         ),
     );
     for candidate in candidates {
-        if validate(&candidate) {
+        if validate(id, &candidate) {
             crate::debug_log::write(
                 "binary",
                 &format!("{} resolved to {}", spec.bin_name, candidate.display()),
@@ -105,11 +115,15 @@ fn candidates(id: AgentId) -> Vec<PathBuf> {
     out
 }
 
-fn validate(path: &PathBuf) -> bool {
+/// Runs `--version` and asks the registry whether the answer is this agent.
+/// "It ran" is not enough: `agent` is a name any CLI can take, and a path
+/// pasted into the settings can be the Cursor IDE's `cursor` shim, which
+/// runs fine and opens a GUI editor.
+pub fn validate(id: AgentId, path: &Path) -> bool {
     let deadline = Instant::now() + Duration::from_secs(2);
     let Ok(mut child) = Command::new(path)
         .arg("--version")
-        .stdout(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::null())
         .spawn()
@@ -119,7 +133,18 @@ fn validate(path: &PathBuf) -> bool {
 
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return status.success(),
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return false;
+                }
+                // A version line is a few dozen bytes; it cannot fill the
+                // pipe and stall the child before it exits.
+                let mut out = String::new();
+                if let Some(mut stdout) = child.stdout.take() {
+                    let _ = stdout.read_to_string(&mut out);
+                }
+                return agent::accepts_version(id, &out);
+            }
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 return false;

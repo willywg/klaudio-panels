@@ -3,6 +3,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Search,
+  Settings,
   SquareTerminal,
 } from "lucide-solid";
 import { useSidebar } from "@/context/sidebar";
@@ -22,6 +23,7 @@ function basename(path: string): string {
 type Props = {
   hasActiveProject: boolean;
   activeProjectPath: string | null;
+  onOpenSettings: () => void;
 };
 
 /** Custom titlebar: 40px height, draggable via `data-tauri-drag-region`.
@@ -109,6 +111,13 @@ export function Titlebar(props: Props) {
         </Show>
         <ClipboardHistoryButton />
         <NotificationBell />
+        <button
+          class="w-8 h-7 rounded flex items-center justify-center text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/80 transition"
+          onClick={() => props.onOpenSettings()}
+          title="Agents"
+        >
+          <Settings size={15} strokeWidth={1.75} />
+        </button>
       </div>
     </header>
   );

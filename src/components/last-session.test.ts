@@ -1,16 +1,17 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
   clearLegacyLastSessionId,
+  getLastAgent,
   getLastSessionId,
   getLegacyLastSessionId,
+  lastAgentKey,
   lastSessionKey,
   legacyLastSessionKey,
   preAgentLastSessionKey,
+  setLastAgent,
   setLastSessionId,
 } from "./last-session";
-import { CLAUDE } from "@/lib/agents";
-
-const CURSOR = "cursor" as typeof CLAUDE;
+import { CLAUDE, CURSOR } from "@/lib/agents";
 
 /** Bun's default test runtime has no `localStorage` global (no DOM, no
  *  preload) — stub a minimal in-memory implementation, reset before every
@@ -153,5 +154,19 @@ describe("pre-agent key migration", () => {
     // Clearing the new key must now leave nothing to fall back to.
     setLastSessionId("/proj", CLAUDE, "default", null);
     expect(getLastSessionId("/proj", CLAUDE, "default")).toBeNull();
+  });
+});
+
+describe("last agent", () => {
+  test("remembers which agent a project was last used with", () => {
+    expect(getLastAgent("/proj")).toBeNull();
+    setLastAgent("/proj", CURSOR);
+    expect(getLastAgent("/proj")).toBe(CURSOR);
+    expect(getLastAgent("/other")).toBeNull();
+  });
+
+  test("a value this build does not know reads as no preference", () => {
+    localStorage.setItem(lastAgentKey("/proj"), "codex");
+    expect(getLastAgent("/proj")).toBeNull();
   });
 });

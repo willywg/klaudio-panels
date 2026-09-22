@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { resolveRestoredTabs } from "./restore-tabs";
+import { chooseWakeTarget, resolveRestoredTabs } from "./restore-tabs";
+import { CLAUDE, CURSOR } from "./agents";
 import type { SessionLike } from "./session-label";
 
 function session(id: string, title: string | null = null): SessionLike {
@@ -86,5 +87,46 @@ describe("resolveRestoredTabs", () => {
 
   test("an empty listing restores nothing, however much is remembered", () => {
     expect(resolveRestoredTabs(["proxy-1", "ai-1"], [], "ai-1")).toEqual([]);
+  });
+});
+
+describe("chooseWakeTarget", () => {
+  const tab = (sessionId: string) => ({ sessionId, label: sessionId });
+
+  test("wakes the agent the user was last in", () => {
+    const target = chooseWakeTarget(
+      [
+        { agentId: CLAUDE, restored: [tab("c1")], wanted: "c1" },
+        { agentId: CURSOR, restored: [tab("u1"), tab("u2")], wanted: "u2" },
+      ],
+      CURSOR,
+    );
+    expect(target).toEqual({ groupIndex: 1, sessionId: "u2" });
+  });
+
+  test("falls back to the first agent with tabs when the last one has none left", () => {
+    const target = chooseWakeTarget(
+      [
+        { agentId: CLAUDE, restored: [tab("c1")], wanted: null },
+        { agentId: CURSOR, restored: [], wanted: null },
+      ],
+      CURSOR,
+    );
+    expect(target).toEqual({ groupIndex: 0, sessionId: "c1" });
+  });
+
+  test("with no remembered session the group's first tab wakes, never nothing", () => {
+    const target = chooseWakeTarget(
+      [{ agentId: CURSOR, restored: [tab("u1"), tab("u2")], wanted: null }],
+      null,
+    );
+    expect(target).toEqual({ groupIndex: 0, sessionId: "u1" });
+  });
+
+  test("nothing to restore means nothing to wake", () => {
+    expect(chooseWakeTarget([], CLAUDE)).toBeNull();
+    expect(
+      chooseWakeTarget([{ agentId: CLAUDE, restored: [], wanted: null }], null),
+    ).toBeNull();
   });
 });

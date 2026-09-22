@@ -6,6 +6,7 @@ import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
+import { AGENT_DISPLAY, DEFAULT_AGENT } from "@/lib/agents";
 import { useTerminal } from "@/context/terminal";
 import { useDiffPanel } from "@/context/diff-panel";
 import { makeFileLinkProvider } from "@/lib/xterm-file-links";
@@ -309,7 +310,9 @@ export function TerminalView(props: Props) {
       term?.write(bytes);
     });
     detachExit = ctx.onExit(props.id, (code) => {
-      term?.writeln(`\x1b[2m\r\n[claude exited with code ${code}]\x1b[0m`);
+      const agent = ctx.store.tabs.find((t) => t.id === props.id)?.agentId;
+      const bin = AGENT_DISPLAY[agent ?? DEFAULT_AGENT].bin;
+      term?.writeln(`\x1b[2m\r\n[${bin} exited with code ${code}]\x1b[0m`);
     });
 
     // Bare-URL provider runs BEFORE the file provider so domains like

@@ -1,7 +1,7 @@
 # PRP 024 — The Cursor provider, the settings panel, and the picker
 
 **Issue:** [#108](https://github.com/willywg/klaudio-panels/issues/108)
-**Status:** draft
+**Status:** implemented — both validation gates measured, see *What implementation measured*
 **Depends on:** PRP 023 (#102, merged as `951e6f2`) and the `strip_blocked_env`
 half of #104 (`9b5cf87`)
 **Scope:** the second agent, end to end — registry entry, session provider,
@@ -74,8 +74,10 @@ or under `/tmp` (which macOS resolves to `/private/tmp`) hashes to something
 our project path would not produce. Reading `cwd` and comparing it is correct
 in every case the hash is correct, and in some it is not.
 
-So: hash the project path to *find* the directory fast, and trust `cwd` to
-*confirm* it. Never trust the hash alone.
+So the hash is not used at all: the provider scans the root and matches on
+`cwd`, exactly as Claude's provider already does with its lossy `/`→`-`
+encoding. There are as many directories as projects ever opened in Cursor,
+and ruling one out costs a single small `meta.json` read.
 
 ### `store.db` is opaque, and we are not going to open it
 
@@ -108,8 +110,8 @@ opened, never used. Claude has no equivalent: a `.jsonl` exists only once
 something was written to it. A Cursor session list that shows every directory
 would be more than a third noise.
 
-**`hasConversation: false` is not listed**, with one deliberate exception
-covered below.
+**`hasConversation: false` is not listed.** A tab that is still empty does
+not need a row: it already has its session id (see *Correlation*).
 
 ### `create-chat` mints an id and writes nothing
 
@@ -150,14 +152,17 @@ not contracted**, and this PRP depends on exactly two of them.
 
 `AgentId::Cursor` and the compiler will then name every unanswered question.
 
-**1. Binary.** `bin_name: "cursor-agent"`. Installer candidates:
-`~/.local/bin/cursor-agent`, then `~/.local/share/cursor-agent/versions/*/cursor-agent`.
-Fallback `~/.local/bin/agent`, accepted only if its `--version` is
-date-shaped. `not_found` points at `curl https://cursor.com/install -fsS | bash`.
+**1. Binary.** `bin_name: "cursor-agent"`. Installer candidate:
+`~/.local/bin/cursor-agent` (the installer's symlink into its versioned
+directory). Fallback `~/.local/bin/agent`, accepted only if its `--version` is
+date-shaped — which `binary.rs` now checks for every candidate, not just this
+one (`agent::accepts_version`). `not_found` points at `curl https://cursor.com/install -fsS | bash`.
 Never `cursor`.
 
-**2. `argv`.** `Launch::New` → `["--resume", <id from create-chat>]` (see
-*Correlation*); `Launch::Resume(id)` → `["--resume", id]`. `--continue` is
+**2. `argv`.** `Launch::Resume(id)` → `["--resume", id]`, and a new tab is a
+resume of an id minted by `create-chat` first (see *Correlation*), so the UI
+never asks for `Launch::New`. It stays valid — bare `cursor-agent` — for
+completeness, not use. `--continue` is
 documented as an alias for `--resume=-1` and stays unwired, exactly as
 `claude -c` is.
 
@@ -166,18 +171,18 @@ Cursor needs no equivalent, and *this* is where the temptation to set
 `CURSOR_CONVERSATION_ID` lives. Don't: it is an undocumented read-fallback,
 and `--resume <id>` is the documented path to the same outcome.
 
-**4. `blocked_env`.** The #104 mirror, and the reason this PRP inherits that
-fix rather than repeating it. Klaudio launched from inside a `cursor-agent`
-session carries that session's markers through the login-shell probe into
-every child it spawns. Proposed set, and the one that matters most first:
+**4. `blocked_env`.** The #104 mirror. Klaudio launched from inside a
+`cursor-agent` session carries that session's markers through the login-shell
+probe into every child it spawns. The list below is **measured**, not read off
+the bundle — see *What implementation measured* for how, and for how much
+the draft of this PRP got wrong:
 
 ```
-CURSOR_CONVERSATION_ID      # a fresh agent would silently adopt the launching chat
-CURSOR_AGENT_PERSIST_SESSION
-AGENT_CLI_SOCKET_PATH
-CURSOR_ASKPASS_SOCKET
-CURSOR_ASKPASS_SECRET
-CURSOR_INVOKED_AS
+AGENT_TRANSCRIPTS
+CURSOR_AGENT
+CURSOR_CONVERSATION_ID          # read back as the chat to attach to
+CURSOR_REQUEST_ID
+__CURSOR_SANDBOX_ENV_RESTORE    # re-applied wherever it is found
 ```
 
 Deliberately **not** blocked, and the list is as much about these as about the
@@ -189,14 +194,8 @@ ones above:
   `CLAUDE_CONFIG_DIR`. Stripping either moves a project off its own account or
   its own chat store. This is why #104 chose names over a `CURSOR_*` prefix,
   and the reasoning transfers unchanged.
-
-⚠️ **This list is a hypothesis and must be measured before it lands.** #104 was
-grounded in a real `ps eww` of a real parent and child, read through
-`rtk proxy` after the unproxied tool silently truncated the output. The
-equivalent measurement here — launch Klaudio from inside a `cursor-agent`
-session, read the app's env and its `cursor-agent` child's env — is an
-implementation gate, not a nice-to-have. Names go in the log, never values;
-three of the six above are secrets or socket paths.
+- `CURSOR_INVOKED_AS` — it does reach the child, but the launcher re-exports it
+  on every start, so an inherited value never survives.
 
 **5. `list_sessions`.** `cursor_sessions.rs`, new module, mirroring
 `sessions.rs`'s role. Walk `$CURSOR_DATA_DIR/chats/<md5(project_path)>/*/`,
@@ -214,7 +213,9 @@ and map:
 | `first_message_preview` | last non-slash-command entry of `prompt_history.json` |
 | `project_path` | `cwd` |
 
-**6. `watch_root`.** `$CURSOR_DATA_DIR/chats`. Decision #10's single-watcher
+**6. `watch_root`.** `~/.cursor/chats` — the default root only, mirroring
+Claude's watcher; following `CURSOR_DATA_DIR` belongs to the profiles
+follow-up. Decision #10's single-watcher
 rule is already per-agent via `agent::watch_root`; this is a second root, and
 the watcher installs one per registered, enabled agent. A `session:new` fires
 on first sighting of a `meta.json`, and `session:meta` on later modification —
@@ -268,11 +269,7 @@ nothing written to disk until the chat has content, a watcher-based
 correlation would have no file to see. Bare `cursor-agent` with no id is
 therefore **not** a supported launch mode for us.
 
-🔬 **Validation gate.** `--resume <id>` must be confirmed to open a
-never-before-used id as an empty chat rather than erroring. If it does not,
-the fallback is `create-chat` immediately followed by a throwaway
-`--print` invocation to materialize the chat, and that is ugly enough that
-it should be re-scoped rather than smuggled in.
+🔬 **Validation gate — passed.** See *What implementation measured*.
 
 ## The sessions list becomes a merge
 
@@ -357,26 +354,23 @@ exception). Cursor has **two** routes to the same signal, and both are real:
 and no OS notification. The notification preferences panel must not offer
 per-agent switches it cannot honour.
 
-**→ Issue: "Cursor completion events via hooks or native OSC 777".**
+**→ [#109](https://github.com/willywg/klaudio-panels/issues/109)**
 
 ### 2. Per-project accounts (profiles)
 
 Covered above. **024's behaviour:** Cursor is always `"default"`; a `.envrc`
 setting `CURSOR_CONFIG_DIR` reaches the spawned agent but not our bookkeeping.
 
-**→ Issue: "Cursor profiles over the CONFIG_DIR / DATA_DIR split".**
+**→ [#110](https://github.com/willywg/klaudio-panels/issues/110)**
 
-### 3. Live `/rename` propagation to tab labels
+### 3. Live title propagation to tab labels — turned out to be free
 
-Claude's watcher sees `custom_title` change in the JSONL and relabels the tab.
-Cursor rewrites `meta.json` when its auto-generated `title` changes, so the
-same mechanism applies — the watcher work is in scope here, the *labelling*
-path needs its own pass.
-
-**024's behaviour:** Cursor tab labels refresh on the Sessions-list refresh
-button, not live.
-
-**→ Issue: "Propagate Cursor title changes to open tab labels".**
+Mapped as a follow-up in the draft; it is not one. The Cursor watcher emits
+`session:meta` carrying `agent: "cursor"` when a chat's `meta.json` changes,
+and the frontend's existing handler already matches on agent *and* id before
+relabelling (`shouldApplySessionMeta`, built in 023 for exactly this). A Cursor
+tab picks up its auto-generated title a few seconds into the first turn, and
+the Sessions list refreshes with it. No issue filed.
 
 ### 4. Conversation preview beyond the first prompt
 
@@ -386,7 +380,7 @@ equivalent lives in `store.db`'s blobs.
 **024's behaviour:** preview is `title`, else the oldest non-slash-command
 prompt. Good enough, and honest.
 
-**→ Issue: "Richer Cursor previews (requires store.db blob format)" — low priority.**
+**→ [#111](https://github.com/willywg/klaudio-panels/issues/111)** — low priority.
 
 ### 5. Everything that is already agent-neutral
 
@@ -414,6 +408,77 @@ which agent was running. Worth stating so nobody re-derives it.
   `store.db*` outright, or the debouncer will fire continuously while an agent
   is thinking.
 
+## What implementation measured
+
+Both gates above were run against the real CLI before any code depended on
+them, in a PTY driven from a script, with the chat directory watched from
+outside.
+
+**Gate 1 — `create-chat` then `--resume <id>`: passes, and teaches three more
+things.**
+
+- `cursor-agent --resume <fresh id>` opens the TUI normally on an empty chat.
+- `meta.json` appears **~1 s after the agent opens**, with
+  `hasConversation: false` — not at `create-chat` time.
+- One prompt (`reply with just the word ok`) later, the same directory has
+  `hasConversation: true` and an auto-generated `title` ("Just The Word"),
+  under exactly the id `create-chat` returned.
+- If the agent exits with the chat still empty, **Cursor deletes the
+  directory.** A tab that was opened and closed without a prompt therefore
+  leaves nothing to list and nothing to restore, which is the right outcome
+  and costs us nothing.
+- An untrusted directory shows Cursor's own **Workspace Trust** prompt in the
+  TUI on first open. That is a security decision that belongs to the user in
+  the real TUI; Klaudio does not pass `--trust`.
+
+**Gate 2 — the env a Cursor session hands its children.** Ran
+`cursor-agent -p` asking it to execute `env | cut -d= -f1 | sort` (names only,
+so no value reached a transcript) and diffed that against the parent's names.
+What Cursor injects: `AGENT_TRANSCRIPTS`, `CURSOR_AGENT`,
+`CURSOR_CONVERSATION_ID`, `CURSOR_INVOKED_AS`, `CURSOR_REQUEST_ID`,
+`CURSOR_RIPGREP_PATH`, `__CURSOR_SANDBOX_ENV_RESTORE`, plus `NO_COLOR` /
+`FORCE_COLOR` for its own output capture. The bundle confirms the shape: the
+shell tool builds the child env as `process.env` plus
+`{CURSOR_AGENT: "1", CURSOR_CONVERSATION_ID, CURSOR_REQUEST_ID,
+AGENT_TRANSCRIPTS}`.
+
+The draft's list was **mostly wrong**: of its six names only
+`CURSOR_CONVERSATION_ID` survived. `AGENT_CLI_SOCKET_PATH`,
+`CURSOR_ASKPASS_SOCKET` / `_SECRET` and `CURSOR_AGENT_PERSIST_SESSION` exist in
+the bundle but never reach a child, `CURSOR_INVOKED_AS` reaches it but is
+re-exported on every start, and `CURSOR_AGENT`, `CURSOR_REQUEST_ID`,
+`AGENT_TRANSCRIPTS` and the sandbox blob were missing altogether. This is the same lesson
+#104 taught: read it off the process, not off the code.
+
+Two observations left alone on purpose: `CURSOR_RIPGREP_PATH` points at a
+tool, not at session state; and `NO_COLOR` inherited by a Klaudio launched
+from inside a Cursor shell would uncolour *every* agent's TUI — real, but not
+Cursor's bookkeeping, and a user can set `NO_COLOR` on purpose, so it is not
+this agent's blocklist to make.
+
+**The discovery guard.** `binary.rs` now reads `--version` instead of only
+checking the exit status, and asks the registry whether the answer is the
+agent (`agent::accepts_version`). For Cursor that is its date-shaped release
+string, which the IDE's semver and an unrelated `agent` both fail. That makes
+"never run `cursor`" structural rather than a rule about which paths to try —
+it also rejects the IDE shim when a user pastes it into the settings.
+
+## What implementation added beyond the draft
+
+- **Which agent to wake.** Remembered workspaces were already per agent
+  (`openTabs:<agent>:…`), but only one tab gets a PTY on reopen. A new
+  `lastAgent:<projectPath>` key records the agent the user was last in, and
+  `chooseWakeTarget` wakes that agent's tab, falling back to the first agent
+  with anything to restore. Each agent plans its restore independently, so a
+  Claude `.envrc` that fails to evaluate costs Claude's tabs and nothing else.
+- **Known limitation:** reopening restores each agent's tabs in its own stored
+  order, agents in registry order. Tabs that were interleaved across agents
+  come back grouped. Preserving the interleaving would take a third source of
+  truth for strip order; not worth it until someone misses it.
+- **⌘T opens the active tab's agent** without a picker — a shortcut means
+  "another one of these". The picker is for `+` and "New session".
+- **`klaudio <path>`** opens the first enabled agent.
+
 ## Acceptance
 
 1. With both agents enabled, `+` offers a choice; with only Claude enabled,
@@ -439,7 +504,7 @@ which agent was running. Worth stating so nobody re-derives it.
 
 ## What 025 picks up
 
-The four issues filed above, and the question this PRP deliberately leaves
-open: **the third agent.** Codex and opencode are the obvious candidates, and
+The three follow-ups filed above, and the question this PRP deliberately
+leaves open: **the third agent.** Codex and opencode are the obvious candidates, and
 the honest test of 023's registry is whether adding one is smaller than this
 PRP was. If it is not, the abstraction is wrong and 025 is where we find out.

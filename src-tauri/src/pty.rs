@@ -306,6 +306,12 @@ pub async fn pty_open(
 ) -> Result<(), String> {
     let agent_id = crate::agent::AgentId::parse(&agent_id)?;
     let spec = crate::agent::spec(agent_id);
+    // Disabling an agent hides it everywhere in the UI; this is the backstop
+    // for a tab that was already in flight, or restored from a workspace
+    // remembered while it was still on.
+    if !crate::agent_settings::load(agent_id).enabled {
+        return Err(format!("{} is disabled in the agent settings.", spec.display_name));
+    }
     let bin = crate::binary::find_agent_binary(agent_id)?;
     let shell = crate::shell_env::get_user_shell();
     let shell_env = crate::shell_env::load_shell_env(&shell);

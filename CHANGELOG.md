@@ -6,6 +6,37 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
 ## [Unreleased]
 
+### Added
+- **Cursor as a second agent**
+  ([#108](https://github.com/willywg/klaudio-panels/issues/108)). Klaudio can
+  now run `cursor-agent` alongside Claude Code: its real TUI in a tab, its
+  chats in the Sessions list, resume on click, and a remembered workspace on
+  reopen. Cursor is **off until you turn it on** — an update should not start
+  offering an agent nobody asked for — from the new **Agents** dialog (the
+  gear at the right of the titlebar), which is also where either agent's
+  binary path can be set by hand. An empty path shows what Klaudio found.
+
+  With both agents enabled, `+` and "New session" ask which one; with one,
+  they open it directly exactly as before, and no agent badges appear
+  anywhere. ⌘T opens another tab of the agent you are already in. The
+  Sessions list interleaves both agents by recency, badged, and one agent's
+  error (a blocked `.envrc`, say) is shown on its own line instead of
+  emptying the list.
+
+  A new Cursor tab knows its chat from the first byte: Klaudio asks
+  `cursor-agent create-chat` for an id and resumes it, so there is none of the
+  after-the-fact correlation Claude tabs go through. Its label follows
+  Cursor's own auto-generated title live. Discovery accepts a binary only
+  when its `--version` identifies it — so the `cursor` command, which opens
+  the Cursor IDE, is never mistaken for the agent, not even when pasted into
+  the settings — and a Cursor child never inherits the markers of a Cursor
+  session Klaudio was launched from, the Cursor counterpart of #104.
+
+  Not yet for Cursor tabs: completion notifications and needs-attention
+  pulses ([#109](https://github.com/willywg/klaudio-panels/issues/109)), and
+  per-project accounts via `CURSOR_CONFIG_DIR`
+  ([#110](https://github.com/willywg/klaudio-panels/issues/110)).
+
 ### Fixed
 - **A session started from a Klaudio window launched inside another agent is
   saved again**
