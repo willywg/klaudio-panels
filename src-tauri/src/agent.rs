@@ -153,6 +153,68 @@ pub fn extra_env(id: AgentId) -> Vec<(String, String)> {
     }
 }
 
+/// Env an agent must **not** inherit — the mirror of [`extra_env`], and the
+/// reason it belongs in the registry rather than in one global blocklist:
+/// every name here describes *one agent's own* session bookkeeping, so each
+/// agent declares the markers that would confuse a fresh copy of itself.
+///
+/// Klaudio hands each child the hydrated login-shell env, and that env comes
+/// from `$SHELL -l -c 'env -0'` run as a subprocess of Klaudio — so whatever
+/// Klaudio itself was launched with comes back out of the probe and is
+/// handed to the agent (#104). `project_env.rs` calls `env_clear()` first,
+/// but the hydration that follows puts the ambient env back, so the clear
+/// alone does not deliver what its comment promises.
+///
+/// For Claude that is not cosmetic. A `claude` that sees
+/// `CLAUDE_CODE_CHILD_SESSION` **silently stops writing its transcript**, and
+/// the transcript is the only thing Klaudio watches: no JSONL means no
+/// `session:new`, so the tab is never correlated, never labelled, never
+/// listed, and cannot be resumed — the work exists only in the scrollback.
+/// The rest of the set describes the session that *launched* Klaudio, not
+/// the one it is spawning.
+///
+/// Names, never a `CLAUDE_CODE_*` wildcard. `CLAUDE_CONFIG_DIR` is load
+/// bearing — a prefix match would strip it and move a project off its own
+/// profile (decision #13) — and a user may legitimately export others. The
+/// cost of naming them is that a marker Claude Code adds later won't be
+/// covered until it is listed here; that is the trade, and it fails in the
+/// direction we can see rather than the one we can't.
+fn blocked_env(id: AgentId) -> &'static [&'static str] {
+    match id {
+        AgentId::Claude => &[
+            "CLAUDECODE",
+            "CLAUDE_CODE_BRIDGE_SESSION_ID",
+            "CLAUDE_CODE_CHILD_SESSION",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CLAUDE_CODE_EXECPATH",
+            "CLAUDE_CODE_MESSAGING_SOCKET",
+            "CLAUDE_CODE_MESSAGING_TOKEN",
+            "CLAUDE_CODE_SESSION_ATTENDED",
+            "CLAUDE_CODE_SESSION_ID",
+        ],
+    }
+}
+
+/// Removes [`blocked_env`]'s names from a child env, returning the ones that
+/// were actually present so the caller can log that it happened.
+///
+/// Runs on the **fully resolved** env — after the login-shell probe, after
+/// direnv, after the spawn overrides — rather than on the probe's output, so
+/// the guarantee is about what the agent receives: no later stage can put a
+/// marker back. The returned names are safe to log; the values are session
+/// ids, socket paths and tokens, and are not.
+pub fn strip_blocked_env(id: AgentId, env: &mut Vec<(String, String)>) -> Vec<&'static str> {
+    let blocked = blocked_env(id);
+    let mut stripped = Vec::new();
+    for name in blocked {
+        if env.iter().any(|(k, _)| k == name) {
+            stripped.push(*name);
+        }
+    }
+    env.retain(|(k, _)| !blocked.contains(&k.as_str()));
+    stripped
+}
+
 /// Whether this agent has a per-project account concept that Klaudio has to
 /// namespace sessions by. Claude's is `CLAUDE_CONFIG_DIR`, resolved through
 /// direnv (decision #13). An agent that has no equivalent is always on the
@@ -195,6 +257,84 @@ mod tests {
     fn every_registered_id_round_trips() {
         for id in AgentId::ALL {
             assert_eq!(AgentId::parse(id.as_str()).unwrap(), *id);
+        }
+    }
+
+    fn env(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn names(env: &[(String, String)]) -> Vec<&str> {
+        env.iter().map(|(k, _)| k.as_str()).collect()
+    }
+
+    // The regression this exists for (#104): a `claude` that inherits this
+    // marker stops writing its transcript in silence, and the transcript is
+    // the only thing Klaudio watches.
+    #[test]
+    fn strips_the_marker_that_disables_transcript_saving() {
+        let mut e = env(&[("CLAUDE_CODE_CHILD_SESSION", "1"), ("PATH", "/usr/bin")]);
+        let stripped = strip_blocked_env(AgentId::Claude, &mut e);
+
+        assert_eq!(stripped, vec!["CLAUDE_CODE_CHILD_SESSION"]);
+        assert_eq!(names(&e), vec!["PATH"]);
+    }
+
+    // The reason this is a list of names and not a `CLAUDE_CODE_*` wildcard.
+    // Stripping the config dir would move a project off its own profile
+    // (decision #13) — silently, and only for the spawn.
+    #[test]
+    fn never_strips_the_load_bearing_config_dir() {
+        let mut e = env(&[
+            ("CLAUDE_CONFIG_DIR", "/Users/x/.claude-work"),
+            ("CLAUDE_CODE_SESSION_ID", "the-launching-session"),
+        ]);
+        strip_blocked_env(AgentId::Claude, &mut e);
+
+        assert_eq!(names(&e), vec!["CLAUDE_CONFIG_DIR"]);
+    }
+
+    #[test]
+    fn leaves_an_unaffected_env_untouched_and_in_order() {
+        let before = env(&[("PATH", "/usr/bin"), ("HOME", "/Users/x"), ("TERM", "xterm")]);
+        let mut e = before.clone();
+        let stripped = strip_blocked_env(AgentId::Claude, &mut e);
+
+        assert!(stripped.is_empty());
+        assert_eq!(e, before);
+    }
+
+    // Only what was actually there gets reported, because the report is what
+    // reaches the log — a list of every name we'd strip would read as if the
+    // env had been full of them.
+    #[test]
+    fn reports_only_the_markers_that_were_present() {
+        let mut e = env(&[("CLAUDECODE", "1"), ("PATH", "/usr/bin")]);
+        assert_eq!(
+            strip_blocked_env(AgentId::Claude, &mut e),
+            vec!["CLAUDECODE"]
+        );
+    }
+
+    #[test]
+    fn every_agent_declares_a_blocklist_without_wildcards_or_duplicates() {
+        for id in AgentId::ALL {
+            let blocked = blocked_env(*id);
+            for name in blocked {
+                assert!(
+                    !name.contains('*'),
+                    "{name} looks like a pattern; this matches exact names only"
+                );
+                assert_eq!(
+                    blocked.iter().filter(|n| *n == name).count(),
+                    1,
+                    "{name} is listed twice"
+                );
+            }
+            assert!(!blocked.contains(&"CLAUDE_CONFIG_DIR"));
         }
     }
 
