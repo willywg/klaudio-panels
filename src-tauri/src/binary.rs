@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::io::Read;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -22,12 +25,13 @@ use crate::agent::{self, AgentId};
 ///   4. The agent's remaining fallbacks (`agent::fallback_candidates`):
 ///      package managers and version-manager shims.
 ///
-/// Returns the first candidate that responds to `--version` within 2s.
+/// Returns the first candidate that responds to `--version` within 2s *and*
+/// whose answer identifies it as this agent (`agent::accepts_version`).
 pub fn find_agent_binary(id: AgentId) -> Result<PathBuf, String> {
     let spec = agent::spec(id);
 
     if let Some(configured) = crate::agent_settings::load(id).override_path() {
-        if validate(&configured) {
+        if validate(id, &configured) {
             crate::debug_log::write(
                 "binary",
                 &format!("{} resolved to configured {}", spec.bin_name, configured.display()),
@@ -45,6 +49,28 @@ pub fn find_agent_binary(id: AgentId) -> Result<PathBuf, String> {
         return Err(err);
     }
 
+    discover(id)
+}
+
+/// Steps 1–4 alone, ignoring any configured path. This is what the settings
+/// panel shows as the placeholder of an empty binary field — "leave this
+/// blank and this is what runs".
+pub fn discover(id: AgentId) -> Result<PathBuf, String> {
+    let spec = agent::spec(id);
+
+    // 1. The installer paths first, and on their own: when one of them is
+    // the answer — the common case — there is no reason to pay for the
+    // login-shell probe behind step 2 (~0.3 s) on every spawn.
+    for candidate in agent::installer_candidates(id) {
+        if candidate.exists() && validate(id, &candidate) {
+            crate::debug_log::write(
+                "binary",
+                &format!("{} resolved to {}", spec.bin_name, candidate.display()),
+            );
+            return Ok(candidate);
+        }
+    }
+
     let candidates = candidates(id);
     crate::debug_log::write(
         "binary",
@@ -55,7 +81,7 @@ pub fn find_agent_binary(id: AgentId) -> Result<PathBuf, String> {
         ),
     );
     for candidate in candidates {
-        if validate(&candidate) {
+        if validate(id, &candidate) {
             crate::debug_log::write(
                 "binary",
                 &format!("{} resolved to {}", spec.bin_name, candidate.display()),
@@ -77,10 +103,7 @@ fn candidates(id: AgentId) -> Vec<PathBuf> {
         }
     };
 
-    // 1. The agent's installer paths — preferred, see above.
-    for p in agent::installer_candidates(id) {
-        push(p, &mut out, &mut seen);
-    }
+    // Step 1 (installer paths) already ran in `discover` and failed.
 
     // 2. Hydrated login-shell PATH. Finder-launched apps inherit the
     // launchd PATH which misses Homebrew, nvm, asdf, bun, volta.
@@ -105,11 +128,53 @@ fn candidates(id: AgentId) -> Vec<PathBuf> {
     out
 }
 
-fn validate(path: &PathBuf) -> bool {
+/// Runs `--version` and asks the registry whether the answer is this agent.
+/// "It ran" is not enough: `agent` is a name any CLI can take, and a path
+/// pasted into the settings can be the Cursor IDE's `cursor` shim, which
+/// runs fine and opens a GUI editor.
+pub fn validate(id: AgentId, path: &Path) -> bool {
+    let fingerprint = fingerprint(path);
+    if let Some(fp) = &fingerprint {
+        if let Ok(cache) = VALIDATED.lock() {
+            if cache.get(&(id.as_str(), path.to_path_buf())) == Some(fp) {
+                return true;
+            }
+        }
+    }
+    let ok = probe_version(id, path);
+    if ok {
+        if let (Some(fp), Ok(mut cache)) = (fingerprint, VALIDATED.lock()) {
+            cache.insert((id.as_str(), path.to_path_buf()), fp);
+        }
+    }
+    ok
+}
+
+/// What a validated binary *was*: the file its path resolves to, and that
+/// file's size and mtime. Updating an agent swaps the symlink's target or
+/// rewrites the file, and either changes this, so a cached "yes" can never
+/// outlive the binary it was about.
+type Fingerprint = (PathBuf, u64, Option<std::time::SystemTime>);
+
+fn fingerprint(path: &Path) -> Option<Fingerprint> {
+    let real = path.canonicalize().ok()?;
+    let meta = std::fs::metadata(&real).ok()?;
+    Some((real, meta.len(), meta.modified().ok()))
+}
+
+/// Candidates that have already answered `--version` as their agent. Every
+/// spawn used to re-run that probe — twice for a new Cursor tab, and
+/// `cursor-agent` is a node program that takes ~0.45 s to answer. Only
+/// successes are remembered: a binary that failed may be fixed a moment
+/// later, and a stale "no" would outlive the fix.
+static VALIDATED: LazyLock<Mutex<HashMap<(&'static str, PathBuf), Fingerprint>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn probe_version(id: AgentId, path: &Path) -> bool {
     let deadline = Instant::now() + Duration::from_secs(2);
     let Ok(mut child) = Command::new(path)
         .arg("--version")
-        .stdout(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .stdin(std::process::Stdio::null())
         .spawn()
@@ -119,7 +184,18 @@ fn validate(path: &PathBuf) -> bool {
 
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return status.success(),
+            Ok(Some(status)) => {
+                if !status.success() {
+                    return false;
+                }
+                // A version line is a few dozen bytes; it cannot fill the
+                // pipe and stall the child before it exits.
+                let mut out = String::new();
+                if let Some(mut stdout) = child.stdout.take() {
+                    let _ = stdout.read_to_string(&mut out);
+                }
+                return agent::accepts_version(id, &out);
+            }
             Ok(None) if Instant::now() >= deadline => {
                 let _ = child.kill();
                 return false;

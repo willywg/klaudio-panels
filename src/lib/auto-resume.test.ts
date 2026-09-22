@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { resolveAutoResumeTarget, type AutoResumeDeps } from "./auto-resume";
-import { CLAUDE } from "@/lib/agents";
+import { CLAUDE, CURSOR } from "@/lib/agents";
 
 const SESSION = {
   id: "abc-123",
@@ -118,7 +118,7 @@ describe("resolveAutoResumeTarget", () => {
   test("another agent never reads the legacy key", async () => {
     let legacyReads = 0;
     const decision = await resolveAutoResumeTarget(
-      "cursor" as typeof CLAUDE,
+      CURSOR,
       "default",
       deps({
         getNamespaced: () => null,

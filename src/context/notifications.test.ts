@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CLAUDE } from "@/lib/agents";
+import { CLAUDE, CURSOR } from "@/lib/agents";
 import { resolveCompleteTabId } from "./notifications";
 import type { TerminalTab } from "./terminal";
 
@@ -44,7 +44,7 @@ describe("resolveCompleteTabId", () => {
     const tab = makeTab({ agentId: CLAUDE });
     const tabId = resolveCompleteTabId(
       [tab],
-      "cursor" as typeof CLAUDE,
+      CURSOR,
       "/replace",
       "session-1",
     );

@@ -15,9 +15,13 @@ import { MessageSquare, Search } from "lucide-solid";
 import { useCommandPalette } from "@/context/command-palette";
 import { useDiffPanel } from "@/context/diff-panel";
 import { displayLabel } from "@/lib/session-label";
-import { DEFAULT_AGENT } from "@/lib/agents";
+import { AGENT_DISPLAY } from "@/lib/agents";
 import { iconForFile } from "@/lib/file-icon";
-import type { SessionMeta } from "@/components/sessions-list";
+import {
+  listProjectSessions,
+  type SessionMeta,
+} from "@/components/sessions-list";
+import { useAgents } from "@/context/agents";
 
 const MAX_SESSIONS = 50;
 const MAX_FILES = 100;
@@ -45,6 +49,7 @@ export function CommandPalette(props: {
 }) {
   const palette = useCommandPalette();
   const diffPanel = useDiffPanel();
+  const agents = useAgents();
 
   const [query, setQuery] = createSignal("");
   const [activeIdx, setActiveIdx] = createSignal(0);
@@ -62,14 +67,16 @@ export function CommandPalette(props: {
   const [sessions] = createResource(
     () =>
       palette.isOpen() && props.projectPath
-        ? { path: props.projectPath, _open: palette.isOpen() }
+        ? {
+            path: props.projectPath,
+            agents: agents.enabledIds(),
+            _open: palette.isOpen(),
+          }
         : null,
-    async ({ path }) => {
-      return (await invoke("list_sessions_for_project", {
-        projectPath: path,
-        agentId: DEFAULT_AGENT,
-      })) as SessionMeta[];
-    },
+    // A failed provider just contributes no rows here: the palette is a
+    // search box, and the Sessions tab is where a provider's error is shown.
+    async ({ path, agents: ids }) =>
+      (await listProjectSessions(path, ids)).sessions,
   );
 
   const [files] = createResource(
@@ -226,7 +233,9 @@ export function CommandPalette(props: {
                           />
                         }
                         primary={displayLabel(s)}
-                        secondary={null}
+                        secondary={
+                          agents.multiple() ? AGENT_DISPLAY[s.agent].name : null
+                        }
                       />
                     )}
                   </For>

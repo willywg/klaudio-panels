@@ -1,4 +1,4 @@
-import { CLAUDE, type AgentId } from "@/lib/agents";
+import { CLAUDE, isAgentId, type AgentId } from "@/lib/agents";
 
 const PREFIX = "lastSessionId:";
 
@@ -113,4 +113,26 @@ export function getLegacyLastSessionId(projectPath: string): string | null {
  *  local pointer — never touches an agent's own session data on disk. */
 export function clearLegacyLastSessionId(projectPath: string): void {
   drop(legacyLastSessionKey(projectPath));
+}
+
+const LAST_AGENT_PREFIX = "lastAgent:";
+
+export function lastAgentKey(projectPath: string): string {
+  return LAST_AGENT_PREFIX + projectPath;
+}
+
+/** Which agent's tab was active when this project was last in use. The
+ *  per-agent `lastSessionId` keys cannot answer that on their own: with two
+ *  agents each remembers its own last session, and reopening the project
+ *  must wake exactly one tab — the one the user was actually in. Not
+ *  namespaced by profile, because it names an agent, not a session; the
+ *  agent's own keys carry the profile. An unknown or unparseable value reads
+ *  as "no preference" rather than guessing. */
+export function getLastAgent(projectPath: string): AgentId | null {
+  const v = read(lastAgentKey(projectPath));
+  return isAgentId(v) ? v : null;
+}
+
+export function setLastAgent(projectPath: string, agentId: AgentId): void {
+  write(lastAgentKey(projectPath), agentId);
 }

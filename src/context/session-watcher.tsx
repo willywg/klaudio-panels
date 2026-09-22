@@ -66,9 +66,17 @@ export function shouldApplySessionMeta(
   return tab !== undefined && tab.agentId === agent && tab.profileId === "default";
 }
 
+/** A session changed on disk somewhere. Carries the project it belongs to so
+ *  a consumer can ignore the ones that are not its own — every tick of every
+ *  live session in every project arrives here, several times a second while
+ *  an agent is writing. */
+export type MetaBump = { seq: number; projectPath: string };
+
 function makeSessionWatcherContext() {
   const term = useTerminal();
-  const [metaBump, setMetaBump] = createSignal(0);
+  const [metaBump, setMetaBump] = createSignal<MetaBump>({ seq: 0, projectPath: "" });
+  const bump = (projectPath: string) =>
+    setMetaBump((b) => ({ seq: b.seq + 1, projectPath }));
   const unlistens: UnlistenFn[] = [];
 
   onMount(async () => {
@@ -99,7 +107,7 @@ function makeSessionWatcherContext() {
           // Safe by construction: findPromotionCandidate only ever returns
           // a tab of this agent on the "default" profile.
           setLastSessionId(project_path, agent, "default", session_id);
-          setMetaBump((k) => k + 1);
+          bump(project_path);
         }),
       );
 
@@ -112,7 +120,7 @@ function makeSessionWatcherContext() {
           if (shouldApplySessionMeta(tab, meta.agent)) {
             term.setTabLabel(tab!.id, displayLabel(meta));
           }
-          setMetaBump((k) => k + 1);
+          bump(meta.project_path);
         }),
       );
     } catch (err) {
@@ -125,7 +133,7 @@ function makeSessionWatcherContext() {
   });
 
   return {
-    metaBump: metaBump as Accessor<number>,
+    metaBump: metaBump as Accessor<MetaBump>,
   };
 }
 

@@ -6,7 +6,56 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
 ## [Unreleased]
 
+### Added
+- **Cursor as a second agent**
+  ([#108](https://github.com/willywg/klaudio-panels/issues/108)). Klaudio can
+  now run `cursor-agent` alongside Claude Code: its real TUI in a tab, its
+  chats in the Sessions list, resume on click, and a remembered workspace on
+  reopen. Cursor is **off until you turn it on** — an update should not start
+  offering an agent nobody asked for — from the new **Agents** dialog (the
+  gear at the right of the titlebar), which is also where either agent's
+  binary path can be set by hand. An empty path shows what Klaudio found.
+
+  With both agents enabled, `+` and "New session" ask which one; with one,
+  they open it directly exactly as before, and no agent badges appear
+  anywhere. ⌘T opens another tab of the agent you are already in. The
+  Sessions list interleaves both agents by recency, badged, and one agent's
+  error (a blocked `.envrc`, say) is shown on its own line instead of
+  emptying the list.
+
+  A new Cursor tab knows its chat from the first byte: Klaudio asks
+  `cursor-agent create-chat` for an id and resumes it, so there is none of the
+  after-the-fact correlation Claude tabs go through. Its label follows
+  Cursor's own auto-generated title live. Discovery accepts a binary only
+  when its `--version` identifies it — so the `cursor` command, which opens
+  the Cursor IDE, is never mistaken for the agent, not even when pasted into
+  the settings — and a Cursor child never inherits the markers of a Cursor
+  session Klaudio was launched from, the Cursor counterpart of #104.
+
+  Not yet for Cursor tabs: completion notifications and needs-attention
+  pulses ([#109](https://github.com/willywg/klaudio-panels/issues/109)), and
+  per-project accounts via `CURSOR_CONFIG_DIR`
+  ([#110](https://github.com/willywg/klaudio-panels/issues/110)).
+
 ### Fixed
+- **Klaudio no longer burns CPU while an agent is writing a long session.**
+  Every change to a Claude transcript made Klaudio re-read that transcript
+  from its first byte — several times a second while a session was active,
+  and a long-lived session's transcript can be tens of megabytes (77 MB
+  measured). Each of those changes also refreshed the Sessions list, which
+  re-read every transcript of the open project, even when the session that
+  changed belonged to a different project. Transcripts are append-only, so
+  Klaudio now remembers how far it has read each one and reads only what was
+  appended; and the list refreshes only for changes in the project on screen.
+
+- **A new session's tab appears as soon as you ask for it.** Opening a Cursor
+  session waits on a round trip to Cursor (~2 s) to get its chat id, and that
+  used to happen before the tab existed, so `+` and ⌘T looked like they had
+  done nothing. The tab and its loader now appear immediately. Starting any
+  agent also stopped re-checking its binary on every spawn (a `--version`
+  run, ~0.45 s for `cursor-agent`), and no longer probes the login shell to
+  find a binary its installer's path already provides.
+
 - **A session started from a Klaudio window launched inside another agent is
   saved again**
   ([#104](https://github.com/willywg/klaudio-panels/issues/104)). Sessions

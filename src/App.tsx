@@ -28,17 +28,30 @@ import { NotificationToastStack } from "@/components/notification-toast";
 import { ImageLightbox } from "@/components/image-lightbox";
 import { FileTree } from "@/components/file-tree/file-tree";
 import {
+  getLastAgent,
   getLastSessionId,
   getLegacyLastSessionId,
+  setLastAgent,
   setLastSessionId,
   clearLegacyLastSessionId,
 } from "@/components/last-session";
 import { getOpenTabIds, setOpenTabIds } from "@/components/open-tabs";
 import { resolveAutoResumeTarget } from "@/lib/auto-resume";
-import { DEFAULT_AGENT, type AgentId } from "@/lib/agents";
-import { resolveRestoredTabs } from "@/lib/restore-tabs";
+import { AGENT_DISPLAY, sessionKey, type AgentId } from "@/lib/agents";
+import {
+  chooseWakeTarget,
+  resolveRestoredTabs,
+  type RestoreGroup,
+} from "@/lib/restore-tabs";
+import { AgentsProvider, useAgents } from "@/context/agents";
+import { ContextMenu } from "@/components/context-menu";
+import { AgentSettingsDialog } from "@/components/agent-settings-dialog";
 import { ProjectsProvider, useProjects } from "@/context/projects";
-import { TerminalProvider, useTerminal } from "@/context/terminal";
+import {
+  SessionMintError,
+  TerminalProvider,
+  useTerminal,
+} from "@/context/terminal";
 import { SidebarProvider, useSidebar } from "@/context/sidebar";
 import {
   SessionWatcherProvider,
@@ -98,6 +111,16 @@ function relPathInside(base: string, full: string): string | null {
   return full.startsWith(prefix) ? full.slice(prefix.length) : null;
 }
 
+/** Whether a path an agent recorded names the project Klaudio opened. Agents
+ *  record the *resolved* cwd — macOS turns `/tmp/x` into `/private/tmp/x` —
+ *  so an exact match alone would miss those. */
+function isSameProjectPath(recorded: string, opened: string): boolean {
+  const norm = (x: string) => (x.length > 1 ? x.replace(/\/+$/, "") : x);
+  const a = norm(recorded);
+  const b = norm(opened);
+  return a === b || a === `/private${b}`;
+}
+
 function dirname(p: string): string {
   const i = p.lastIndexOf("/");
   return i <= 0 ? "/" : p.slice(0, i);
@@ -132,6 +155,11 @@ function Shell() {
   const commandPalette = useCommandPalette();
   const reveal = useReveal();
   const notifications = useNotifications();
+  const agents = useAgents();
+  const [newPicker, setNewPicker] = createSignal<{ x: number; y: number } | null>(
+    null,
+  );
+  const [settingsOpen, setSettingsOpen] = createSignal(false);
   let splitContainerRef!: HTMLDivElement;
   let sidebarRowRef!: HTMLDivElement;
 
@@ -305,10 +333,20 @@ function Shell() {
 
   // Refresh sessions list when the JSONL watcher sees a rename/summary/new —
   // covers the live-/rename path without manually clicking refresh.
+  //
+  // Only for the project on screen. Every tick of every live session in every
+  // project lands here, several times a second while an agent is writing, and
+  // each refresh lists all of the open project's sessions — refreshing on a
+  // tick from some other project was pure cost (PRP 024 QA measured it).
   createEffect(
     on(
       sessionWatcher.metaBump,
-      () => setSessionsRefresh((k) => k + 1),
+      (b) => {
+        const p = activeProjectPath();
+        if (p && isSameProjectPath(b.projectPath, p)) {
+          setSessionsRefresh((k) => k + 1);
+        }
+      },
       { defer: true },
     ),
   );
@@ -483,7 +521,9 @@ function Shell() {
         if (inShellDock) {
           void shellPty.openTab(p);
         } else {
-          void openNewTab();
+          // No picker on a shortcut: ⌘T means "another one of these", so it
+          // opens the agent the user is already working with.
+          void openNewTab(agentForShortcut());
         }
         return;
       }
@@ -665,30 +705,36 @@ function Shell() {
     ),
   );
 
-  const activeSessionId = () => {
+  // Keyed by agent *and* id: session ids are each agent's own, so a bare id
+  // could light up another agent's row that happens to share it.
+  const activeSessionKey = () => {
     const a = activeTab();
-    if (!a || a.projectPath !== activeProjectPath()) return null;
-    return a.sessionId ?? null;
+    if (!a || a.projectPath !== activeProjectPath() || !a.sessionId) return null;
+    return sessionKey(a.agentId, a.sessionId);
   };
 
-  const openSessionIds = createMemo(() => {
+  const openSessionKeys = createMemo(() => {
     const p = activeProjectPath();
     const set = new Set<string>();
     if (!p) return set;
     for (const t of term.store.tabs) {
       if (t.projectPath !== p) continue;
-      if (t.sessionId && t.status !== "opening") set.add(t.sessionId);
+      if (t.sessionId && t.status !== "opening") {
+        set.add(sessionKey(t.agentId, t.sessionId));
+      }
     }
     return set;
   });
 
-  const openingSessionIds = createMemo(() => {
+  const openingSessionKeys = createMemo(() => {
     const p = activeProjectPath();
     const set = new Set<string>();
     if (!p) return set;
     for (const t of term.store.tabs) {
       if (t.projectPath !== p) continue;
-      if (t.sessionId && t.status === "opening") set.add(t.sessionId);
+      if (t.sessionId && t.status === "opening") {
+        set.add(sessionKey(t.agentId, t.sessionId));
+      }
     }
     return set;
   });
@@ -716,6 +762,9 @@ function Shell() {
     const a = activeTab();
     if (!p || !a || a.projectPath !== p) return;
     if (a.sessionId) setLastSessionId(p, a.agentId, a.profileId, a.sessionId);
+    // Which agent the user is in, so reopening wakes that agent's tab rather
+    // than whichever agent happens to come first (see `chooseWakeTarget`).
+    setLastAgent(p, a.agentId);
   });
 
   // A dormant tab is a remembered session with no PTY behind it. The moment
@@ -771,21 +820,67 @@ function Shell() {
     }
   });
 
-  async function openNewTab() {
-    const p = activeProjectPath();
-    if (!p) return;
+  /** The agent a shortcut opens: the one the active tab runs, if it is still
+   *  enabled, else the first enabled agent. */
+  function agentForShortcut(): AgentId {
+    const a = activeTab();
+    if (a && a.projectPath === activeProjectPath() && agents.isEnabled(a.agentId)) {
+      return a.agentId;
+    }
+    return agents.preferred();
+  }
+
+  /** `+` / "New session". With one agent enabled there is nothing to choose
+   *  and it opens straight away, exactly as before agents existed; with more,
+   *  it opens a picker anchored to whatever was clicked. */
+  function requestNewTab(e?: MouseEvent) {
+    if (!agents.multiple()) {
+      void openNewTab(agents.preferred());
+      return;
+    }
+    const el = e?.currentTarget;
+    const rect = el instanceof HTMLElement ? el.getBoundingClientRect() : null;
+    const MENU_W = 220;
+    const x = rect ? Math.min(rect.left, window.innerWidth - MENU_W - 8) : 120;
+    setNewPicker({ x: Math.max(8, x), y: rect ? rect.bottom + 4 : 80 });
+  }
+
+  /** Opens a fresh session tab for `agentId` in `projectPath`. The id, for
+   *  an agent that can be handed one up front, is minted by `term.openTab`
+   *  once the tab — and its loader — is already on screen. */
+  async function startNewSession(
+    projectPath: string,
+    agentId: AgentId,
+  ): Promise<string> {
+    const profileId = await invoke<string>("resolve_profile_id", {
+      projectPath,
+      agentId,
+    });
     try {
-      const agentId = DEFAULT_AGENT;
-      const profileId = await invoke<string>("resolve_profile_id", {
-        projectPath: p,
-        agentId,
-      });
-      const id = await term.openTab(p, {
+      return await term.openTab(projectPath, {
         label: "New session",
         sessionId: null,
         agentId,
         profileId,
       });
+    } catch (err) {
+      if (err instanceof SessionMintError) {
+        // The tab has already been withdrawn; the error has nowhere to live
+        // but a dialog, and a `+` that silently did nothing is worse.
+        await message(String(err.cause), {
+          title: `Could not start a ${AGENT_DISPLAY[agentId].name} session`,
+          kind: "error",
+        });
+      }
+      throw err;
+    }
+  }
+
+  async function openNewTab(agentId: AgentId) {
+    const p = activeProjectPath();
+    if (!p) return;
+    try {
+      const id = await startNewSession(p, agentId);
       focusTerminal(id);
     } catch (err) {
       console.error("openTab(new) failed", err);
@@ -796,11 +891,11 @@ function Shell() {
 
   async function openResumeTab(
     projectPath: string,
+    agentId: AgentId,
     sessionId: string,
     label: string,
   ) {
     try {
-      const agentId = DEFAULT_AGENT;
       const profileId = await invoke<string>("resolve_profile_id", {
         projectPath,
         agentId,
@@ -823,7 +918,8 @@ function Shell() {
     const p = activeProjectPath();
     if (!p) return;
     const existing = term.store.tabs.find(
-      (t) => t.projectPath === p && t.sessionId === meta.id,
+      (t) =>
+        t.projectPath === p && t.agentId === meta.agent && t.sessionId === meta.id,
     );
     if (existing) {
       // User-action tab activation clears the "needs attention" pulse.
@@ -835,7 +931,7 @@ function Shell() {
       focusTerminal(existing.id);
       return;
     }
-    void openResumeTab(p, meta.id, displayLabel(meta));
+    void openResumeTab(p, meta.agent, meta.id, displayLabel(meta));
   }
 
   function handleActivateTab(id: string) {
@@ -857,92 +953,54 @@ function Shell() {
     if (existing.length > 0) return;
 
     void (async () => {
-      const agentId = DEFAULT_AGENT;
-      let profileId: string;
-      try {
-        profileId = await invoke<string>("resolve_profile_id", {
-          projectPath,
-          agentId,
-        });
-      } catch (err) {
-        // Could be a transient/blocked .envrc (e.g. `direnv allow` not run
-        // yet) — abort without touching any stored pointer, not a "this
-        // project has no last session" signal.
-        console.warn("resolve_profile_id failed during auto-resume", err);
-        return;
+      // Which agents are on is the backend's answer; restoring before it
+      // arrives would rebuild tabs for an agent the user has turned off.
+      await agents.ready;
+      const groups: (RestoreGroup & { profileId: string })[] = [];
+      for (const agentId of agents.enabledIds()) {
+        // eslint-disable-next-line no-await-in-loop
+        const group = await planAgentRestore(projectPath, agentId);
+        if (group) groups.push(group);
       }
 
-      // One listing answers both questions — which session to wake, and
-      // which remembered tabs still exist — so memoize it rather than
-      // paying for two `list_sessions_for_project` round trips on open.
-      let listing: Promise<SessionMeta[]> | null = null;
-      const listSessions = () =>
-        (listing ??= invoke("list_sessions_for_project", {
-          projectPath,
-          agentId,
-        }) as Promise<SessionMeta[]>);
+      const target = chooseWakeTarget(groups, getLastAgent(projectPath));
+      if (!target) return;
 
-      const decision = await resolveAutoResumeTarget(agentId, profileId, {
-        getNamespaced: () => getLastSessionId(projectPath, agentId, profileId),
-        getLegacy: () => getLegacyLastSessionId(projectPath),
-        listSessions,
-      });
-
-      // "none" is also what a failed listing looks like, which is exactly
-      // when restoring a workspace would be guesswork — bail on both.
-      if (decision.action === "none") return;
-
-      if (decision.action === "stale") {
-        // Session listing succeeded and the id it named no longer exists —
-        // clear only the pointer it actually came from. The rest of the
-        // remembered workspace may still be valid, so don't bail here.
-        if (decision.source === "namespaced") {
-          setLastSessionId(projectPath, agentId, profileId, null);
-        } else {
-          clearLegacyLastSessionId(projectPath);
+      // Rebuild every agent's remembered strip dormant — agents in registry
+      // order, each in its own stored order — then give a PTY to one tab
+      // only: the session that was active at quit, in the agent the user was
+      // last in, or the first survivor so the pane isn't empty.
+      let tabId: string | undefined;
+      groups.forEach((g, i) => {
+        const ids = term.restoreTabs(projectPath, g.agentId, g.profileId, g.restored);
+        if (i === target.groupIndex) {
+          const idx = g.restored.findIndex((r) => r.sessionId === target.sessionId);
+          tabId = ids[idx] ?? ids[0];
         }
-      } else if (decision.source === "legacy") {
-        // Validated against the current (profile-scoped) session list —
-        // migrate it under the namespaced key and retire the legacy
-        // pointer so it can't resurrect a stale id on a later launch.
-        setLastSessionId(projectPath, agentId, profileId, decision.sessionId);
-        clearLegacyLastSessionId(projectPath);
-      }
-
-      const wanted = decision.action === "open" ? decision.sessionId : null;
-      const restored = resolveRestoredTabs(
-        getOpenTabIds(projectPath, agentId, profileId),
-        await listSessions(),
-        wanted,
-      );
-      if (restored.length === 0) return;
-
-      // Rebuild the whole strip dormant and in its remembered order, then
-      // give a PTY to one tab only: the session that was active at quit, or
-      // — if that one is gone — the first survivor, so the pane isn't empty.
-      const tabIds = term.restoreTabs(projectPath, agentId, profileId, restored);
-      const wakeSessionId = wanted ?? restored[0].sessionId;
-      const wakeIdx = restored.findIndex((r) => r.sessionId === wakeSessionId);
-      const tabId = tabIds[wakeIdx] ?? tabIds[0];
+      });
+      if (!tabId) return;
+      const { agentId, profileId } = groups[target.groupIndex];
+      const wakeSessionId = target.sessionId;
 
       term.setActiveTab(tabId);
       // The project-switch effect ran before tabs existed for this project
       // and skipped its focus call. Now that the restore materialised a
       // tab, hand the cursor to it — the user just opened the project to
-      // use Claude.
+      // use their agent.
       focusTerminal(tabId);
 
+      const wokenId = tabId;
       const spawnedAt = Date.now();
       try {
-        await term.wakeTab(tabId);
-        const detach = term.onExit(tabId, (code) => {
+        await term.wakeTab(wokenId);
+        const detach = term.onExit(wokenId, (code) => {
           const elapsed = Date.now() - spawnedAt;
           if (elapsed < AUTO_RESUME_FAIL_WINDOW_MS && code !== 0) {
             console.info(
               `auto-resume failed for ${wakeSessionId} (exit ${code} after ${elapsed}ms). Clearing lastSessionId.`,
             );
             setLastSessionId(projectPath, agentId, profileId, null);
-            void term.closeTab(tabId);
+            void term.closeTab(wokenId);
           }
           detach();
         });
@@ -953,6 +1011,75 @@ function Shell() {
         setSessionsRefresh((k) => k + 1);
       }
     })();
+  }
+
+  /** One agent's half of reopening a project: which of its remembered tabs
+   *  still exist, and which session it would wake. `null` when it has
+   *  nothing to restore — or cannot tell, which is treated the same way:
+   *  each agent decides on its own, so a Claude `.envrc` that fails to
+   *  evaluate costs Claude's tabs and nothing else. */
+  async function planAgentRestore(
+    projectPath: string,
+    agentId: AgentId,
+  ): Promise<(RestoreGroup & { profileId: string }) | null> {
+    let profileId: string;
+    try {
+      profileId = await invoke<string>("resolve_profile_id", {
+        projectPath,
+        agentId,
+      });
+    } catch (err) {
+      // Could be a transient/blocked .envrc (e.g. `direnv allow` not run
+      // yet) — skip without touching any stored pointer, not a "this
+      // project has no last session" signal.
+      console.warn("resolve_profile_id failed during auto-resume", err);
+      return null;
+    }
+
+    // One listing answers both questions — which session to wake, and
+    // which remembered tabs still exist — so memoize it rather than
+    // paying for two `list_sessions_for_project` round trips on open.
+    let listing: Promise<SessionMeta[]> | null = null;
+    const listSessions = () =>
+      (listing ??= invoke("list_sessions_for_project", {
+        projectPath,
+        agentId,
+      }) as Promise<SessionMeta[]>);
+
+    const decision = await resolveAutoResumeTarget(agentId, profileId, {
+      getNamespaced: () => getLastSessionId(projectPath, agentId, profileId),
+      getLegacy: () => getLegacyLastSessionId(projectPath),
+      listSessions,
+    });
+
+    // "none" is also what a failed listing looks like, which is exactly
+    // when restoring a workspace would be guesswork — bail on both.
+    if (decision.action === "none") return null;
+
+    if (decision.action === "stale") {
+      // Session listing succeeded and the id it named no longer exists —
+      // clear only the pointer it actually came from. The rest of the
+      // remembered workspace may still be valid, so don't bail here.
+      if (decision.source === "namespaced") {
+        setLastSessionId(projectPath, agentId, profileId, null);
+      } else {
+        clearLegacyLastSessionId(projectPath);
+      }
+    } else if (decision.source === "legacy") {
+      // Validated against the current (profile-scoped) session list —
+      // migrate it under the namespaced key and retire the legacy
+      // pointer so it can't resurrect a stale id on a later launch.
+      setLastSessionId(projectPath, agentId, profileId, decision.sessionId);
+      clearLegacyLastSessionId(projectPath);
+    }
+
+    const wanted = decision.action === "open" ? decision.sessionId : null;
+    const restored = resolveRestoredTabs(
+      getOpenTabIds(projectPath, agentId, profileId),
+      await listSessions(),
+      wanted,
+    );
+    return { agentId, profileId, restored, wanted };
   }
 
   function handleAddProject(path: string) {
@@ -1010,17 +1137,10 @@ function Shell() {
     projects.touch(projectPath);
     setActiveProjectPath(projectPath);
     try {
-      const agentId = DEFAULT_AGENT;
-      const profileId = await invoke<string>("resolve_profile_id", {
-        projectPath,
-        agentId,
-      });
-      await term.openTab(projectPath, {
-        label: "New session",
-        sessionId: null,
-        agentId,
-        profileId,
-      });
+      // A CLI invocation can arrive at boot, before the backend has said
+      // which agents are on.
+      await agents.ready;
+      await startNewSession(projectPath, agents.preferred());
     } catch (err) {
       console.error("cli:open → openTab failed", err);
     } finally {
@@ -1086,6 +1206,21 @@ function Shell() {
       <Titlebar
         hasActiveProject={activeProjectPath() !== null}
         activeProjectPath={activeProjectPath()}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
+      <AgentSettingsDialog
+        open={settingsOpen()}
+        onClose={() => setSettingsOpen(false)}
+      />
+      <ContextMenu
+        open={newPicker() !== null}
+        x={newPicker()?.x ?? 0}
+        y={newPicker()?.y ?? 0}
+        items={agents.enabled().map((a) => ({
+          label: `New ${AGENT_DISPLAY[a.id].name} session`,
+          onClick: () => void openNewTab(a.id),
+        }))}
+        onClose={() => setNewPicker(null)}
       />
       <NotificationToastStack />
       {/* Mounted once at the root and driven by `image-lightbox-bus` — the
@@ -1128,10 +1263,12 @@ function Shell() {
                 sessionsContent={
                   <SessionsList
                     projectPath={panelProject()}
-                    activeSessionId={activeSessionId()}
-                    openSessionIds={openSessionIds()}
-                    openingSessionIds={openingSessionIds()}
-                    onNew={() => void openNewTab()}
+                    agentIds={agents.enabledIds()}
+                    showAgent={agents.multiple()}
+                    activeSessionKey={activeSessionKey()}
+                    openSessionKeys={openSessionKeys()}
+                    openingSessionKeys={openingSessionKeys()}
+                    onNew={(e) => requestNewTab(e)}
                     onSelect={handleSelectSession}
                     onRefresh={() => setSessionsRefresh((k) => k + 1)}
                     refreshKey={sessionsRefresh()}
@@ -1178,8 +1315,9 @@ function Shell() {
                   activeTabId={term.store.activeTabId}
                   onActivate={handleActivateTab}
                   onClose={(id) => void handleCloseTab(id)}
-                  onNew={() => void openNewTab()}
+                  onNew={(e) => requestNewTab(e)}
                   canOpenNew={!anyTabOpeningForActive()}
+                  showAgent={agents.multiple()}
                 />
               </Show>
               <div class="relative flex-1 min-h-0 overflow-hidden">
@@ -1203,7 +1341,7 @@ function Shell() {
                             tab.status !== "opening" &&
                             tab.status !== "dormant"
                           }
-                          fallback={<LoadingPanel label={tab.label} />}
+                          fallback={<LoadingPanel label={tab.label} agent={tab.agentId} />}
                         >
                           <TerminalView id={tab.id} active={visible()} />
                         </Show>
@@ -1310,13 +1448,15 @@ function Shell() {
   );
 }
 
-function LoadingPanel(props: { label?: string }) {
+function LoadingPanel(props: { label?: string; agent: AgentId }) {
   return (
     <div class="absolute inset-0 flex items-center justify-center">
       <div class="flex flex-col items-center gap-3 text-neutral-400 text-sm">
         <div class="flex items-center gap-3">
           <div class="w-4 h-4 border-2 border-neutral-700 border-t-indigo-500 rounded-full animate-spin" />
-          <span>Starting Claude Code…</span>
+          <span>
+            Starting {AGENT_DISPLAY[props.agent].product}…
+          </span>
         </div>
         <Show when={props.label}>
           <span class="text-[11px] text-neutral-600 font-mono truncate max-w-[300px]">
@@ -1333,6 +1473,7 @@ installGlobalErrorForwarding();
 export default function App() {
   return (
     <ProjectsProvider>
+      <AgentsProvider>
       <SidebarProvider>
         <GitProvider>
           <RevealProvider>
@@ -1362,6 +1503,7 @@ export default function App() {
           </RevealProvider>
         </GitProvider>
       </SidebarProvider>
+      </AgentsProvider>
     </ProjectsProvider>
   );
 }

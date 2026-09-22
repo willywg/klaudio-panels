@@ -6,9 +6,8 @@ import {
   preAgentOpenTabsKey,
   setOpenTabIds,
 } from "./open-tabs";
-import { CLAUDE } from "@/lib/agents";
+import { CLAUDE, CURSOR } from "@/lib/agents";
 
-const CURSOR = "cursor" as typeof CLAUDE;
 
 /** Bun's default test runtime has no `localStorage` global (no DOM, no
  *  preload) — stub a minimal in-memory implementation, reset before every

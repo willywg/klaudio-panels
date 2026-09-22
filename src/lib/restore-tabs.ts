@@ -1,4 +1,5 @@
 import { displayLabel, type SessionLike } from "@/lib/session-label";
+import type { AgentId } from "@/lib/agents";
 
 export type RestoredTab = { sessionId: string; label: string };
 
@@ -41,4 +42,38 @@ export function resolveRestoredTabs(
   }
 
   return out;
+}
+
+export type RestoreGroup = {
+  agentId: AgentId;
+  restored: RestoredTab[];
+  /** The session this agent would wake on its own — its `lastSessionId`,
+   *  validated — or null when it only has remembered tabs. */
+  wanted: string | null;
+};
+
+/** With more than one agent, reopening a project can rebuild tabs for each
+ *  of them, but only one tab gets a PTY (decision #9). This picks it.
+ *
+ *  The agent the user was last in wins, when it has anything to restore.
+ *  Otherwise the first group in registry order — the same answer a
+ *  single-agent install always got. Within the chosen group, its own
+ *  remembered session wins, else its first surviving tab, so the pane is
+ *  never blank.
+ *
+ *  Pure: ordering across agents and the fallback when the last agent has
+ *  nothing left are the parts worth testing without a store. */
+export function chooseWakeTarget(
+  groups: RestoreGroup[],
+  lastAgent: AgentId | null,
+): { groupIndex: number; sessionId: string } | null {
+  const usable = groups
+    .map((g, i) => ({ g, i }))
+    .filter(({ g }) => g.restored.length > 0);
+  if (usable.length === 0) return null;
+  const pick = usable.find(({ g }) => g.agentId === lastAgent) ?? usable[0];
+  return {
+    groupIndex: pick.i,
+    sessionId: pick.g.wanted ?? pick.g.restored[0].sessionId,
+  };
 }

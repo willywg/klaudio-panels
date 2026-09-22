@@ -191,9 +191,86 @@ fn seed_seen(root: &Path) {
     }
 }
 
+/// A Cursor chat changed. Only `meta.json` is looked at: it is rewritten when
+/// the chat gains its first turn, its auto-generated title, or new activity,
+/// which is everything the sidebar and tab labels show.
+///
+/// No `session:new`: a Cursor tab is born knowing its chat id
+/// (`agent::mints_session_ids`), so there is nothing to correlate. And no
+/// `session:complete` — Cursor writes no turn-completion record here; see the
+/// completion-events follow-up in PRP 024.
+fn emit_for_cursor_meta(app: &AppHandle, path: &Path) {
+    let Some(chat_dir) = path.parent() else { return };
+    // `None` for a chat with no conversation yet — opened and not used,
+    // which is also the state every new Cursor tab starts in.
+    if let Some(meta) = crate::cursor_sessions::session_from_chat(chat_dir) {
+        let _ = app.emit("session:meta", meta);
+    }
+}
+
+fn is_cursor_meta(path: &Path) -> bool {
+    path.file_name().and_then(|n| n.to_str()) == Some(crate::cursor_sessions::META_FILE)
+}
+
+/// Cursor's chats root, watched only if it exists: creating `~/.cursor` for
+/// someone who has never installed Cursor would be a strange thing for a
+/// Claude user's app to do. Installing Cursor later means the list still
+/// works (it is read on demand) and live labels start on the next launch.
+///
+/// The filter matters more than it looks. A chat's directory also holds its
+/// `store.db` and WAL, which churn on every token while the agent thinks;
+/// reacting to those would keep the debouncer firing for the length of
+/// every turn.
+fn install_cursor(app: AppHandle) -> anyhow::Result<()> {
+    let Some(root) = agent::watch_root(AgentId::Cursor) else {
+        return Ok(());
+    };
+    if !root.is_dir() {
+        crate::debug_log::write("boot", "no Cursor chats directory; Cursor session watcher not installed");
+        return Ok(());
+    }
+
+    let mut debouncer = new_debouncer(
+        Duration::from_millis(DEBOUNCE_MS),
+        None,
+        move |result: DebounceEventResult| match result {
+            Ok(events) => {
+                for ev in events {
+                    if !matches!(ev.event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
+                        continue;
+                    }
+                    for p in ev.event.paths.iter().filter(|p| is_cursor_meta(p)) {
+                        emit_for_cursor_meta(&app, p);
+                    }
+                }
+            }
+            Err(errors) => {
+                eprintln!("cursor session_watcher errors: {errors:?}");
+            }
+        },
+    )?;
+    debouncer.watch(&root, RecursiveMode::Recursive)?;
+
+    std::thread::spawn(move || {
+        let _hold = debouncer;
+        std::thread::park();
+    });
+    Ok(())
+}
+
+/// Install one watcher per agent root (decision #10: one per agent, never
+/// per project). Each runs in its own OS thread; a failure to install one
+/// is logged and does not stop the other.
+pub fn install(app: AppHandle) -> anyhow::Result<()> {
+    if let Err(e) = install_cursor(app.clone()) {
+        crate::debug_log::write("boot", &format!("cursor session_watcher install failed: {e}"));
+    }
+    install_claude(app)
+}
+
 /// Install the global JSONL watcher. Runs in its own OS thread; the debouncer
 /// is moved into the thread and kept alive for the lifetime of the app.
-pub fn install(app: AppHandle) -> anyhow::Result<()> {
+fn install_claude(app: AppHandle) -> anyhow::Result<()> {
     let root = agent::watch_root(AgentId::Claude)
         .ok_or_else(|| anyhow::anyhow!("cannot resolve ~/.claude/projects"))?;
     std::fs::create_dir_all(&root)?;
