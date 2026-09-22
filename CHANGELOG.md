@@ -38,6 +38,24 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   ([#110](https://github.com/willywg/klaudio-panels/issues/110)).
 
 ### Fixed
+- **Klaudio no longer burns CPU while an agent is writing a long session.**
+  Every change to a Claude transcript made Klaudio re-read that transcript
+  from its first byte — several times a second while a session was active,
+  and a long-lived session's transcript can be tens of megabytes (77 MB
+  measured). Each of those changes also refreshed the Sessions list, which
+  re-read every transcript of the open project, even when the session that
+  changed belonged to a different project. Transcripts are append-only, so
+  Klaudio now remembers how far it has read each one and reads only what was
+  appended; and the list refreshes only for changes in the project on screen.
+
+- **A new session's tab appears as soon as you ask for it.** Opening a Cursor
+  session waits on a round trip to Cursor (~2 s) to get its chat id, and that
+  used to happen before the tab existed, so `+` and ⌘T looked like they had
+  done nothing. The tab and its loader now appear immediately. Starting any
+  agent also stopped re-checking its binary on every spawn (a `--version`
+  run, ~0.45 s for `cursor-agent`), and no longer probes the login shell to
+  find a binary its installer's path already provides.
+
 - **A session started from a Klaudio window launched inside another agent is
   saved again**
   ([#104](https://github.com/willywg/klaudio-panels/issues/104)). Sessions

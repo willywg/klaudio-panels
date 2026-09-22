@@ -18,6 +18,13 @@ cd src-tauri && cargo check
 cd src-tauri && cargo clippy -- -D warnings
 ```
 
+**Never judge performance from a Rosetta dev build.** If `rustup show` says
+`stable-x86_64-apple-darwin` on an Apple Silicon Mac, `bun tauri dev` produces
+an x86_64 debug binary that runs translated — measured at ~10× the CPU of the
+native release build on the same load (PRP 024 QA). Run
+`bun tauri dev --target aarch64-apple-darwin`, and compare against a release
+build before calling anything a regression.
+
 Release flow: see [`docs/release-flow.md`](docs/release-flow.md).
 Every release ends with a cask bump in
 [`willywg/homebrew-klaudio-panels`](https://github.com/willywg/homebrew-klaudio-panels)
@@ -117,7 +124,7 @@ Rust (`src-tauri/src/`):
 - `agent_commands.rs` — the Tauri surface for the Agents dialog and the `+` picker: `list_agents`, `discover_agent_binary`, `set_agent_settings`, `agent_create_session`.
 - `cursor_sessions.rs` — Cursor's session provider: reads `meta.json` + `prompt_history.json` (newest-first; the preview is its last non-slash-command entry), skips `hasConversation: false`, matches projects on the recorded `cwd`.
 - `binary.rs` — resolve an agent's binary: the configured path if there is one, else the agent's installer paths, `which_in_shell`, `which`, and its package-manager fallbacks, each validated with a `--version` probe. A configured path that doesn't run is an error, never a silent fall-through to a different binary. Kept from Sprint 00, generalized in #102.
-- `sessions.rs` — Claude's session provider: parse `<config-dir>/projects/**/*.jsonl` for sidebar previews (read-only); `<config-dir>` is `$CLAUDE_CONFIG_DIR` when the project's direnv sets one (see `project_env.rs`), else `~/.claude/projects`. Captures `custom_title` (from `/rename`) and `summary` (auto-generated). `read_cwd` and `scan_session_file` are `pub(crate)` so the watcher can reuse them.
+- `sessions.rs` — Claude's session provider: parse `<config-dir>/projects/**/*.jsonl` for sidebar previews (read-only); `<config-dir>` is `$CLAUDE_CONFIG_DIR` when the project's direnv sets one (see `project_env.rs`), else `~/.claude/projects`. Captures `custom_title` (from `/rename`) and `summary` (auto-generated). `scan_session_file` is **incremental**: it remembers, per file (keyed by path and checked against dev/inode and length), how far it has read and what it found, and reads only appended bytes. It is on every watcher tick and every Sessions-list refresh, and a live transcript can be tens of MB — a from-scratch scan there pinned a core (PRP 024 QA). Don't reintroduce a full read on a hot path. `read_cwd` and `scan_session_file` are `pub(crate)` so the watcher can reuse them.
 - `shell_env.rs` — `probe_shell_env`, `load_shell_env`, `merge_shell_env` (ported from OpenCode).
 - `project_env.rs` — resolves the per-project child-process env: hydrated shell env + `direnv export json` diff (added/changed/removed vars) for the project path. Fails closed on any direnv evaluation error. Also exposes `resolve_claude_config_dir` for `sessions.rs`, and `profile_id_for_config_dir` / `#[tauri::command] resolve_profile_id` (see decision #13) for the frontend's profile-namespaced session state.
 - `pty.rs` — `portable-pty` lifecycle, `pty_open/write/resize/kill`, streaming events. The id is provided by the frontend. `pty_open` spawns Claude with the env from `project_env.rs`, taking an `expected_profile_id` it validates against that same env before spawning (decision #13).

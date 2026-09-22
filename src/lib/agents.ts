@@ -26,7 +26,8 @@ export function isAgentId(v: unknown): v is AgentId {
 }
 
 /** How an agent is shown. Both names start with a C, so the compact badge
- *  uses two letters rather than an initial that would say nothing. */
+ *  uses two letters rather than an initial that would say nothing: Claude
+ *  Code's own initials, and the first two of Cursor. */
 export const AGENT_DISPLAY: Record<
   AgentId,
   {
@@ -43,7 +44,7 @@ export const AGENT_DISPLAY: Record<
     name: "Claude",
     product: "Claude Code",
     bin: "claude",
-    short: "Cl",
+    short: "CC",
     badgeClass: "text-orange-300 bg-orange-500/10 border-orange-500/30",
   },
   cursor: {

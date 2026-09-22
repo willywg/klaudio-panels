@@ -47,7 +47,11 @@ import { AgentsProvider, useAgents } from "@/context/agents";
 import { ContextMenu } from "@/components/context-menu";
 import { AgentSettingsDialog } from "@/components/agent-settings-dialog";
 import { ProjectsProvider, useProjects } from "@/context/projects";
-import { TerminalProvider, useTerminal } from "@/context/terminal";
+import {
+  SessionMintError,
+  TerminalProvider,
+  useTerminal,
+} from "@/context/terminal";
 import { SidebarProvider, useSidebar } from "@/context/sidebar";
 import {
   SessionWatcherProvider,
@@ -105,6 +109,16 @@ function relPathInside(base: string, full: string): string | null {
   if (full === b) return null;
   const prefix = b + "/";
   return full.startsWith(prefix) ? full.slice(prefix.length) : null;
+}
+
+/** Whether a path an agent recorded names the project Klaudio opened. Agents
+ *  record the *resolved* cwd — macOS turns `/tmp/x` into `/private/tmp/x` —
+ *  so an exact match alone would miss those. */
+function isSameProjectPath(recorded: string, opened: string): boolean {
+  const norm = (x: string) => (x.length > 1 ? x.replace(/\/+$/, "") : x);
+  const a = norm(recorded);
+  const b = norm(opened);
+  return a === b || a === `/private${b}`;
 }
 
 function dirname(p: string): string {
@@ -319,10 +333,20 @@ function Shell() {
 
   // Refresh sessions list when the JSONL watcher sees a rename/summary/new —
   // covers the live-/rename path without manually clicking refresh.
+  //
+  // Only for the project on screen. Every tick of every live session in every
+  // project lands here, several times a second while an agent is writing, and
+  // each refresh lists all of the open project's sessions — refreshing on a
+  // tick from some other project was pure cost (PRP 024 QA measured it).
   createEffect(
     on(
       sessionWatcher.metaBump,
-      () => setSessionsRefresh((k) => k + 1),
+      (b) => {
+        const p = activeProjectPath();
+        if (p && isSameProjectPath(b.projectPath, p)) {
+          setSessionsRefresh((k) => k + 1);
+        }
+      },
       { defer: true },
     ),
   );
@@ -821,12 +845,9 @@ function Shell() {
     setNewPicker({ x: Math.max(8, x), y: rect ? rect.bottom + 4 : 80 });
   }
 
-  /** Opens a fresh session tab for `agentId` in `projectPath`. An agent that
-   *  can be handed its session id up front gets one minted first
-   *  (`agent_create_session`), so its tab is born knowing its session and
-   *  never waits on the watcher's FIFO correlation — for Cursor that is the
-   *  only way to learn the id at all. Claude answers null and is correlated
-   *  as it always was. */
+  /** Opens a fresh session tab for `agentId` in `projectPath`. The id, for
+   *  an agent that can be handed one up front, is minted by `term.openTab`
+   *  once the tab — and its loader — is already on screen. */
   async function startNewSession(
     projectPath: string,
     agentId: AgentId,
@@ -835,27 +856,24 @@ function Shell() {
       projectPath,
       agentId,
     });
-    let sessionId: string | null;
     try {
-      sessionId = await invoke<string | null>("agent_create_session", {
-        projectPath,
+      return await term.openTab(projectPath, {
+        label: "New session",
+        sessionId: null,
         agentId,
+        profileId,
       });
     } catch (err) {
-      // No tab exists yet to carry this error, so say it out loud rather
-      // than leave a `+` that did nothing.
-      await message(String(err), {
-        title: `Could not start a ${AGENT_DISPLAY[agentId].name} session`,
-        kind: "error",
-      });
+      if (err instanceof SessionMintError) {
+        // The tab has already been withdrawn; the error has nowhere to live
+        // but a dialog, and a `+` that silently did nothing is worse.
+        await message(String(err.cause), {
+          title: `Could not start a ${AGENT_DISPLAY[agentId].name} session`,
+          kind: "error",
+        });
+      }
       throw err;
     }
-    return term.openTab(projectPath, {
-      label: "New session",
-      sessionId,
-      agentId,
-      profileId,
-    });
   }
 
   async function openNewTab(agentId: AgentId) {

@@ -4,8 +4,10 @@ use crate::agent::AgentId;
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 
 const SCAN_LINES_FOR_CWD: usize = 50;
 const PREVIEW_MAX_CHARS: usize = 140;
@@ -135,6 +137,7 @@ pub(crate) fn truncate(s: &str) -> String {
     }
 }
 
+#[derive(Clone, Default)]
 pub(crate) struct SessionScan {
     pub(crate) first_preview: Option<String>,
     pub(crate) first_timestamp: Option<String>,
@@ -163,65 +166,172 @@ fn line_may_matter(line: &str, need_conversation_info: bool) -> bool {
     need_conversation_info && (line.contains("\"user\"") || line.contains("\"assistant\""))
 }
 
-/// Single pass over the JSONL: captures first user message, custom-title and
-/// summary entries. `custom-title` and `summary` are last-write-wins.
-pub(crate) fn scan_session_file(file: &Path) -> SessionScan {
-    let mut scan = SessionScan {
-        first_preview: None,
-        first_timestamp: None,
-        custom_title: None,
-        summary: None,
-        has_conversation: false,
+/// Folds one JSONL line into a scan: first user message (sticky),
+/// `custom-title` and `summary` (last write wins). Order-independent in the
+/// only way that matters — every field either sticks at its first value or
+/// takes its latest — which is what lets `scan_session_file` resume from
+/// where it stopped instead of starting over.
+fn fold_line(scan: &mut SessionScan, line: &str) {
+    let need_conv = scan.first_preview.is_none() || !scan.has_conversation;
+    if !line_may_matter(line, need_conv) {
+        return;
+    }
+    let Ok(v) = serde_json::from_str::<Value>(line) else {
+        return;
     };
-    let Ok(f) = fs::File::open(file) else {
-        return scan;
-    };
-    for line in BufReader::new(f).lines().map_while(Result::ok) {
-        let need_conv = scan.first_preview.is_none() || !scan.has_conversation;
-        if !line_may_matter(&line, need_conv) {
-            continue;
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("user") if scan.first_preview.is_none() => {
+            if let Some(content) = v.pointer("/message/content") {
+                if let Some(text) = extract_text_from_content(content) {
+                    if !is_noise_message(&text) {
+                        scan.first_preview = Some(truncate(&text));
+                        scan.first_timestamp = v
+                            .get("timestamp")
+                            .and_then(|t| t.as_str())
+                            .map(str::to_string);
+                        scan.has_conversation = true;
+                    }
+                }
+            }
         }
-        let Ok(v) = serde_json::from_str::<Value>(&line) else {
-            continue;
+        Some("user") | Some("assistant") => {
+            scan.has_conversation = true;
+        }
+        Some("custom-title") => {
+            if let Some(t) = v.get("customTitle").and_then(|x| x.as_str()) {
+                let t = t.trim();
+                if !t.is_empty() {
+                    scan.custom_title = Some(t.to_string());
+                }
+            }
+        }
+        Some("summary") => {
+            if let Some(s) = v.get("summary").and_then(|x| x.as_str()) {
+                let s = s.trim();
+                if !s.is_empty() {
+                    scan.summary = Some(s.to_string());
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// How far into a file a scan has already got, and what it found there.
+/// `ino` / `dev` identify the file itself, so a JSONL replaced by another at
+/// the same path is rescanned rather than resumed from an offset that
+/// belongs to something else.
+struct ScanCursor {
+    dev: u64,
+    ino: u64,
+    /// Bytes consumed — always at a line boundary.
+    offset: u64,
+    scan: SessionScan,
+}
+
+/// Per-file scan progress. Without it every watcher tick re-read the whole
+/// transcript from byte zero, and so did every Sessions-list refresh — an
+/// active session with a 77 MB JSONL cost a full read every 200 ms while it
+/// was being written, and each tick of *any* session refreshed the list and
+/// re-read every transcript of the open project on top of that (measured,
+/// PRP 024 QA). Session files are append-only logs, so the work that is
+/// actually new is only ever the bytes appended since the last look.
+///
+/// Bounded by a crude clear rather than LRU: an entry is a few short strings,
+/// the cap is far above the number of transcripts anyone has open, and
+/// losing the cache only costs one full scan per file.
+static SCAN_CACHE: LazyLock<Mutex<HashMap<PathBuf, ScanCursor>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+const SCAN_CACHE_CAP: usize = 4096;
+
+#[cfg(unix)]
+fn file_identity(meta: &fs::Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    (meta.dev(), meta.ino())
+}
+
+#[cfg(not(unix))]
+fn file_identity(_meta: &fs::Metadata) -> (u64, u64) {
+    (0, 0)
+}
+
+/// Scans a JSONL for its first user message, `custom-title` and `summary`,
+/// reading only what was appended since this file was last scanned.
+///
+/// Falls back to a scan from byte zero when there is no usable cursor: first
+/// sight, a different file at the same path, or a file shorter than where we
+/// stopped (truncated or rewritten). A trailing line without its newline yet
+/// is folded into the result but not committed, so it is re-read once it is
+/// complete — the answer is always what a full scan would say.
+pub(crate) fn scan_session_file(file: &Path) -> SessionScan {
+    let Ok(meta) = fs::metadata(file) else {
+        return SessionScan::default();
+    };
+    let (dev, ino) = file_identity(&meta);
+    let len = meta.len();
+
+    let (start, mut committed) = {
+        let cache = SCAN_CACHE.lock().ok();
+        match cache.as_ref().and_then(|c| c.get(file)) {
+            Some(cur) if cur.dev == dev && cur.ino == ino && cur.offset <= len => {
+                (cur.offset, cur.scan.clone())
+            }
+            _ => (0, SessionScan::default()),
+        }
+    };
+    if start == len {
+        return committed;
+    }
+
+    let Ok(mut f) = fs::File::open(file) else {
+        return committed;
+    };
+    if f.seek(SeekFrom::Start(start)).is_err() {
+        return committed;
+    }
+    let mut reader = BufReader::new(f);
+    let mut offset = start;
+    let mut pending: Option<Vec<u8>> = None;
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        let n = match reader.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => n,
         };
-        match v.get("type").and_then(|t| t.as_str()) {
-            Some("user") if scan.first_preview.is_none() => {
-                if let Some(content) = v.pointer("/message/content") {
-                    if let Some(text) = extract_text_from_content(content) {
-                        if !is_noise_message(&text) {
-                            scan.first_preview = Some(truncate(&text));
-                            scan.first_timestamp = v
-                                .get("timestamp")
-                                .and_then(|t| t.as_str())
-                                .map(str::to_string);
-                            scan.has_conversation = true;
-                        }
-                    }
-                }
-            }
-            Some("user") | Some("assistant") => {
-                scan.has_conversation = true;
-            }
-            Some("custom-title") => {
-                if let Some(t) = v.get("customTitle").and_then(|x| x.as_str()) {
-                    let t = t.trim();
-                    if !t.is_empty() {
-                        scan.custom_title = Some(t.to_string());
-                    }
-                }
-            }
-            Some("summary") => {
-                if let Some(s) = v.get("summary").and_then(|x| x.as_str()) {
-                    let s = s.trim();
-                    if !s.is_empty() {
-                        scan.summary = Some(s.to_string());
-                    }
-                }
-            }
-            _ => {}
+        if buf.last() != Some(&b'\n') {
+            // Still being written. Look at it, don't commit to it.
+            pending = Some(std::mem::take(&mut buf));
+            break;
+        }
+        offset += n as u64;
+        if let Ok(line) = std::str::from_utf8(&buf[..buf.len() - 1]) {
+            fold_line(&mut committed, line.trim_end_matches('\r'));
         }
     }
-    scan
+
+    let mut result = committed.clone();
+    if let Some(tail) = pending {
+        if let Ok(line) = std::str::from_utf8(&tail) {
+            fold_line(&mut result, line);
+        }
+    }
+
+    if let Ok(mut cache) = SCAN_CACHE.lock() {
+        if cache.len() >= SCAN_CACHE_CAP && !cache.contains_key(file) {
+            cache.clear();
+        }
+        cache.insert(
+            file.to_path_buf(),
+            ScanCursor {
+                dev,
+                ino,
+                offset,
+                scan: committed,
+            },
+        );
+    }
+    result
 }
 
 /// Result of scanning the tail of a JSONL for the most recent assistant
@@ -503,6 +613,77 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn user_line(text: &str) -> String {
+        format!(
+            r#"{{"type":"user","cwd":"/p","timestamp":"2026-09-01T00:00:00Z","message":{{"role":"user","content":"{text}"}}}}"#
+        ) + "\n"
+    }
+
+    fn title_line(title: &str) -> String {
+        format!(r#"{{"type":"custom-title","customTitle":"{title}"}}"#) + "\n"
+    }
+
+    fn append(path: &Path, text: &str) {
+        use std::io::Write as _;
+        let mut f = fs::OpenOptions::new().append(true).create(true).open(path).unwrap();
+        f.write_all(text.as_bytes()).unwrap();
+    }
+
+    // The CPU regression this exists for: a live transcript is scanned on
+    // every watcher tick. Resuming must give exactly what a full scan gives.
+    #[test]
+    fn a_resumed_scan_sees_what_was_appended() {
+        let dir = TempDir::new("incr-append");
+        let file = dir.path().join("s.jsonl");
+        append(&file, &user_line("first question"));
+        let before = scan_session_file(&file);
+        assert_eq!(before.first_preview.as_deref(), Some("first question"));
+        assert!(before.custom_title.is_none());
+
+        append(&file, &user_line("second question"));
+        append(&file, &title_line("Renamed"));
+        let after = scan_session_file(&file);
+        assert_eq!(after.first_preview.as_deref(), Some("first question"));
+        assert_eq!(after.custom_title.as_deref(), Some("Renamed"));
+
+        // Same answer as a file scanned from scratch.
+        let fresh = dir.path().join("fresh.jsonl");
+        fs::copy(&file, &fresh).unwrap();
+        assert_eq!(scan_session_file(&fresh).custom_title.as_deref(), Some("Renamed"));
+    }
+
+    #[test]
+    fn a_line_still_being_written_is_read_once_it_is_complete() {
+        let dir = TempDir::new("incr-partial");
+        let file = dir.path().join("s.jsonl");
+        append(&file, &user_line("hello"));
+        let whole = title_line("Late title");
+        let (head, tail) = whole.split_at(20);
+        append(&file, head);
+        assert!(scan_session_file(&file).custom_title.is_none());
+
+        append(&file, tail);
+        assert_eq!(scan_session_file(&file).custom_title.as_deref(), Some("Late title"));
+    }
+
+    // A file replaced at the same path must not be resumed from an offset
+    // that belongs to its predecessor.
+    #[test]
+    fn a_rewritten_file_is_scanned_again_from_the_start() {
+        let dir = TempDir::new("incr-rewrite");
+        let file = dir.path().join("s.jsonl");
+        append(&file, &user_line("original question, rather long to be sure"));
+        append(&file, &title_line("Old"));
+        scan_session_file(&file);
+
+        let replacement = dir.path().join("tmp.jsonl");
+        append(&replacement, &user_line("new"));
+        fs::rename(&replacement, &file).unwrap();
+        let rescanned = scan_session_file(&file);
+        assert_eq!(rescanned.first_preview.as_deref(), Some("new"));
+        assert!(rescanned.custom_title.is_none());
     }
 
     /// Same fake-direnv technique as `project_env::tests` — a shell script

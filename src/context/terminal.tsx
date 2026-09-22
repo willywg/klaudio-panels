@@ -61,13 +61,26 @@ export type OpenTabOpts = {
   /** The session to resume, or null for a fresh one. This is also what
    *  decides the argv: the backend asks its registry for the agent's resume
    *  flags rather than taking them from here, so a caller cannot build an
-   *  argv that disagrees with the session the tab was created with. */
+   *  argv that disagrees with the session the tab was created with.
+   *
+   *  A fresh tab of an agent that can be handed its id up front (Cursor)
+   *  gets one minted here, after the tab is on screen — see `openTab`. */
   sessionId: string | null;
   agentId: AgentId;
   /** Resolved by the caller via `resolve_profile_id` *before* calling
    *  `openTab` — see `TerminalTab.profileId`. */
   profileId: string;
 };
+
+/** Minting a session id failed, so the tab that was waiting for it has been
+ *  taken back out of the strip. Distinct from a spawn failure, which leaves
+ *  an error tab behind: here nothing was ever started. */
+export class SessionMintError extends Error {
+  constructor(readonly cause: unknown) {
+    super(String(cause));
+    this.name = "SessionMintError";
+  }
+}
 
 function newId(): string {
   // crypto.randomUUID is available in modern WebKit/Chromium.
@@ -203,8 +216,48 @@ export function makeTerminalContext() {
       }),
     );
 
-    await spawn(id, projectPath, opts.agentId, opts.sessionId, opts.profileId);
+    // The tab is on screen, loader and all, *before* anything slow happens.
+    // For Cursor the slow thing is `create-chat`, a round trip to Cursor's
+    // backend (~2 s measured); minting it before the tab existed left `+`
+    // and ⌘T looking dead for that long.
+    let sessionId = opts.sessionId;
+    if (sessionId === null) {
+      try {
+        sessionId = await invoke<string | null>("agent_create_session", {
+          projectPath,
+          agentId: opts.agentId,
+        });
+      } catch (err) {
+        removeTab(id);
+        throw new SessionMintError(err);
+      }
+      // Assigned while the tab is still "opening" and before its PTY exists,
+      // so nothing can have observed it without an id it should have had —
+      // the same reason `agentId` and `profileId` are never set later.
+      if (sessionId !== null) {
+        setStore("tabs", (t) => t.id === id, "sessionId", sessionId);
+      }
+    }
+
+    await spawn(id, projectPath, opts.agentId, sessionId, opts.profileId);
     return id;
+  }
+
+  /** Takes a tab that never got a PTY back out of the strip, handing focus
+   *  back to whichever tab had it before. */
+  function removeTab(id: string): void {
+    setStore(
+      produce((s) => {
+        const idx = s.tabs.findIndex((t) => t.id === id);
+        if (idx < 0) return;
+        const projectPath = s.tabs[idx].projectPath;
+        s.tabs.splice(idx, 1);
+        if (s.activeTabId === id) {
+          const sibling = [...s.tabs].reverse().find((t) => t.projectPath === projectPath);
+          s.activeTabId = sibling?.id ?? null;
+        }
+      }),
+    );
   }
 
   /** Rebuilds a remembered workspace: pushes one dormant tab per entry, in
