@@ -6,6 +6,8 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
 ## [Unreleased]
 
+## [1.12.0] — 2026-09-22
+
 ### Added
 - **Cursor as a second agent**
   ([#108](https://github.com/willywg/klaudio-panels/issues/108)). Klaudio can
@@ -36,6 +38,17 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   pulses ([#109](https://github.com/willywg/klaudio-panels/issues/109)), and
   per-project accounts via `CURSOR_CONFIG_DIR`
   ([#110](https://github.com/willywg/klaudio-panels/issues/110)).
+
+- **An agent's binary can be pinned explicitly.** `agent_settings.rs` reads
+  `{ enabled, binaryPath }` per agent from a JSON file in the app config dir
+  and that path, when set, wins over discovery; when it is set and does not
+  run, that is an error rather than a silent fall-through to a different
+  binary. Discovery is a heuristic and it will be wrong for someone — Cursor's
+  installer alone writes two names for the same binary (`cursor-agent` and the
+  generic `agent`, which another CLI can legitimately own), while `cursor` is
+  a third thing that launches the IDE. These two fields gate process spawning,
+  which is why they are the one preference that does not live in
+  `localStorage` (see decision #6). Edited from the Agents dialog above.
 
 ### Fixed
 - **Klaudio no longer burns CPU while an agent is writing a long session.**
@@ -149,18 +162,20 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   `lastSessionId:<projectPath>` rung is untouched and still validated against
   the live session list before it is trusted.
 
-### Added
-- **An agent's binary can be pinned explicitly.** `agent_settings.rs` reads
-  `{ enabled, binaryPath }` per agent from a JSON file in the app config dir
-  and that path, when set, wins over discovery; when it is set and does not
-  run, that is an error rather than a silent fall-through to a different
-  binary. Discovery is a heuristic and it will be wrong for someone — Cursor's
-  installer alone writes two names for the same binary (`cursor-agent` and the
-  generic `agent`, which another CLI can legitimately own), while `cursor` is
-  a third thing that launches the IDE. These two fields gate process spawning,
-  which is why they are the one preference that does not live in
-  `localStorage` (see decision #6). No commands and no panel yet — the
-  settings UI arrives with the second agent.
+### Tracked work
+- PRP: [`PRPs/024--cursor-provider-and-agent-picker.md`](PRPs/024--cursor-provider-and-agent-picker.md)
+  · PR [#112](https://github.com/willywg/klaudio-panels/pull/112)
+  · Issue [#108](https://github.com/willywg/klaudio-panels/issues/108)
+- PRP: [`PRPs/023--agent-registry-and-session-scoping.md`](PRPs/023--agent-registry-and-session-scoping.md)
+  · PR [#103](https://github.com/willywg/klaudio-panels/pull/103)
+  · Issue [#102](https://github.com/willywg/klaudio-panels/issues/102)
+- PR [#107](https://github.com/willywg/klaudio-panels/pull/107) · Issue
+  [#104](https://github.com/willywg/klaudio-panels/issues/104)
+- PR [#106](https://github.com/willywg/klaudio-panels/pull/106) · Issue
+  [#105](https://github.com/willywg/klaudio-panels/issues/105)
+- Follow-ups: [#109](https://github.com/willywg/klaudio-panels/issues/109),
+  [#110](https://github.com/willywg/klaudio-panels/issues/110),
+  [#111](https://github.com/willywg/klaudio-panels/issues/111)
 
 ## [1.11.1] — 2026-09-21
 

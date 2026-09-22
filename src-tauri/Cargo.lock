@@ -2239,7 +2239,7 @@ dependencies = [
 
 [[package]]
 name = "klaudio-panels"
-version = "1.11.1"
+version = "1.12.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
