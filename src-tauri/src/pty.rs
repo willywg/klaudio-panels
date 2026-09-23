@@ -147,7 +147,7 @@ fn spawn_pty(
     // resolved shell + direnv env) — otherwise a variable direnv removed
     // could still leak in if Klaudio's own process happened to carry it.
     // Safe to clear unconditionally: every caller builds `env` from
-    // `shell_env::load_shell_env`, which always returns a real env (the
+    // `shell_env::cached_shell_env`, which always returns a real env (the
     // hydrated shell env, or — when that probe fails, e.g. nushell or a
     // timeout — a sanitized fallback with `CLAUDE_CONFIG_DIR` stripped and
     // `PATH`/`HOME` intact), never an empty map.
@@ -313,8 +313,7 @@ pub async fn pty_open(
         return Err(format!("{} is disabled in the agent settings.", spec.display_name));
     }
     let bin = crate::binary::find_agent_binary(agent_id)?;
-    let shell = crate::shell_env::get_user_shell();
-    let shell_env = crate::shell_env::load_shell_env(&shell);
+    let shell_env = crate::shell_env::cached_shell_env().clone();
 
     let mut extra_env: Vec<(String, String)> = vec![
         ("TERM".into(), "xterm-256color".into()),
@@ -404,7 +403,7 @@ pub async fn pty_open_editor(
     rows: Option<u16>,
 ) -> Result<(), String> {
     let shell = crate::shell_env::get_user_shell();
-    let shell_env = crate::shell_env::load_shell_env(&shell);
+    let shell_env = crate::shell_env::cached_shell_env().clone();
     let path_summary = shell_env
         .as_ref()
         .and_then(|m| m.get("PATH"))
@@ -450,7 +449,7 @@ pub async fn pty_open_shell(
     project_path: String,
 ) -> Result<(), String> {
     let shell = crate::shell_env::get_user_shell();
-    let shell_env = crate::shell_env::load_shell_env(&shell);
+    let shell_env = crate::shell_env::cached_shell_env().clone();
     let env = crate::shell_env::merge_shell_env(
         shell_env,
         vec![

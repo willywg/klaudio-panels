@@ -125,21 +125,6 @@ fn nearest_envrc(project_path: &Path) -> EnvrcFingerprint {
     None
 }
 
-/// Hydrated login-shell env, probed once per process run rather than once
-/// per resolution. Hydrating the login shell costs ~1.5s+ and depends only
-/// on `$SHELL`, not on any project, so re-probing it per call bought
-/// nothing — and re-paid it on *every* call for a project whose `.envrc`
-/// is blocked (a failed resolution is never cached, see
-/// `resolve_claude_config_dir_with`), which is direnv's default state for
-/// any freshly created or freshly edited `.envrc`. `load_shell_env` never
-/// returns `None` (see `shell_env.rs`), so this is always `Some` in
-/// practice; the `Option` is kept only to match the injectable closure
-/// shape `resolve_claude_config_dir_with` takes for tests.
-static SHELL_ENV: LazyLock<Option<HashMap<String, String>>> = LazyLock::new(|| {
-    let shell = crate::shell_env::get_user_shell();
-    crate::shell_env::load_shell_env(&shell)
-});
-
 /// Resolve just `CLAUDE_CONFIG_DIR` for `project_path`, if direnv (or the
 /// login shell itself) sets one. Used by `sessions.rs`'s session-list hot
 /// path (retriggered on every JSONL debounce tick — several times a second
@@ -155,12 +140,13 @@ static SHELL_ENV: LazyLock<Option<HashMap<String, String>>> = LazyLock::new(|| {
 /// Fails closed like `resolve_project_env` — see its docs. A failed
 /// resolution is deliberately never cached, so fixing the underlying
 /// `.envrc` (e.g. `direnv allow`) takes effect on the very next call
-/// instead of requiring an app restart. The shell probe above is memoized
-/// regardless, so even a repeatedly-failing resolution only pays direnv's
-/// own (millisecond-scale) cost on every retry, not the shell hydration
-/// cost too.
+/// instead of requiring an app restart. The login-shell probe is memoized
+/// for the whole process (`shell_env::cached_shell_env`), so even a
+/// repeatedly-failing resolution only pays direnv's own (millisecond-scale)
+/// cost on every retry, not the shell hydration cost too. Editing the
+/// shell rc while Klaudio is open is picked up on the next launch.
 pub fn resolve_claude_config_dir(project_path: &str) -> Result<Option<PathBuf>, String> {
-    resolve_claude_config_dir_with(project_path, || SHELL_ENV.clone())
+    resolve_claude_config_dir_with(project_path, || crate::shell_env::cached_shell_env().clone())
 }
 
 /// Does the actual work for `resolve_claude_config_dir`, taking the
@@ -169,7 +155,7 @@ pub fn resolve_claude_config_dir(project_path: &str) -> Result<Option<PathBuf>, 
 /// tests can count invocations instead of spawning a real shell.
 fn resolve_claude_config_dir_with(
     project_path: &str,
-    load_shell_env: impl FnOnce() -> Option<HashMap<String, String>>,
+    shell_env: impl FnOnce() -> Option<HashMap<String, String>>,
 ) -> Result<Option<PathBuf>, String> {
     let fingerprint = nearest_envrc(Path::new(project_path));
 
@@ -193,8 +179,8 @@ fn resolve_claude_config_dir_with(
     // Cache miss — no entry yet, or the relevant `.envrc` changed since the
     // last resolution. Still holding `cache`'s lock for the actual probe
     // below (see the struct doc comment on `CONFIG_DIR_CACHE`).
-    let shell_env = load_shell_env();
-    let env = resolve_project_env(project_path, shell_env, Vec::new())?;
+    let hydrated = shell_env();
+    let env = resolve_project_env(project_path, hydrated, Vec::new())?;
     let config_dir = env
         .into_iter()
         .find(|(k, _)| k == "CLAUDE_CONFIG_DIR")
