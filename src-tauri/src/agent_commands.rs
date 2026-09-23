@@ -144,8 +144,7 @@ pub async fn agent_create_session(
             return Err(format!("{} is disabled in the agent settings.", spec.display_name));
         }
         let bin = crate::binary::find_agent_binary(id)?;
-        let shell = crate::shell_env::get_user_shell();
-        let shell_env = crate::shell_env::load_shell_env(&shell);
+        let shell_env = crate::shell_env::cached_shell_env().clone();
         let mut env = crate::project_env::resolve_project_env(&project_path, shell_env, Vec::new())?;
         agent::strip_blocked_env(id, &mut env);
 

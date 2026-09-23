@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 const SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(5);
@@ -121,6 +122,13 @@ fn safe_baseline_env() -> HashMap<String, String> {
 /// so every caller (`merge_shell_env`, `project_env::resolve_project_env`)
 /// inherits the guarantee instead of each having to remember to handle a
 /// missing env itself.
+///
+/// This function probes every time it is called. Production code must use
+/// [`cached_shell_env`] instead: the probe depends only on `$SHELL` and
+/// costs a few hundred milliseconds, so it runs once per process. Editing
+/// `.zshrc` / `.bashrc` (or installing a binary onto the login-shell PATH)
+/// while Klaudio is open is picked up on the next launch, not the next
+/// spawn. Per-project direnv is a separate step and stays fresh.
 pub fn load_shell_env(shell: &str) -> Option<HashMap<String, String>> {
     if is_nushell(shell) {
         crate::debug_log::write("shell_env", "nushell detected, using safe baseline env");
@@ -138,6 +146,22 @@ pub fn load_shell_env(shell: &str) -> Option<HashMap<String, String>> {
     );
     Some(safe_baseline_env())
 }
+
+/// Login-shell environment, probed once per process.
+///
+/// The first call blocks for the duration of [`load_shell_env`]. Every
+/// caller runs off the main thread (an async command, or `spawn_blocking`
+/// inside one), so that wait does not freeze the UI. Later calls return
+/// the same map. See [`load_shell_env`] for the restart tradeoff: shell
+/// startup files are not re-read until Klaudio launches again.
+pub fn cached_shell_env() -> &'static Option<HashMap<String, String>> {
+    &SHELL_ENV
+}
+
+static SHELL_ENV: LazyLock<Option<HashMap<String, String>>> = LazyLock::new(|| {
+    let shell = get_user_shell();
+    load_shell_env(&shell)
+});
 
 /// Merge shell env with explicit overrides; overrides win.
 pub fn merge_shell_env(
@@ -185,11 +209,17 @@ pub fn which_in_shell(
 /// Tauri command: probe whether a CLI binary (by bare name) exists on the
 /// hydrated shell PATH. Used by the "Open in" dropdown to detect terminal
 /// editors (nvim / helix / vim / micro) that ship no `.app` bundle.
+///
+/// Async plus `spawn_blocking` so the first [`cached_shell_env`] probe
+/// never runs on the main thread — a sync command used to, and this one
+/// is invoked while the window is opening.
 #[tauri::command]
-pub fn check_binary_exists(binary: String) -> bool {
-    let shell = get_user_shell();
-    let shell_env = load_shell_env(&shell);
-    which_in_shell(shell_env.as_ref(), &binary).is_some()
+pub async fn check_binary_exists(binary: String) -> bool {
+    tauri::async_runtime::spawn_blocking(move || {
+        which_in_shell(cached_shell_env().as_ref(), &binary).is_some()
+    })
+    .await
+    .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -293,8 +323,8 @@ mod tests {
     }
 
     /// Mirrors exactly what `pty_open_shell`/`pty_open_editor` do to build
-    /// the env `spawn_pty` installs (`merge_shell_env(load_shell_env(shell),
-    /// overrides)`) for a shell that can't be hydrated. Proves the shell
+    /// the env `spawn_pty` installs (`merge_shell_env` of the probed env and
+    /// overrides) for a shell that can't be hydrated. Proves the shell
     /// dock and embedded-editor PTYs still get a real, spawnable env —
     /// `PATH`/`HOME` present — under the fallback, rather than only the
     /// override keys (`TERM`/`COLORTERM`/...) `spawn_pty`'s unconditional

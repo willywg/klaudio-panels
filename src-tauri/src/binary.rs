@@ -107,10 +107,8 @@ fn candidates(id: AgentId) -> Vec<PathBuf> {
 
     // 2. Hydrated login-shell PATH. Finder-launched apps inherit the
     // launchd PATH which misses Homebrew, nvm, asdf, bun, volta.
-    // `which_in_shell` re-runs the user's login shell to capture the real
-    // PATH.
-    let shell = crate::shell_env::get_user_shell();
-    let shell_env = crate::shell_env::load_shell_env(&shell);
+    // `cached_shell_env` is the login shell's env, probed once per process.
+    let shell_env = crate::shell_env::cached_shell_env();
     if let Some(resolved) = crate::shell_env::which_in_shell(shell_env.as_ref(), spec.bin_name) {
         push(PathBuf::from(resolved), &mut out, &mut seen);
     }

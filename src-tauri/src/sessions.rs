@@ -3,21 +3,29 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use crate::agent::AgentId;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
-use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
 const SCAN_LINES_FOR_CWD: usize = 50;
 const PREVIEW_MAX_CHARS: usize = 140;
 
-// Only the tail can hold "the most recent event", so every recency-related
-// scan (completion detection, `updated_at`) caps its read here — collecting
-// a multi-hundred-MB session (#60) into memory on every watcher tick was
-// pure churn. 4 MiB comfortably covers even an enormous assistant message
-// plus the trailing system/bookkeeping entries.
+// Boot-only. `session_watcher::seed_seen` reads this much of each JSONL
+// once, so a session that already finished doesn't chime on launch. The
+// list refresh and the watcher tick do not: `updated_at` and completion
+// live on the incremental cursor in `scan_session_file`.
 const TAIL_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Candidate lines kept per recency field while a chunk is scanned. Only
+/// the newest real timestamp and the newest assistant line matter, so a
+/// large transcript is not parsed line by line — the last few substring
+/// hits are kept and walked newest-first. Eight covers a short run of
+/// false positives (the substring inside message content) without holding
+/// the file. If all eight are false positives, that file falls back to the
+/// tail read below so the answer stays the one the tail used to give.
+const RECENCY_CANDIDATES: usize = 8;
 
 #[derive(Serialize, Clone)]
 pub struct SessionMeta {
@@ -149,6 +157,238 @@ pub(crate) struct SessionScan {
     /// the user opened a tab and never sent a prompt. Those can't be
     /// resumed (`claude --resume` replies "No conversation found").
     pub(crate) has_conversation: bool,
+    /// Newest top-level `timestamp` among committed lines. `None` means no
+    /// such line yet. `Some(Malformed)` means the newest one did not parse:
+    /// `updated_at` falls back to mtime and must not surface an older valid
+    /// timestamp further up the file.
+    latest_timestamp: Option<TimestampOutcome>,
+    /// Newest top-level `type: "assistant"` line, whether or not its
+    /// `stop_reason` is terminal. `assistant_complete_from_scan` applies
+    /// that rule.
+    last_assistant: Option<AssistantSnapshot>,
+}
+
+/// Outcome of the newest line that carries a top-level `timestamp` string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimestampOutcome {
+    Valid(DateTime<Utc>),
+    Malformed,
+}
+
+/// The last assistant line, before the terminal-stop rule. A non-terminal
+/// `stop_reason` (or a missing uuid) still has to be remembered: the next
+/// line is often bookkeeping, and forgetting this one would resurrect an
+/// older `end_turn`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AssistantSnapshot {
+    uuid: Option<String>,
+    stop_reason: String,
+    preview: Option<String>,
+}
+
+const TERMINAL_STOP_REASONS: &[&str] = &["end_turn", "max_tokens", "stop_sequence", "refusal"];
+
+fn assistant_complete(snap: &AssistantSnapshot) -> Option<AssistantComplete> {
+    if !TERMINAL_STOP_REASONS.contains(&snap.stop_reason.as_str()) {
+        return None;
+    }
+    Some(AssistantComplete {
+        uuid: snap.uuid.clone()?,
+        stop_reason: snap.stop_reason.clone(),
+        preview: snap.preview.clone(),
+    })
+}
+
+enum TimestampHit {
+    Skip,
+    Found(TimestampOutcome),
+}
+
+/// Top-level `timestamp` on one JSONL line. Unparseable lines and lines
+/// with no string timestamp are skipped; a string that is not RFC 3339
+/// stops the search (`Malformed`), same as the tail walker.
+fn timestamp_hit(line: &str) -> TimestampHit {
+    let Ok(v) = serde_json::from_str::<Value>(line) else {
+        return TimestampHit::Skip;
+    };
+    let Some(ts) = v.get("timestamp").and_then(|t| t.as_str()) else {
+        return TimestampHit::Skip;
+    };
+    match parse_rfc3339(ts) {
+        Some(dt) => TimestampHit::Found(TimestampOutcome::Valid(dt)),
+        None => TimestampHit::Found(TimestampOutcome::Malformed),
+    }
+}
+
+fn timestamp_outcome_from_lines(lines: &[String]) -> Option<TimestampOutcome> {
+    for line in lines.iter().rev() {
+        if let TimestampHit::Found(outcome) = timestamp_hit(line) {
+            return Some(outcome);
+        }
+    }
+    None
+}
+
+fn assistant_snapshot_of_line(line: &str) -> Option<AssistantSnapshot> {
+    let Ok(v) = serde_json::from_str::<Value>(line) else {
+        return None;
+    };
+    if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+        return None;
+    }
+    let stop_reason = v
+        .pointer("/message/stop_reason")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
+    let uuid = v.get("uuid").and_then(|u| u.as_str()).map(str::to_string);
+    let preview = v
+        .pointer("/message/content")
+        .and_then(extract_text_from_content)
+        .map(|s| truncate(&s));
+    Some(AssistantSnapshot {
+        uuid,
+        stop_reason,
+        preview,
+    })
+}
+
+fn assistant_snapshot_from_lines(lines: &[String]) -> Option<AssistantSnapshot> {
+    for line in lines.iter().rev() {
+        if let Some(snap) = assistant_snapshot_of_line(line) {
+            return Some(snap);
+        }
+    }
+    None
+}
+
+/// Applies one not-yet-committed line (the partial tail) to a scan copy.
+/// Substring-gated so a bookkeeping fragment doesn't pay for `serde_json`.
+fn consider_recency_line(scan: &mut SessionScan, line: &str) {
+    if line.contains("\"timestamp\":") {
+        if let TimestampHit::Found(outcome) = timestamp_hit(line) {
+            scan.latest_timestamp = Some(outcome);
+        }
+    }
+    if line.contains("\"type\":\"assistant\"") {
+        if let Some(snap) = assistant_snapshot_of_line(line) {
+            scan.last_assistant = Some(snap);
+        }
+    }
+}
+
+/// Byte range of one candidate line. Spans, not copies: a first scan of a
+/// multi-hundred-MB transcript must not allocate a `String` per line just
+/// to throw all but the last few away.
+struct LineSpan {
+    start: u64,
+    len: u32,
+}
+
+/// Last few substring hits in one read. `dropped` means an older hit fell
+/// out of the window; if none of the survivors is a real top-level match,
+/// the caller must not trust the window.
+struct CandidateWindow {
+    spans: VecDeque<LineSpan>,
+    dropped: bool,
+}
+
+enum Resolved<T> {
+    Found(T),
+    Unchanged,
+    Fallback,
+}
+
+fn read_span(file: &mut fs::File, span: &LineSpan) -> Option<String> {
+    file.seek(SeekFrom::Start(span.start)).ok()?;
+    let mut buf = vec![0u8; span.len as usize];
+    file.read_exact(&mut buf).ok()?;
+    let line = String::from_utf8(buf).ok()?;
+    Some(line.trim_end_matches('\r').to_string())
+}
+
+impl CandidateWindow {
+    fn new() -> Self {
+        Self {
+            spans: VecDeque::with_capacity(RECENCY_CANDIDATES),
+            dropped: false,
+        }
+    }
+
+    fn push(&mut self, start: u64, len: u64) {
+        let Ok(len) = u32::try_from(len) else {
+            // A single line longer than 4 GiB cannot be re-read as a span.
+            // Drop the window so the caller falls back to the tail.
+            self.spans.clear();
+            self.dropped = true;
+            return;
+        };
+        if self.spans.len() == RECENCY_CANDIDATES {
+            self.spans.pop_front();
+            self.dropped = true;
+        }
+        self.spans.push_back(LineSpan { start, len });
+    }
+
+    fn resolve_timestamp(&self, file: &Path) -> Resolved<TimestampOutcome> {
+        if self.spans.is_empty() {
+            return if self.dropped {
+                Resolved::Fallback
+            } else {
+                Resolved::Unchanged
+            };
+        }
+        let Ok(mut f) = fs::File::open(file) else {
+            return if self.dropped {
+                Resolved::Fallback
+            } else {
+                Resolved::Unchanged
+            };
+        };
+        for span in self.spans.iter().rev() {
+            let Some(line) = read_span(&mut f, span) else {
+                continue;
+            };
+            if let TimestampHit::Found(outcome) = timestamp_hit(&line) {
+                return Resolved::Found(outcome);
+            }
+        }
+        if self.dropped {
+            Resolved::Fallback
+        } else {
+            Resolved::Unchanged
+        }
+    }
+
+    fn resolve_assistant(&self, file: &Path) -> Resolved<AssistantSnapshot> {
+        if self.spans.is_empty() {
+            return if self.dropped {
+                Resolved::Fallback
+            } else {
+                Resolved::Unchanged
+            };
+        }
+        let Ok(mut f) = fs::File::open(file) else {
+            return if self.dropped {
+                Resolved::Fallback
+            } else {
+                Resolved::Unchanged
+            };
+        };
+        for span in self.spans.iter().rev() {
+            let Some(line) = read_span(&mut f, span) else {
+                continue;
+            };
+            if let Some(snap) = assistant_snapshot_of_line(&line) {
+                return Resolved::Found(snap);
+            }
+        }
+        if self.dropped {
+            Resolved::Fallback
+        } else {
+            Resolved::Unchanged
+        }
+    }
 }
 
 /// Cheap substring gate that runs before the expensive `serde_json` parse
@@ -229,13 +469,16 @@ struct ScanCursor {
     scan: SessionScan,
 }
 
-/// Per-file scan progress. Without it every watcher tick re-read the whole
-/// transcript from byte zero, and so did every Sessions-list refresh — an
-/// active session with a 77 MB JSONL cost a full read every 200 ms while it
-/// was being written, and each tick of *any* session refreshed the list and
-/// re-read every transcript of the open project on top of that (measured,
-/// PRP 024 QA). Session files are append-only logs, so the work that is
-/// actually new is only ever the bytes appended since the last look.
+/// Per-file scan progress, including `updated_at` and the last assistant
+/// line. Without it every watcher tick re-read the whole transcript from
+/// byte zero, and so did every Sessions-list refresh — an active session
+/// with a 77 MB JSONL cost a full read every 200 ms while it was being
+/// written, and each tick of *any* session refreshed the list and re-read
+/// every transcript of the open project on top of that (measured, PRP 024
+/// QA). Session files are append-only logs, so the work that is actually
+/// new is only ever the bytes appended since the last look. Recency used
+/// to be a separate 4 MiB tail read on that same tick (#113); it is folded
+/// into this cursor so a refresh that changes nothing reads zero bytes.
 ///
 /// Bounded by a crude clear rather than LRU: an entry is a few short strings,
 /// the cap is far above the number of transcripts anyone has open, and
@@ -255,14 +498,18 @@ fn file_identity(_meta: &fs::Metadata) -> (u64, u64) {
     (0, 0)
 }
 
-/// Scans a JSONL for its first user message, `custom-title` and `summary`,
-/// reading only what was appended since this file was last scanned.
+/// Scans a JSONL for its first user message, `custom-title`, `summary`,
+/// the newest top-level timestamp (`updated_at`) and the newest assistant
+/// line (completion), reading only what was appended since this file was
+/// last scanned.
 ///
 /// Falls back to a scan from byte zero when there is no usable cursor: first
 /// sight, a different file at the same path, or a file shorter than where we
 /// stopped (truncated or rewritten). A trailing line without its newline yet
 /// is folded into the result but not committed, so it is re-read once it is
-/// complete — the answer is always what a full scan would say.
+/// complete — the answer is always what a full scan would say. Timestamp and
+/// assistant lines are not parsed one by one: a substring gate keeps the
+/// last few candidates and only those are decoded.
 pub(crate) fn scan_session_file(file: &Path) -> SessionScan {
     let Ok(meta) = fs::metadata(file) else {
         return SessionScan::default();
@@ -293,6 +540,8 @@ pub(crate) fn scan_session_file(file: &Path) -> SessionScan {
     let mut offset = start;
     let mut pending: Option<Vec<u8>> = None;
     let mut buf = Vec::new();
+    let mut timestamps = CandidateWindow::new();
+    let mut assistants = CandidateWindow::new();
     loop {
         buf.clear();
         let n = match reader.read_until(b'\n', &mut buf) {
@@ -304,9 +553,54 @@ pub(crate) fn scan_session_file(file: &Path) -> SessionScan {
             pending = Some(std::mem::take(&mut buf));
             break;
         }
+        let line_start = offset;
+        let line_len = (n as u64).saturating_sub(1);
         offset += n as u64;
-        if let Ok(line) = std::str::from_utf8(&buf[..buf.len() - 1]) {
-            fold_line(&mut committed, line.trim_end_matches('\r'));
+        if let Ok(line) = std::str::from_utf8(&buf[..line_len as usize]) {
+            let line = line.trim_end_matches('\r');
+            fold_line(&mut committed, line);
+            if line.contains("\"timestamp\":") {
+                timestamps.push(line_start, line_len);
+            }
+            if line.contains("\"type\":\"assistant\"") {
+                assistants.push(line_start, line_len);
+            }
+        }
+    }
+
+    let ts_fallback = match timestamps.resolve_timestamp(file) {
+        Resolved::Found(outcome) => {
+            committed.latest_timestamp = Some(outcome);
+            false
+        }
+        Resolved::Unchanged => false,
+        Resolved::Fallback => true,
+    };
+    let as_fallback = match assistants.resolve_assistant(file) {
+        Resolved::Found(snap) => {
+            committed.last_assistant = Some(snap);
+            false
+        }
+        Resolved::Unchanged => false,
+        Resolved::Fallback => true,
+    };
+    if ts_fallback || as_fallback {
+        // The real line was evicted from the window. Re-derive that field
+        // from the tail so this file still matches the pre-incremental
+        // answer. The partial line at the end is not part of `committed`.
+        if let Some(lines) = read_tail_lines(file) {
+            let end = if pending.is_some() {
+                lines.len().saturating_sub(1)
+            } else {
+                lines.len()
+            };
+            let committed_lines = &lines[..end];
+            if ts_fallback {
+                committed.latest_timestamp = timestamp_outcome_from_lines(committed_lines);
+            }
+            if as_fallback {
+                committed.last_assistant = assistant_snapshot_from_lines(committed_lines);
+            }
         }
     }
 
@@ -314,6 +608,7 @@ pub(crate) fn scan_session_file(file: &Path) -> SessionScan {
     if let Some(tail) = pending {
         if let Ok(line) = std::str::from_utf8(&tail) {
             fold_line(&mut result, line);
+            consider_recency_line(&mut result, line.trim_end_matches('\r'));
         }
     }
 
@@ -338,7 +633,7 @@ pub(crate) fn scan_session_file(file: &Path) -> SessionScan {
 /// message that ended the turn. `None` means either no such message exists
 /// yet or the file is unreadable. Used by `session_watcher` to fire
 /// `session:complete` notifications.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AssistantComplete {
     pub uuid: String,
     pub stop_reason: String,
@@ -346,11 +641,10 @@ pub(crate) struct AssistantComplete {
 }
 
 /// Reads the last `TAIL_BYTES` of a JSONL and returns its lines in file
-/// order. Shared by every "what happened most recently" query —
-/// `last_assistant_complete_from_tail` and `latest_event_timestamp_from_tail`
-/// both only care about the tail, so a caller that needs both (see
-/// `session_watcher::emit_for_jsonl`) reads the file once and passes the
-/// same `lines` to each, instead of every helper doing its own read.
+/// order. Used by `session_watcher::seed_seen` at boot (one pass over
+/// transcripts that already exist) and as the rare fallback when a scan
+/// window is nothing but false-positive substring hits. The list and the
+/// watcher tick do not call it.
 pub(crate) fn read_tail_lines(file: &Path) -> Option<Vec<String>> {
     let mut f = fs::File::open(file).ok()?;
     let len = f.metadata().ok()?.len();
@@ -378,36 +672,16 @@ pub(crate) fn read_tail_lines(file: &Path) -> Option<Vec<String>> {
 /// as terminal — `tool_use` means the assistant wants to keep going
 /// once the tool result comes back.
 pub(crate) fn last_assistant_complete_from_tail(lines: &[String]) -> Option<AssistantComplete> {
-    const TERMINAL: &[&str] = &["end_turn", "max_tokens", "stop_sequence", "refusal"];
+    assistant_snapshot_from_lines(lines)
+        .as_ref()
+        .and_then(assistant_complete)
+}
 
-    for line in lines.iter().rev() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
-            continue;
-        }
-        let stop_reason = v
-            .pointer("/message/stop_reason")
-            .and_then(|s| s.as_str())
-            .unwrap_or("");
-        if !TERMINAL.contains(&stop_reason) {
-            // Most recent assistant entry is mid-tool-use; treat session
-            // as still working and bail without firing.
-            return None;
-        }
-        let uuid = v.get("uuid").and_then(|u| u.as_str())?.to_string();
-        let preview = v
-            .pointer("/message/content")
-            .and_then(extract_text_from_content)
-            .map(|s| truncate(&s));
-        return Some(AssistantComplete {
-            uuid,
-            stop_reason: stop_reason.to_string(),
-            preview,
-        });
-    }
-    None
+/// Completion fact carried by an incremental scan. `None` when the newest
+/// assistant line is missing, still in `tool_use`, or has no uuid — the
+/// same three outcomes as [`last_assistant_complete_from_tail`].
+pub(crate) fn assistant_complete_from_scan(scan: &SessionScan) -> Option<AssistantComplete> {
+    scan.last_assistant.as_ref().and_then(assistant_complete)
 }
 
 /// Convenience wrapper for call sites that only need the completion fact
@@ -426,17 +700,12 @@ pub(crate) fn last_assistant_complete(file: &Path) -> Option<AssistantComplete> 
 /// callers fall back to the file's mtime in that case, which is a more
 /// honest "we don't know" than silently understating how recent the session
 /// actually is.
+#[cfg(test)]
 fn latest_event_timestamp_from_tail(lines: &[String]) -> Option<DateTime<Utc>> {
-    for line in lines.iter().rev() {
-        let Ok(v) = serde_json::from_str::<Value>(line) else {
-            continue;
-        };
-        let Some(ts) = v.get("timestamp").and_then(|t| t.as_str()) else {
-            continue;
-        };
-        return parse_rfc3339(ts);
+    match timestamp_outcome_from_lines(lines) {
+        Some(TimestampOutcome::Valid(dt)) => Some(dt),
+        Some(TimestampOutcome::Malformed) | None => None,
     }
-    None
 }
 
 fn mtime_utc(file: &Path) -> Option<DateTime<Utc>> {
@@ -444,13 +713,28 @@ fn mtime_utc(file: &Path) -> Option<DateTime<Utc>> {
     Some(modified.into())
 }
 
-/// Canonical `updated_at` for a session: the latest valid timestamp in
-/// `lines` (see `latest_event_timestamp_from_tail`), falling back to the
-/// file's own mtime — both normalized through `canonicalize_rfc3339`'s
-/// format so recency comparisons never depend on differing offsets or
-/// fractional-second precision.
-pub(crate) fn session_updated_at(file: &Path, lines: &[String]) -> Option<String> {
-    latest_event_timestamp_from_tail(lines)
+/// Canonical `updated_at` for a session: the newest valid top-level
+/// timestamp remembered by `scan`, falling back to the file's mtime when
+/// that timestamp is missing or malformed. Normalized the same way as
+/// [`canonicalize_rfc3339`] so recency comparisons never depend on
+/// differing offsets or fractional-second precision.
+pub(crate) fn session_updated_at(file: &Path, scan: &SessionScan) -> Option<String> {
+    let from_log = match scan.latest_timestamp {
+        Some(TimestampOutcome::Valid(dt)) => Some(dt),
+        Some(TimestampOutcome::Malformed) | None => None,
+    };
+    from_log
+        .or_else(|| mtime_utc(file))
+        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, true))
+}
+
+/// What `updated_at` was before it moved onto the incremental cursor: the
+/// tail walk, then mtime. Equivalence tests compare [`session_updated_at`]
+/// against this.
+#[cfg(test)]
+fn tail_session_updated_at(file: &Path) -> Option<String> {
+    let lines = read_tail_lines(file).unwrap_or_default();
+    latest_event_timestamp_from_tail(&lines)
         .or_else(|| mtime_utc(file))
         .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
@@ -547,16 +831,16 @@ fn scan_projects_dir(projects_dir: &Path, project_path: &str) -> Vec<SessionMeta
                 if !scan.has_conversation {
                     continue;
                 }
-                // One bounded tail read feeds `updated_at` here; nothing else
-                // in this loop needs the tail, so there's no second helper to
-                // share it with (contrast `session_watcher::emit_for_jsonl`,
-                // which also needs `last_assistant_complete_from_tail`).
-                let tail_lines = read_tail_lines(&p).unwrap_or_default();
+                // `updated_at` comes off the same cursor as the preview.
+                // A warm refresh stats every file and reads only a session
+                // that actually grew. Taken before the fields below move
+                // `scan` apart.
+                let updated_at = session_updated_at(&p, &scan);
                 out.push(SessionMeta {
                     id,
                     agent: AgentId::Claude.as_str().to_string(),
                     created_at: scan.first_timestamp.map(|ts| canonicalize_rfc3339(&ts)),
-                    updated_at: session_updated_at(&p, &tail_lines),
+                    updated_at,
                     first_message_preview: scan.first_preview,
                     custom_title: scan.custom_title,
                     summary: scan.summary,
@@ -684,6 +968,144 @@ mod tests {
         let rescanned = scan_session_file(&file);
         assert_eq!(rescanned.first_preview.as_deref(), Some("new"));
         assert!(rescanned.custom_title.is_none());
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct Recency {
+        updated_at: Option<String>,
+        complete: Option<AssistantComplete>,
+    }
+
+    fn incremental_recency(file: &Path) -> Recency {
+        let scan = scan_session_file(file);
+        Recency {
+            updated_at: session_updated_at(file, &scan),
+            complete: assistant_complete_from_scan(&scan),
+        }
+    }
+
+    fn tail_recency(file: &Path) -> Recency {
+        let lines = read_tail_lines(file).unwrap_or_default();
+        Recency {
+            updated_at: tail_session_updated_at(file),
+            complete: last_assistant_complete_from_tail(&lines),
+        }
+    }
+
+    /// Cuts `body` so at least one piece ends in the middle of a line.
+    fn pieces_with_midline_cut(body: &str) -> Vec<&str> {
+        let bytes = body.as_bytes();
+        if bytes.len() < 8 {
+            return vec![body];
+        }
+        let mut cut = bytes.len() / 3;
+        if bytes[cut - 1] == b'\n' || bytes[cut] == b'\n' {
+            cut += 1;
+        }
+        let (head, rest) = body.split_at(cut);
+        let mut cut2 = rest.len() / 2;
+        if cut2 > 0 && (rest.as_bytes()[cut2 - 1] == b'\n' || rest.as_bytes()[cut2] == b'\n') {
+            cut2 += 1;
+        }
+        cut2 = cut2.min(rest.len());
+        let (mid, tail) = rest.split_at(cut2);
+        [head, mid, tail].into_iter().filter(|s| !s.is_empty()).collect()
+    }
+
+    fn assert_chunked_matches_tail(label: &str, body: &str) -> (TempDir, PathBuf) {
+        let dir = TempDir::new(label);
+        let file = dir.path().join("s.jsonl");
+        for (i, piece) in pieces_with_midline_cut(body).into_iter().enumerate() {
+            append(&file, piece);
+            assert_eq!(
+                incremental_recency(&file),
+                tail_recency(&file),
+                "{label} diverged after piece {i}"
+            );
+        }
+        (dir, file)
+    }
+
+    fn assistant_line(uuid: &str, ts: &str, stop: &str, text: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","uuid":"{uuid}","timestamp":"{ts}","message":{{"role":"assistant","content":[{{"type":"text","text":"{text}"}}],"stop_reason":"{stop}"}}}}"#
+        ) + "\n"
+    }
+
+    #[test]
+    fn incremental_recency_matches_tail_for_malformed_newest_timestamp() {
+        let body = user_line("hi")
+            + &assistant_line("bad", "not-a-real-timestamp", "end_turn", "oops");
+        let (_dir, file) = assert_chunked_matches_tail("eq-malformed", &body);
+        let got = incremental_recency(&file);
+        assert_close_to_now(got.updated_at.as_deref().unwrap(), 30);
+        assert_ne!(got.updated_at.as_deref(), Some("2026-09-01T00:00:00.000Z"));
+    }
+
+    #[test]
+    fn incremental_recency_matches_tail_when_the_file_ends_in_last_prompt() {
+        let body = user_line("hi")
+            + &assistant_line("a1", "2026-04-01T00:00:00.000Z", "end_turn", "done")
+            + "{\"type\":\"last-prompt\",\"lastPrompt\":\"more\",\"leafUuid\":\"x\",\"sessionId\":\"s\"}\n";
+        let (_dir, file) = assert_chunked_matches_tail("eq-last-prompt", &body);
+        let got = incremental_recency(&file);
+        assert_eq!(got.updated_at.as_deref(), Some("2026-04-01T00:00:00.000Z"));
+        assert_eq!(got.complete.as_ref().map(|c| c.uuid.as_str()), Some("a1"));
+        assert_eq!(got.complete.as_ref().map(|c| c.stop_reason.as_str()), Some("end_turn"));
+    }
+
+    #[test]
+    fn incremental_recency_matches_tail_when_tool_use_follows_end_turn() {
+        let body = assistant_line("a1", "2026-04-01T00:00:00.000Z", "end_turn", "done")
+            + &assistant_line("a2", "2026-04-02T00:00:00.000Z", "tool_use", "calling");
+        let (_dir, file) = assert_chunked_matches_tail("eq-tool-use", &body);
+        let got = incremental_recency(&file);
+        assert!(got.complete.is_none(), "tool_use is not a completed turn");
+        assert_eq!(got.updated_at.as_deref(), Some("2026-04-02T00:00:00.000Z"));
+    }
+
+    #[test]
+    fn incremental_recency_ignores_assistant_nested_in_user_content() {
+        let body = assistant_line("a1", "2026-04-01T00:00:00.000Z", "end_turn", "done")
+            + "{\"type\":\"user\",\"uuid\":\"u2\",\"timestamp\":\"2026-04-02T00:00:00.000Z\",\"cwd\":\"/p\",\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"see\"},{\"type\":\"assistant\",\"text\":\"not really\"}]}}\n";
+        let (_dir, file) = assert_chunked_matches_tail("eq-nested", &body);
+        let got = incremental_recency(&file);
+        assert_eq!(got.complete.as_ref().map(|c| c.uuid.as_str()), Some("a1"));
+        assert_eq!(got.updated_at.as_deref(), Some("2026-04-02T00:00:00.000Z"));
+    }
+
+    #[test]
+    fn incremental_recency_resets_when_the_file_is_replaced() {
+        let original = assistant_line("old", "2026-01-01T00:00:00.000Z", "end_turn", "old");
+        let (_dir, file) = assert_chunked_matches_tail("eq-replace", &original);
+        let replacement = file.with_file_name("tmp.jsonl");
+        append(
+            &replacement,
+            &assistant_line("new", "2026-08-01T00:00:00.000Z", "end_turn", "new"),
+        );
+        fs::rename(&replacement, &file).unwrap();
+        assert_eq!(incremental_recency(&file), tail_recency(&file));
+        assert_eq!(
+            incremental_recency(&file).complete.as_ref().map(|c| c.uuid.as_str()),
+            Some("new")
+        );
+    }
+
+    #[test]
+    fn incremental_recency_resets_when_the_file_is_truncated() {
+        let original = assistant_line("old", "2026-01-01T00:00:00.000Z", "end_turn", "old")
+            + &assistant_line("older", "2026-06-01T00:00:00.000Z", "end_turn", "later");
+        let (_dir, file) = assert_chunked_matches_tail("eq-truncate", &original);
+        fs::write(
+            &file,
+            assistant_line("short", "2024-02-02T00:00:00.000Z", "max_tokens", "cut"),
+        )
+        .unwrap();
+        let got = incremental_recency(&file);
+        assert_eq!(got, tail_recency(&file));
+        assert_eq!(got.complete.as_ref().map(|c| c.uuid.as_str()), Some("short"));
+        assert_eq!(got.complete.as_ref().map(|c| c.stop_reason.as_str()), Some("max_tokens"));
+        assert_eq!(got.updated_at.as_deref(), Some("2024-02-02T00:00:00.000Z"));
     }
 
     /// Same fake-direnv technique as `project_env::tests` — a shell script
