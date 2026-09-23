@@ -6,6 +6,71 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
 ## [Unreleased]
 
+## [1.13.0] — 2026-09-23
+
+### Fixed
+- **A burst of terminal output can no longer turn the window white**
+  ([#115](https://github.com/willywg/klaudio-panels/issues/115)). A long
+  `cursor-agent` run in a background window queued more output than xterm.js
+  could draw. Past 50 MB it discarded every write and threw an error for each
+  one. Each error was forwarded to the log with its stack, nearly 200,000 in
+  two minutes, until the webview gave up.
+
+  Terminal output now has real flow control. Klaudio counts the bytes each
+  terminal has not drawn yet, and above 1.5 MB it stops reading that PTY. The
+  agent then waits on its own output instead of flooding the window, and
+  reading resumes once the terminal catches up. Agent tabs, shell tabs and
+  embedded editors share this one data path. Closing or killing a paused
+  terminal always releases it.
+
+  The window is also no longer throttled in the background, so an agent you
+  leave working while you are in another app keeps making progress rather
+  than stalling until you come back. The cost is some energy while the app
+  is in the background.
+- **Repeated errors no longer flood the log, and the log rotates.** An error
+  is logged once with its stack, then only as a summary of how many times it
+  repeated, capped per second across the app. `klaudio.log` rotates at 5 MB
+  and keeps three generations. An oversized log from an earlier version is
+  trimmed to its tail on first launch.
+
+### Changed
+- **Fewer, larger terminal updates.** Output that arrives within a few
+  milliseconds is sent to the window as one event of up to 64 KB. Measured on
+  a firehose: from about 122,000 events a second to about 1,900, with the
+  same bytes. OSC 777 agent notifications are detected exactly as before.
+- **The Sessions list and the session watcher read only what is new**
+  ([#113](https://github.com/willywg/klaudio-panels/issues/113)). Each list
+  refresh used to read the last 4 MB of every session just to find its date:
+  35 MB per refresh on a project with large transcripts, several times a
+  second while a session was writing. The date and the "turn finished" state
+  now live on the same incremental cursor as the preview. A refresh that
+  changes nothing reads zero bytes, and a watcher tick reads only the bytes
+  just appended. Opening a project for the first time in a run is somewhat
+  slower, because every line is looked at once on the way through.
+- **Your login shell is read once per launch**
+  ([#77](https://github.com/willywg/klaudio-panels/issues/77)). Every new tab,
+  editor and binary lookup used to re-run the login shell to learn `PATH`,
+  which took about a second or two. A new Cursor tab paid it twice. It now
+  runs once. Edits to `.zshrc` / `.bashrc` made while Klaudio is open take
+  effect on the next launch. A project's `.envrc` is still read fresh on
+  every new tab.
+
+### Known issues
+- `pbcopy` in a shell tab is not listed in the clipboard history: the login
+  shell moves `/usr/bin` ahead of Klaudio's shim
+  ([#117](https://github.com/willywg/klaudio-panels/issues/117)). Agent tabs
+  are not affected.
+
+### Tracked work
+- PR: [#114](https://github.com/willywg/klaudio-panels/pull/114) — session
+  recency on the incremental cursor, memoized login-shell probe
+- PR: [#116](https://github.com/willywg/klaudio-panels/pull/116) — terminal
+  flow control, bounded error logging, log rotation, coalesced PTY events
+- Issues: [#115](https://github.com/willywg/klaudio-panels/issues/115),
+  [#77](https://github.com/willywg/klaudio-panels/issues/77),
+  [#113](https://github.com/willywg/klaudio-panels/issues/113) (points 1–2;
+  the raw-bytes channel of point 3 and point 4 remain open)
+
 ## [1.12.0] — 2026-09-22
 
 ### Added
