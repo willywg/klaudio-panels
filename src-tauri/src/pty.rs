@@ -32,6 +32,13 @@ pub struct PtyState {
 const INITIAL_COLS: u16 = 80;
 const INITIAL_ROWS: u16 = 24;
 const READ_CHUNK: usize = 4096;
+/// Emitter batches whatever is already queued, and anything else that
+/// arrives within this window, up to [`COALESCE_MAX`]. Fewer `pty:data`
+/// events means less base64 and less JSON on the way into the webview
+/// (#113 point 3). Raw `ipc::Channel` bytes (no base64, no JSON) are still
+/// open on that issue — this only coalesces the existing event.
+const COALESCE_MAX: usize = 64 * 1024;
+const COALESCE_WAIT: std::time::Duration = std::time::Duration::from_millis(3);
 
 /// One PTY reader's pause flag. The reader calls `wait_until_readable`
 /// before every `read`. While it waits it does not consume the master, so
@@ -136,6 +143,62 @@ fn read_pty_chunk(reader: &mut dyn Read, gate: &PauseGate, buf: &mut [u8]) -> Pt
         Ok(n) => PtyRead::Data(n),
         Err(_) => PtyRead::Eof,
     }
+}
+
+/// Pull one payload for `pty:data`. Starts with `pending` (a chunk the
+/// previous call held back to stay under `limit`) or the next read, then
+/// appends chunks already in the channel and any that arrive before `wait`
+/// elapses. Byte order is the read order. The caller feeds the result to
+/// the OSC 777 sniffer, so a frame split across reads is still assembled.
+async fn recv_coalesced(
+    rx: &mut mpsc::Receiver<Vec<u8>>,
+    pending: &mut Option<Vec<u8>>,
+    limit: usize,
+    wait: std::time::Duration,
+) -> Option<Vec<u8>> {
+    let mut acc = match pending.take() {
+        Some(chunk) => chunk,
+        None => rx.recv().await?,
+    };
+    let deadline = tokio::time::Instant::now() + wait;
+    loop {
+        if acc.len() >= limit {
+            break;
+        }
+        match rx.try_recv() {
+            Ok(chunk) => {
+                if acc.len() + chunk.len() > limit {
+                    *pending = Some(chunk);
+                    break;
+                }
+                acc.extend(chunk);
+            }
+            Err(mpsc::error::TryRecvError::Empty) => {
+                let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if left.is_zero() {
+                    break;
+                }
+                tokio::select! {
+                    biased;
+                    next = rx.recv() => {
+                        match next {
+                            Some(chunk) => {
+                                if acc.len() + chunk.len() > limit {
+                                    *pending = Some(chunk);
+                                    break;
+                                }
+                                acc.extend(chunk);
+                            }
+                            None => break,
+                        }
+                    }
+                    _ = tokio::time::sleep(left) => break,
+                }
+            }
+            Err(mpsc::error::TryRecvError::Disconnected) => break,
+        }
+    }
+    Some(acc)
 }
 
 /// Sanitize the first bytes emitted by a PTY child for logging. ANSI escape
@@ -330,7 +393,12 @@ fn spawn_pty(
     let id_data = id.clone();
     tokio::spawn(async move {
         let mut sniffer = crate::cli_agent::Osc777Sniffer::new();
-        while let Some(chunk) = rx.recv().await {
+        let mut pending: Option<Vec<u8>> = None;
+        // Coalesce before the sniffer, not after: `feed` still sees every
+        // byte, in order, including a frame that was split across reads.
+        while let Some(chunk) =
+            recv_coalesced(&mut rx, &mut pending, COALESCE_MAX, COALESCE_WAIT).await
+        {
             for event in sniffer.feed(&chunk) {
                 let _ = app_data.emit("claude:event", &event);
             }
@@ -940,13 +1008,8 @@ mod tests {
         };
         std::thread::spawn(move || {
             let mut buf = [0u8; READ_CHUNK];
-            loop {
-                match read_pty_chunk(&mut reader, &gate_reader, &mut buf) {
-                    PtyRead::Data(n) => {
-                        bytes_reader.fetch_add(n, Ordering::Relaxed);
-                    }
-                    PtyRead::Eof | PtyRead::Stopped => break,
-                }
+            while let PtyRead::Data(n) = read_pty_chunk(&mut reader, &gate_reader, &mut buf) {
+                bytes_reader.fetch_add(n, Ordering::Relaxed);
             }
             let _ = done_tx.send(());
         });
@@ -987,5 +1050,209 @@ mod tests {
         done_rx
             .recv_timeout(std::time::Duration::from_secs(2))
             .expect("reader thread did not exit after stop");
+    }
+
+    fn osc_permission_frame() -> Vec<u8> {
+        let json = r#"{"v":1,"agent":"claude","event":"permission_request","tool_name":"Bash"}"#;
+        let mut out = b"\x1b]777;notify;warp://cli-agent;".to_vec();
+        out.extend_from_slice(json.as_bytes());
+        out.push(0x07);
+        out
+    }
+
+    /// Replay the coalescer over captured reads. A sample joins the current
+    /// payload when it arrived within `wait` of the payload's first byte and
+    /// fits under `limit`. This is the model the measurement below reports;
+    /// production uses [`recv_coalesced`], which follows the same rules on a
+    /// live channel.
+    fn coalesce_captured(
+        samples: &[(std::time::Duration, Vec<u8>)],
+        limit: usize,
+        wait: std::time::Duration,
+    ) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        let mut index = 0;
+        while index < samples.len() {
+            let start = samples[index].0;
+            let mut acc = samples[index].1.clone();
+            index += 1;
+            while index < samples.len() && acc.len() < limit {
+                if samples[index].0.saturating_sub(start) > wait {
+                    break;
+                }
+                if acc.len() + samples[index].1.len() > limit {
+                    break;
+                }
+                acc.extend_from_slice(&samples[index].1);
+                index += 1;
+            }
+            out.push(acc);
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn coalescing_keeps_byte_order_and_a_split_osc777_frame() {
+        let frame = osc_permission_frame();
+        let mid = frame.len() / 2;
+        let (tx, mut rx) = mpsc::channel(8);
+        tx.send(frame[..mid].to_vec()).await.unwrap();
+        tx.send(frame[mid..].to_vec()).await.unwrap();
+        tx.send(b"tail".to_vec()).await.unwrap();
+        drop(tx);
+
+        let mut pending = None;
+        // Limit above the frame so the split halves and the tail merge.
+        let merged = recv_coalesced(
+            &mut rx,
+            &mut pending,
+            frame.len() + 8,
+            std::time::Duration::from_millis(20),
+        )
+        .await
+        .unwrap();
+        assert_eq!(merged, {
+            let mut all = frame.clone();
+            all.extend_from_slice(b"tail");
+            all
+        });
+        assert!(recv_coalesced(
+            &mut rx,
+            &mut pending,
+            64,
+            std::time::Duration::from_millis(1)
+        )
+        .await
+        .is_none());
+
+        let mut whole = crate::cli_agent::Osc777Sniffer::new();
+        let mut split = crate::cli_agent::Osc777Sniffer::new();
+        let from_whole = whole.feed(&frame);
+        let mut from_split = split.feed(&frame[..mid]);
+        from_split.extend(split.feed(&frame[mid..]));
+        let mut from_merged = crate::cli_agent::Osc777Sniffer::new();
+        let merged_events = from_merged.feed(&merged);
+        assert_eq!(from_whole.len(), 1);
+        assert_eq!(from_split.len(), 1);
+        assert_eq!(merged_events.len(), 1);
+        assert_eq!(from_whole[0].event, "permission_request");
+        assert_eq!(from_split[0].event, from_whole[0].event);
+        assert_eq!(merged_events[0].tool_name, from_whole[0].tool_name);
+    }
+
+    #[tokio::test]
+    async fn coalescing_holds_back_a_chunk_that_would_pass_the_limit() {
+        let (tx, mut rx) = mpsc::channel(4);
+        tx.send(vec![1; 6]).await.unwrap();
+        tx.send(vec![2; 6]).await.unwrap();
+        drop(tx);
+
+        let mut pending = None;
+        let first = recv_coalesced(
+            &mut rx,
+            &mut pending,
+            8,
+            std::time::Duration::from_millis(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first, vec![1; 6]);
+        let second = recv_coalesced(
+            &mut rx,
+            &mut pending,
+            8,
+            std::time::Duration::from_millis(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(second, vec![2; 6]);
+    }
+
+    /// One `pty:data` per `read` is the pre-coalesce pipe. Capture a short
+    /// burst from `/usr/bin/yes` and report both that rate and the coalesced
+    /// one. Asserts shape, not a machine-specific throughput.
+    #[test]
+    fn measure_coalesced_pty_events_against_one_event_per_read() {
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let child = pair
+            .slave
+            .spawn_command(CommandBuilder::new("/usr/bin/yes"))
+            .expect("spawn yes");
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().expect("reader");
+        let master = pair.master;
+        let gate = Arc::new(PauseGate::new());
+
+        struct Cleanup {
+            child: Option<Box<dyn Child + Send>>,
+            master: Option<Box<dyn MasterPty + Send>>,
+        }
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                drop(self.master.take());
+                if let Some(child) = self.child.take() {
+                    let guarded = Mutex::new(child);
+                    let _ = kill_if_still_alive(&guarded);
+                }
+            }
+        }
+        let cleanup = Cleanup {
+            child: Some(child),
+            master: Some(master),
+        };
+
+        let started = std::time::Instant::now();
+        let window = std::time::Duration::from_millis(250);
+        let mut samples: Vec<(std::time::Duration, Vec<u8>)> = Vec::new();
+        let mut buf = [0u8; READ_CHUNK];
+        while started.elapsed() < window {
+            match read_pty_chunk(&mut reader, &gate, &mut buf) {
+                PtyRead::Data(n) => {
+                    samples.push((started.elapsed(), buf[..n].to_vec()));
+                }
+                PtyRead::Eof | PtyRead::Stopped => break,
+            }
+        }
+        drop(cleanup);
+
+        let raw_events = samples.len();
+        let raw_bytes: usize = samples.iter().map(|(_, chunk)| chunk.len()).sum();
+        assert!(
+            raw_events > 10,
+            "expected a burst of reads, got {raw_events}"
+        );
+        let coalesced = coalesce_captured(&samples, COALESCE_MAX, COALESCE_WAIT);
+        let coalesced_bytes: usize = coalesced.iter().map(|chunk| chunk.len()).sum();
+        assert_eq!(
+            coalesced_bytes, raw_bytes,
+            "coalescing must not drop or reorder"
+        );
+        assert!(
+            coalesced.len() < raw_events,
+            "coalescing should cut the event count"
+        );
+
+        let secs = window.as_secs_f64();
+        let raw_avg = raw_bytes / raw_events;
+        let coal_avg = coalesced_bytes / coalesced.len();
+        eprintln!(
+            "pty:data harness ({:.0} ms of /usr/bin/yes): before {} events/s, avg {} bytes; after {} events/s, avg {} bytes ({} → {} events, {} bytes)",
+            window.as_secs_f64() * 1000.0,
+            (raw_events as f64 / secs) as u64,
+            raw_avg,
+            (coalesced.len() as f64 / secs) as u64,
+            coal_avg,
+            raw_events,
+            coalesced.len(),
+            raw_bytes,
+        );
     }
 }
