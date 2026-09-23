@@ -9,6 +9,7 @@ import {
   readText as readClipboardText,
 } from "@tauri-apps/plugin-clipboard-manager";
 import { useShellPty } from "@/context/shell-pty";
+import { writePtyChunk } from "@/lib/pty-stream";
 import { openUrlInSystemBrowser } from "@/lib/open-url";
 import { makeBareUrlLinkProvider } from "@/lib/xterm-bare-url-links";
 import {
@@ -222,12 +223,8 @@ export function ShellTerminalView(props: Props) {
     }
 
     detachData = ctx.onData(props.ptyId, (bytes) => {
-      if (disposed) return;
-      try {
-        term?.write(bytes);
-      } catch (err) {
-        console.warn("shell xterm write failed (non-fatal)", err);
-      }
+      if (disposed || !term) return;
+      writePtyChunk(props.ptyId, term, bytes);
     });
     detachExit = ctx.onExit(props.ptyId, () => {
       // Don't writeln here — the xterm instance may be mid-dispose when the

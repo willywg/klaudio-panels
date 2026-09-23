@@ -132,6 +132,8 @@ pub fn run() {
             pty::pty_open_shell,
             pty::pty_write,
             pty::pty_resize,
+            pty::pty_pause,
+            pty::pty_resume,
             pty::pty_kill,
             shell_env::check_binary_exists,
             debug_log::debug_log,

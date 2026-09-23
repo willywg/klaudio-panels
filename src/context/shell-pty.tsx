@@ -7,6 +7,7 @@ import {
 import { createStore, produce } from "solid-js/store";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { bytesToBase64, deliverPtyPayload, releasePtyFlow } from "@/lib/pty-stream";
 
 export type ShellPtyStatus = "opening" | "running" | "exited" | "error";
 
@@ -50,11 +51,10 @@ function makeShellPtyContext() {
 
   async function attachListeners(id: string) {
     const dUn = await listen<string>(`pty:data:${id}`, (e) => {
-      const bytes = base64ToBytes(e.payload);
-      const set = dataHandlers.get(id);
-      if (set) for (const h of set) h(bytes);
+      deliverPtyPayload(e.payload, dataHandlers.get(id));
     });
     const xUn = await listen<number>(`pty:exit:${id}`, (e) => {
+      releasePtyFlow(id);
       setStore(
         "tabs",
         (t) => t.ptyId === id,
@@ -78,6 +78,7 @@ function makeShellPtyContext() {
     }
     dataHandlers.delete(id);
     exitHandlers.delete(id);
+    releasePtyFlow(id);
   }
 
   function nextIndexFor(projectPath: string): number {
@@ -250,19 +251,6 @@ function makeShellPtyContext() {
     getTab,
     killAllForProject,
   };
-}
-
-function base64ToBytes(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin);
 }
 
 const Ctx = createContext<ReturnType<typeof makeShellPtyContext>>();

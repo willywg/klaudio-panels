@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -19,6 +19,9 @@ pub struct PtySession {
     /// deliver a SIGHUP the child might not treat as fatal (see
     /// `pty_kill`'s doc comment).
     pub child: Arc<Mutex<Box<dyn Child + Send>>>,
+    /// Shared with the reader thread. `pty_pause` blocks the next `read`;
+    /// `pty_kill` and child exit both wake it (see `PauseGate`).
+    pause: Arc<PauseGate>,
 }
 
 #[derive(Default)]
@@ -29,6 +32,111 @@ pub struct PtyState {
 const INITIAL_COLS: u16 = 80;
 const INITIAL_ROWS: u16 = 24;
 const READ_CHUNK: usize = 4096;
+
+/// One PTY reader's pause flag. The reader calls `wait_until_readable`
+/// before every `read`. While it waits it does not consume the master, so
+/// the kernel PTY buffer fills and the child blocks in `write` — that is
+/// the backpressure xterm's flow control is asking for. The agent waits
+/// instead of the webview queueing until xterm discards the data.
+///
+/// `stop` (`pty_kill` / drop) and `child_exited` both wake a waiter. `stop`
+/// makes the reader leave without another `read`. Child exit clears the
+/// pause and ignores later pauses, so the reader can drain what is already
+/// buffered and observe EOF instead of staying parked on a dead session.
+struct PauseGate {
+    inner: Mutex<PauseInner>,
+    cv: Condvar,
+}
+
+struct PauseInner {
+    paused: bool,
+    stop: bool,
+    exited: bool,
+}
+
+impl PauseGate {
+    fn new() -> Self {
+        Self {
+            inner: Mutex::new(PauseInner {
+                paused: false,
+                stop: false,
+                exited: false,
+            }),
+            cv: Condvar::new(),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, PauseInner> {
+        self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn pause(&self) {
+        let mut guard = self.lock();
+        if guard.stop || guard.exited {
+            return;
+        }
+        guard.paused = true;
+    }
+
+    fn resume(&self) {
+        let mut guard = self.lock();
+        if guard.stop {
+            return;
+        }
+        guard.paused = false;
+        self.cv.notify_all();
+    }
+
+    /// `pty_kill` and dropping the session. The reader must leave even if
+    /// it is inside `wait_until_readable`; the caller also drops the master
+    /// so a `read` already in progress unblocks.
+    fn stop(&self) {
+        let mut guard = self.lock();
+        guard.stop = true;
+        guard.paused = false;
+        self.cv.notify_all();
+    }
+
+    /// The child has exited. Unpause and refuse further pauses so the
+    /// reader reaches EOF. A later `stop` still wins.
+    fn child_exited(&self) {
+        let mut guard = self.lock();
+        guard.exited = true;
+        guard.paused = false;
+        self.cv.notify_all();
+    }
+
+    /// `true` when the caller may `read`. `false` means `stop` was set and
+    /// the reader should exit.
+    fn wait_until_readable(&self) -> bool {
+        let mut guard = self.lock();
+        while guard.paused && !guard.stop && !guard.exited {
+            guard = self.cv.wait(guard).unwrap_or_else(|e| e.into_inner());
+        }
+        !guard.stop
+    }
+}
+
+#[derive(Debug)]
+enum PtyRead {
+    Data(usize),
+    Eof,
+    Stopped,
+}
+
+/// One iteration of the PTY reader. The pause check is *before* `read`: a
+/// paused reader holds no master bytes, which is what fills the kernel
+/// buffer and blocks the child.
+fn read_pty_chunk(reader: &mut dyn Read, gate: &PauseGate, buf: &mut [u8]) -> PtyRead {
+    if !gate.wait_until_readable() {
+        return PtyRead::Stopped;
+    }
+    match reader.read(buf) {
+        Ok(0) => PtyRead::Eof,
+        Ok(n) => PtyRead::Data(n),
+        Err(_) => PtyRead::Eof,
+    }
+}
 
 /// Sanitize the first bytes emitted by a PTY child for logging. ANSI escape
 /// sequences and control bytes become visible markers so the log stays
@@ -86,10 +194,7 @@ fn clipboard_history_env(env: Vec<(String, String)>) -> Vec<(String, String)> {
     if !out.iter().any(|(k, _)| k == "PATH") {
         out.push(("PATH".into(), dir));
     }
-    out.push((
-        "KLAUDIO_CLIP_SOCK".into(),
-        sock.display().to_string(),
-    ));
+    out.push(("KLAUDIO_CLIP_SOCK".into(), sock.display().to_string()));
     out
 }
 
@@ -187,23 +292,24 @@ fn spawn_pty(
 
     let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
 
+    let pause = Arc::new(PauseGate::new());
     let tx_blocking = tx.clone();
     let id_read = id.clone();
     let bytes_seen = Arc::new(AtomicUsize::new(0));
     let bytes_seen_clone = bytes_seen.clone();
+    let pause_reader = Arc::clone(&pause);
     tokio::task::spawn_blocking(move || {
         let mut reader = reader;
         let mut buf = [0u8; READ_CHUNK];
         let mut logged_startup = false;
         let mut startup_buf: Vec<u8> = Vec::with_capacity(512);
         loop {
-            match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
+            match read_pty_chunk(&mut reader, &pause_reader, &mut buf) {
+                PtyRead::Stopped | PtyRead::Eof => break,
+                PtyRead::Data(n) => {
                     bytes_seen_clone.fetch_add(n, Ordering::Relaxed);
                     if !logged_startup {
-                        startup_buf
-                            .extend_from_slice(&buf[..n.min(512 - startup_buf.len())]);
+                        startup_buf.extend_from_slice(&buf[..n.min(512 - startup_buf.len())]);
                         if startup_buf.len() >= 256 {
                             log_startup_bytes(&id_read, &startup_buf);
                             logged_startup = true;
@@ -213,7 +319,6 @@ fn spawn_pty(
                         break;
                     }
                 }
-                Err(_) => break,
             }
         }
         if !logged_startup && !startup_buf.is_empty() {
@@ -247,6 +352,7 @@ fn spawn_pty(
     let id_exit = id.clone();
     let bytes_seen_exit = bytes_seen.clone();
     let child_wait = Arc::clone(&child);
+    let pause_exit = Arc::clone(&pause);
     tokio::task::spawn_blocking(move || {
         const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
         let code = loop {
@@ -263,6 +369,11 @@ fn spawn_pty(
                 Err(_) => break -1,
             }
         };
+        // Wake a reader that was paused when the child died, and ignore any
+        // pause that arrives while the last bytes drain. Otherwise the
+        // thread would sit in the condvar forever and `pty:exit` would be
+        // the only sign the session ended.
+        pause_exit.child_exited();
         debug_log::write(
             "pty",
             &format!(
@@ -277,6 +388,7 @@ fn spawn_pty(
         master: Arc::new(Mutex::new(pair.master)),
         writer: Arc::new(Mutex::new(writer)),
         child,
+        pause,
     };
 
     state
@@ -310,7 +422,10 @@ pub async fn pty_open(
     // for a tab that was already in flight, or restored from a workspace
     // remembered while it was still on.
     if !crate::agent_settings::load(agent_id).enabled {
-        return Err(format!("{} is disabled in the agent settings.", spec.display_name));
+        return Err(format!(
+            "{} is disabled in the agent settings.",
+            spec.display_name
+        ));
     }
     let bin = crate::binary::find_agent_binary(agent_id)?;
     let shell_env = crate::shell_env::cached_shell_env().clone();
@@ -383,7 +498,17 @@ pub async fn pty_open(
         .to_str()
         .ok_or_else(|| format!("{} binary path is not valid UTF-8", spec.display_name))?
         .to_string();
-    spawn_pty(app, &state, id, bin_str, args, project_path, env, None, None)
+    spawn_pty(
+        app,
+        &state,
+        id,
+        bin_str,
+        args,
+        project_path,
+        env,
+        None,
+        None,
+    )
 }
 
 /// Spawn an embedded terminal editor (nvim / helix / vim / micro) inside a
@@ -435,7 +560,17 @@ pub async fn pty_open_editor(
             ("CLAUDE_DESKTOP".into(), "1".into()),
         ],
     );
-    spawn_pty(app, &state, id, resolved, args, project_path, env, cols, rows)
+    spawn_pty(
+        app,
+        &state,
+        id,
+        resolved,
+        args,
+        project_path,
+        env,
+        cols,
+        rows,
+    )
 }
 
 /// Spawn the user's login shell ($SHELL) in the project cwd. Used by the
@@ -473,11 +608,7 @@ pub async fn pty_open_shell(
 }
 
 #[tauri::command]
-pub async fn pty_write(
-    state: State<'_, PtyState>,
-    id: String,
-    b64: String,
-) -> Result<(), String> {
+pub async fn pty_write(state: State<'_, PtyState>, id: String, b64: String) -> Result<(), String> {
     let bytes = STANDARD
         .decode(b64.as_bytes())
         .map_err(|e| format!("invalid base64: {e}"))?;
@@ -522,6 +653,36 @@ pub async fn pty_resize(
     Ok(())
 }
 
+fn pause_gate(state: &PtyState, id: &str) -> Option<Arc<PauseGate>> {
+    state
+        .sessions
+        .lock()
+        .ok()?
+        .get(id)
+        .map(|session| Arc::clone(&session.pause))
+}
+
+/// Stop this PTY's reader before its next `read`. A missing id is success:
+/// the frontend resumes on close, and that races `pty_kill` removing the
+/// session. While paused, the kernel PTY buffer fills and the child blocks
+/// in `write` (see `PauseGate`).
+#[tauri::command]
+pub async fn pty_pause(state: State<'_, PtyState>, id: String) -> Result<(), String> {
+    if let Some(gate) = pause_gate(&state, &id) {
+        gate.pause();
+    }
+    Ok(())
+}
+
+/// Let a paused reader call `read` again. Same missing-id rule as `pty_pause`.
+#[tauri::command]
+pub async fn pty_resume(state: State<'_, PtyState>, id: String) -> Result<(), String> {
+    if let Some(gate) = pause_gate(&state, &id) {
+        gate.resume();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn pty_kill(state: State<'_, PtyState>, id: String) -> Result<(), String> {
     let removed = state
@@ -531,6 +692,10 @@ pub async fn pty_kill(state: State<'_, PtyState>, id: String) -> Result<(), Stri
         .remove(&id);
 
     if let Some(session) = removed {
+        // Wake the reader first. If it is parked on the pause condvar, this
+        // is the only thing that lets it exit; dropping the master below
+        // unblocks a `read` that already started.
+        session.pause.stop();
         // Drop the master — this closes the PTY file descriptor, the child
         // receives SIGHUP, and our read loop sees EOF.
         drop(session.writer);
@@ -662,5 +827,165 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+
+    /// A reader parked on the pause gate must leave when the session is
+    /// killed, without ever calling `read` again. This is the thread-leak
+    /// the close path has to close: dropping the master does not wake a
+    /// condvar wait.
+    #[test]
+    fn stop_wakes_a_paused_reader_and_it_exits() {
+        let gate = Arc::new(PauseGate::new());
+        gate.pause();
+        let gate_reader = Arc::clone(&gate);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reader = std::io::empty();
+            let mut buf = [0u8; 8];
+            let outcome = read_pty_chunk(&mut reader, &gate_reader, &mut buf);
+            let _ = tx.send(outcome);
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            rx.try_recv().is_err(),
+            "reader must still be blocked while paused"
+        );
+        gate.stop();
+        match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+            Ok(PtyRead::Stopped) => {}
+            other => panic!("paused reader did not stop cleanly: {other:?}"),
+        }
+    }
+
+    /// Child exit unpauses the reader so it can observe EOF, and a pause
+    /// that arrives afterwards does not stick.
+    #[test]
+    fn child_exit_unblocks_a_paused_reader() {
+        let gate = Arc::new(PauseGate::new());
+        gate.pause();
+        let gate_reader = Arc::clone(&gate);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            // `empty()` returns EOF immediately, so reaching it proves the
+            // waiter was released. A still-paused gate would never send.
+            let mut reader = std::io::empty();
+            let mut buf = [0u8; 8];
+            let outcome = read_pty_chunk(&mut reader, &gate_reader, &mut buf);
+            let _ = tx.send(outcome);
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(rx.try_recv().is_err(), "reader must be paused");
+        gate.child_exited();
+        match rx.recv_timeout(std::time::Duration::from_secs(2)) {
+            Ok(PtyRead::Eof) => {}
+            other => panic!("reader did not drain after child exit: {other:?}"),
+        }
+        gate.pause();
+        assert!(
+            gate.wait_until_readable(),
+            "a pause after child exit must not block the reader"
+        );
+    }
+
+    /// `yes` writes as fast as the PTY accepts it. Pausing the reader has to
+    /// stop the byte counter; resuming has to move it again; stopping a
+    /// paused reader has to join the thread.
+    #[test]
+    fn pause_stops_a_live_pty_reader_until_resume_and_kill_joins_it() {
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let child = pair
+            .slave
+            .spawn_command(CommandBuilder::new("/usr/bin/yes"))
+            .expect("spawn yes");
+        drop(pair.slave);
+        let mut reader = pair.master.try_clone_reader().expect("reader");
+        let master = pair.master;
+
+        let gate = Arc::new(PauseGate::new());
+        let bytes = Arc::new(AtomicUsize::new(0));
+        let gate_reader = Arc::clone(&gate);
+        let bytes_reader = Arc::clone(&bytes);
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        // Panic-safe: a failed assertion must still kill `yes` and wake the
+        // reader. This test spawned the child; nothing else should reap it.
+        struct Cleanup {
+            gate: Arc<PauseGate>,
+            child: Option<Box<dyn Child + Send>>,
+            master: Option<Box<dyn MasterPty + Send>>,
+        }
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                self.gate.stop();
+                drop(self.master.take());
+                if let Some(child) = self.child.take() {
+                    let guarded = Mutex::new(child);
+                    let _ = kill_if_still_alive(&guarded);
+                }
+            }
+        }
+        let cleanup = Cleanup {
+            gate: Arc::clone(&gate),
+            child: Some(child),
+            master: Some(master),
+        };
+        std::thread::spawn(move || {
+            let mut buf = [0u8; READ_CHUNK];
+            loop {
+                match read_pty_chunk(&mut reader, &gate_reader, &mut buf) {
+                    PtyRead::Data(n) => {
+                        bytes_reader.fetch_add(n, Ordering::Relaxed);
+                    }
+                    PtyRead::Eof | PtyRead::Stopped => break,
+                }
+            }
+            let _ = done_tx.send(());
+        });
+
+        let started = std::time::Instant::now();
+        while bytes.load(Ordering::Relaxed) == 0 {
+            assert!(
+                started.elapsed() < std::time::Duration::from_secs(2),
+                "reader produced no output"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        gate.pause();
+        // One `read` may already be inside the kernel. Let it finish, then
+        // the counter must sit still — `yes` would otherwise move it by
+        // megabytes in this window.
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        let paused_at = bytes.load(Ordering::Relaxed);
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(
+            bytes.load(Ordering::Relaxed),
+            paused_at,
+            "paused reader kept consuming PTY bytes"
+        );
+
+        gate.resume();
+        let resumed = std::time::Instant::now();
+        while bytes.load(Ordering::Relaxed) <= paused_at {
+            assert!(
+                resumed.elapsed() < std::time::Duration::from_secs(2),
+                "reader did not resume"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        drop(cleanup);
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("reader thread did not exit after stop");
     }
 }
