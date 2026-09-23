@@ -8,6 +8,7 @@ import "@xterm/xterm/css/xterm.css";
 import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { AGENT_DISPLAY, DEFAULT_AGENT } from "@/lib/agents";
 import { useTerminal } from "@/context/terminal";
+import { writePtyChunk } from "@/lib/pty-stream";
 import { useDiffPanel } from "@/context/diff-panel";
 import { makeFileLinkProvider } from "@/lib/xterm-file-links";
 import { makeBareUrlLinkProvider } from "@/lib/xterm-bare-url-links";
@@ -307,7 +308,8 @@ export function TerminalView(props: Props) {
     }
 
     detachData = ctx.onData(props.id, (bytes) => {
-      term?.write(bytes);
+      if (!term) return;
+      writePtyChunk(props.id, term, bytes);
     });
     detachExit = ctx.onExit(props.id, (code) => {
       const agent = ctx.store.tabs.find((t) => t.id === props.id)?.agentId;

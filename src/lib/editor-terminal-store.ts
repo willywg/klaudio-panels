@@ -8,6 +8,7 @@ import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-mana
 import { openUrlInSystemBrowser } from "@/lib/open-url";
 import { makeBareUrlLinkProvider } from "@/lib/xterm-bare-url-links";
 import { recordClip } from "@/lib/record-clip";
+import { writePtyChunk } from "@/lib/pty-stream";
 
 /** Editor PTY terminals live HERE, not in the component that shows them.
  *
@@ -229,11 +230,7 @@ export function acquireEditorTerminal(
     // — they're purely advisory probes nvim uses to detect modern terminal
     // features; losing the reply just means nvim falls back to legacy
     // behavior (same as running inside iTerm a few years ago).
-    try {
-      term.write(stripDecrqm(bytes));
-    } catch (err) {
-      console.warn("xterm write failed (non-fatal)", err);
-    }
+    writePtyChunk(ptyId, term, stripDecrqm(bytes));
   });
 
   const entry: EditorTerminal = { ptyId, host, term, fit, spawned: false };
