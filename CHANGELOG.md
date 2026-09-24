@@ -4,7 +4,7 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
-## [Unreleased]
+## [1.14.0] — 2026-09-24
 
 ### Added
 - **Cursor tabs chime when a turn finishes**
@@ -30,6 +30,11 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   ([#118](https://github.com/willywg/klaudio-panels/issues/118)). A test run
   could rotate the log out from under a running Klaudio, which then kept
   writing into a file nobody could see. Test builds now log to a temp dir.
+
+### Tracked work
+- PRP: [`PRPs/025--cursor-completion-hooks.md`](PRPs/025--cursor-completion-hooks.md)
+- PRs: [#119](https://github.com/willywg/klaudio-panels/pull/119), [#120](https://github.com/willywg/klaudio-panels/pull/120)
+- Issues: [#109](https://github.com/willywg/klaudio-panels/issues/109), [#117](https://github.com/willywg/klaudio-panels/issues/117), [#118](https://github.com/willywg/klaudio-panels/issues/118)
 
 ## [1.13.0] — 2026-09-23
 
