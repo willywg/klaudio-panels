@@ -18,6 +18,7 @@ import {
 } from "@/lib/notifications-prefs";
 import { useTerminal, type TerminalTab } from "@/context/terminal";
 import type { AgentId } from "@/lib/agents";
+import { completionTitle } from "@/lib/completion-title";
 
 type SessionCompletePayload = {
   agent: AgentId;
@@ -458,7 +459,10 @@ function makeNotificationsContext() {
   function handleComplete(payload: SessionCompletePayload) {
     if (!prefs().notifySessionComplete) return;
     if (prefs().playSounds) playTaskComplete();
-    const title = `${projectName(payload.project_path)} · Claude is done`;
+    const title = completionTitle(
+      projectName(payload.project_path),
+      payload.agent,
+    );
     const body =
       payload.preview && payload.preview.length > 0
         ? payload.preview

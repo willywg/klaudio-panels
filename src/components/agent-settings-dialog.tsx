@@ -10,7 +10,12 @@ import {
 import { createStore } from "solid-js/store";
 import { invoke } from "@tauri-apps/api/core";
 import { useAgents, type AgentInfo } from "@/context/agents";
-import { AGENT_DISPLAY, type AgentId } from "@/lib/agents";
+import { AGENT_DISPLAY, CURSOR, type AgentId } from "@/lib/agents";
+
+type HookStatus =
+  | { state: "on" }
+  | { state: "off" }
+  | { state: "unmanaged"; reason: string; snippet: string };
 
 type Draft = { enabled: boolean; binaryPath: string };
 
@@ -35,6 +40,9 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
   const [discovered, setDiscovered] = createStore<Record<string, Discovered>>({});
   const [errors, setErrors] = createStore<Record<string, string | null>>({});
   const [saving, setSaving] = createSignal(false);
+  const [hook, setHook] = createSignal<HookStatus | null>(null);
+  const [hookError, setHookError] = createSignal<string | null>(null);
+  const [hookBusy, setHookBusy] = createSignal(false);
   let panelRef: HTMLDivElement | undefined;
 
   function reset(list: AgentInfo[]) {
@@ -62,6 +70,7 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
         void agents.refresh().then(() => {
           reset(agents.agents());
           for (const a of agents.agents()) void discover(a.id);
+          void refreshHook();
         });
       },
     ),
@@ -91,6 +100,31 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
     const d = draft[a.id];
     if (!d) return false;
     return d.enabled !== a.enabled || d.binaryPath.trim() !== (a.binaryPath ?? "");
+  }
+
+  async function refreshHook() {
+    try {
+      setHook(await invoke<HookStatus>("cursor_hook_status"));
+    } catch (err) {
+      setHook({ state: "unmanaged", reason: String(err), snippet: "" });
+    }
+  }
+
+  async function toggleHook() {
+    const current = hook();
+    if (!current || current.state === "unmanaged") return;
+    setHookBusy(true);
+    setHookError(null);
+    try {
+      await invoke(
+        current.state === "on" ? "cursor_hook_uninstall" : "cursor_hook_install",
+      );
+      await refreshHook();
+    } catch (err) {
+      setHookError(String(err));
+    } finally {
+      setHookBusy(false);
+    }
   }
 
   async function save() {
@@ -209,6 +243,14 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
                         {errors[a.id]}
                       </div>
                     </Show>
+                    <Show when={a.id === CURSOR}>
+                      <CursorHookToggle
+                        status={hook()}
+                        error={hookError()}
+                        busy={hookBusy()}
+                        onToggle={() => void toggleHook()}
+                      />
+                    </Show>
                   </div>
                 );
               }}
@@ -241,5 +283,65 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
         </div>
       </div>
     </Show>
+  );
+}
+
+function CursorHookToggle(props: {
+  status: HookStatus | null;
+  error: string | null;
+  busy: boolean;
+  onToggle: () => void;
+}) {
+  const status = () => props.status;
+  const on = () => status()?.state === "on";
+  const unmanaged = () => status()?.state === "unmanaged";
+  const label = () => {
+    const s = status();
+    if (!s) return "Checking hooks.json…";
+    if (s.state === "on") return "On";
+    if (s.state === "off") return "Off";
+    return "Can't manage (edited by hand)";
+  };
+
+  return (
+    <div class="mt-3 pt-3 border-t border-neutral-800">
+      <label
+        class={
+          "flex items-start gap-2 text-[12px] select-none " +
+          (unmanaged() ? "text-neutral-500 cursor-not-allowed" : "text-neutral-300 cursor-pointer")
+        }
+      >
+        <input
+          type="checkbox"
+          class="accent-indigo-500 mt-0.5"
+          checked={on()}
+          disabled={props.busy || unmanaged() || !status()}
+          onChange={() => props.onToggle()}
+        />
+        <span>
+          <span class="text-neutral-200">Turn notifications</span>
+          <span class="text-neutral-500"> — adds a hook to ~/.cursor/hooks.json</span>
+          <span class="block text-[11px] text-neutral-500 mt-0.5">
+            {label()}. Turning Cursor off does not remove this hook. The script
+            does nothing outside Klaudio.
+          </span>
+        </span>
+      </label>
+      <Show when={unmanaged() && status()?.state === "unmanaged"}>
+        <div class="mt-1.5 text-[11px] text-amber-400/90 leading-snug whitespace-pre-wrap break-words">
+          {(status() as { reason: string; snippet: string }).reason}
+          <Show when={(status() as { snippet: string }).snippet}>
+            <pre class="mt-1 p-2 rounded bg-neutral-900 border border-neutral-800 text-neutral-300 overflow-x-auto">
+              {(status() as { snippet: string }).snippet}
+            </pre>
+          </Show>
+        </div>
+      </Show>
+      <Show when={props.error}>
+        <div class="mt-1.5 text-[11px] text-red-400 leading-snug whitespace-pre-wrap break-words">
+          {props.error}
+        </div>
+      </Show>
+    </div>
   );
 }

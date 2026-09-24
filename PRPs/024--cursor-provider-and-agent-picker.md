@@ -354,7 +354,9 @@ exception). Cursor has **two** routes to the same signal, and both are real:
 and no OS notification. The notification preferences panel must not offer
 per-agent switches it cannot honour.
 
-**→ [#109](https://github.com/willywg/klaudio-panels/issues/109)**
+**→ [#109](https://github.com/willywg/klaudio-panels/issues/109)** — done in
+PRP 025. Cursor `session:complete` comes from the `stop` hook, not from the
+watcher. Permission alerts stay unsupported.
 
 ### 2. Per-project accounts (profiles)
 

@@ -1,16 +1,19 @@
 pub mod agent;
 pub mod agent_commands;
+pub mod agent_hooks;
 pub mod agent_settings;
 pub mod binary;
 pub mod cli_agent;
 pub mod cli_args;
-pub mod cursor_sessions;
 pub mod clipboard_history;
+pub mod cursor_hooks;
+pub mod cursor_sessions;
 pub mod debug_log;
 pub mod file_read;
 pub mod file_write;
 pub mod fs;
 pub mod git;
+pub mod local_socket;
 pub mod notify;
 pub mod open_in;
 pub mod plugins;
@@ -47,8 +50,8 @@ impl Drop for TtyGuard {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _tty_guard = TtyGuard;
-    use tauri::Emitter;
     use tauri::menu::{Menu, MenuItem, Submenu};
+    use tauri::Emitter;
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -65,6 +68,7 @@ pub fn run() {
                 );
             }
             clipboard_history::install(app.handle().clone());
+            agent_hooks::install(app.handle().clone());
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 if let Err(e) = session_watcher::install(handle) {
@@ -99,12 +103,8 @@ pub fn run() {
                     true,
                     None::<&str>,
                 )?;
-                let submenu = Submenu::with_items(
-                    app,
-                    "Klaudio",
-                    true,
-                    &[&install_item, &uninstall_item],
-                )?;
+                let submenu =
+                    Submenu::with_items(app, "Klaudio", true, &[&install_item, &uninstall_item])?;
                 let menu = Menu::default(app.handle())?;
                 menu.append(&submenu)?;
                 app.set_menu(menu)?;
@@ -126,6 +126,9 @@ pub fn run() {
             agent_commands::discover_agent_binary,
             agent_commands::set_agent_settings,
             agent_commands::agent_create_session,
+            agent_commands::cursor_hook_status,
+            agent_commands::cursor_hook_install,
+            agent_commands::cursor_hook_uninstall,
             project_env::resolve_profile_id,
             pty::pty_open,
             pty::pty_open_editor,

@@ -28,6 +28,8 @@ use std::collections::VecDeque;
 use std::io::Read;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
+
+use crate::local_socket::{self, has_live_listener};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -172,57 +174,20 @@ pub fn shim_dir() -> Option<PathBuf> {
     dirs::cache_dir().map(|c| c.join("klaudio-panels/bin"))
 }
 
-/// FNV-1a, folded to 32 bits and rendered as 8 hex characters.
-///
-/// Written out rather than reaching for `DefaultHasher`: that one is
-/// explicitly not stable across Rust releases, and this value names a file
-/// that has to survive a toolchain upgrade. An unstable hash would strand the
-/// previous socket in the cache dir on every rebuild.
-fn short_hash(s: &str) -> String {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in s.as_bytes() {
-        h ^= u64::from(*b);
-        h = h.wrapping_mul(0x0100_0000_01b3);
-    }
-    format!("{:08x}", (h ^ (h >> 32)) as u32)
-}
-
-/// Identifies this *installation* — the bundle the running process came from.
-///
-/// Two Klaudios on one machine are ordinary: the one in `/Applications`
-/// alongside a `tauri dev` build, or a copy still running from a mounted DMG
-/// while the installed one is open. They are different installs and must not
-/// share a socket, or the second to boot takes the first one's `pbcopy` away
-/// (#96). Keyed on the executable path, so it is stable across restarts —
-/// one socket per install, not one per run.
 fn install_key() -> String {
-    std::env::current_exe()
-        .map(|p| short_hash(&p.to_string_lossy()))
-        .unwrap_or_else(|_| "default".to_string())
+    local_socket::install_key()
 }
 
 /// Socket the shim reports to. Kept in the cache dir so the whole path stays
 /// well under the ~104 byte `sun_path` limit.
 pub fn socket_path() -> Option<PathBuf> {
-    dirs::cache_dir()
-        .map(|c| c.join(format!("klaudio-panels/clip-{}.sock", install_key())))
+    dirs::cache_dir().map(|c| c.join(format!("klaudio-panels/clip-{}.sock", install_key())))
 }
 
 /// The single shared socket every version through v1.10.1 used. Left behind
 /// on upgrade, and nothing will ever bind it again.
 fn legacy_socket_path() -> Option<PathBuf> {
     dirs::cache_dir().map(|c| c.join("klaudio-panels/clip.sock"))
-}
-
-/// Whether a socket file has a live listener behind it.
-///
-/// This is the distinction the old unconditional `remove_file` could not
-/// make. Removing an *abandoned* socket is necessary — `bind` fails with
-/// `EADDRINUSE` on a leftover from a crash even though nothing is listening.
-/// Removing a *live* one unlinks the name out from under a running instance,
-/// whose listener then survives on a socket nothing can reach (#96).
-fn has_live_listener(path: &std::path::Path) -> bool {
-    std::os::unix::net::UnixStream::connect(path).is_ok()
 }
 
 /// `pbcopy` replacement placed ahead of `/usr/bin` on the PTY's `PATH`.
@@ -435,8 +400,12 @@ mod tests {
         // The whole point of #96: the app in /Applications and a dev build
         // are different installs, and sharing one socket meant the second to
         // boot took the first one's `pbcopy` away.
-        let installed = short_hash("/Applications/Klaudio Panels.app/Contents/MacOS/klaudio-panels");
-        let dev = short_hash("/Users/me/proyectos/claude-desktop/src-tauri/target/debug/klaudio-panels");
+        let installed = crate::local_socket::short_hash(
+            "/Applications/Klaudio Panels.app/Contents/MacOS/klaudio-panels",
+        );
+        let dev = crate::local_socket::short_hash(
+            "/Users/me/proyectos/claude-desktop/src-tauri/target/debug/klaudio-panels",
+        );
         assert_ne!(installed, dev);
     }
 
@@ -445,9 +414,14 @@ mod tests {
         // It names a file that has to be found again after a restart, and
         // after a toolchain upgrade — hence FNV rather than DefaultHasher.
         let p = "/Applications/Klaudio Panels.app/Contents/MacOS/klaudio-panels";
-        assert_eq!(short_hash(p), short_hash(p));
-        assert_eq!(short_hash(p).len(), 8);
-        assert!(short_hash(p).chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(
+            crate::local_socket::short_hash(p),
+            crate::local_socket::short_hash(p)
+        );
+        assert_eq!(crate::local_socket::short_hash(p).len(), 8);
+        assert!(crate::local_socket::short_hash(p)
+            .chars()
+            .all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
