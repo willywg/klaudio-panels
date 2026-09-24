@@ -239,8 +239,9 @@ async function main() {
       addons.delete(index);
     };
     for (let i = 0; i < terms.length; i++) {
-      const decision = pool.touch(String(i));
+      const decision = pool.show(String(i));
       for (const id of decision.detach) detachAt(Number(id));
+      if (i !== terms.length - 1) pool.hide(String(i));
       if (!decision.attach) continue;
       try {
         const webgl = new WebglAddon();

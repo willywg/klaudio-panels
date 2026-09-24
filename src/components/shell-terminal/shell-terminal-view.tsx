@@ -84,7 +84,10 @@ export function ShellTerminalView(props: Props) {
   const encoder = new TextEncoder();
 
   let webgl: WebglAddon | undefined;
-  let webglDetached = true;
+  // True only after the pool takes WebGL from this hidden tab. Starts false
+  // so a shell that mounts hidden still fits, and a context loss leaves it
+  // false so a visible shell keeps refitting.
+  let webglDetached = false;
   const poolId = `shell:${props.ptyId}`;
 
   function attachWebgl() {
@@ -94,7 +97,6 @@ export function ShellTerminalView(props: Props) {
       addon.onContextLoss(() => {
         addon.dispose();
         if (webgl === addon) webgl = undefined;
-        webglDetached = true;
         webglPool.lost(poolId);
       });
       term.loadAddon(addon);
@@ -299,9 +301,10 @@ export function ShellTerminalView(props: Props) {
   // so the only regression is clicking the tab strip header.
   createEffect(() => {
     if (!props.active) return;
-    const decision = webglPool.touch(poolId);
+    const decision = webglPool.show(poolId);
     runWebglDetaches(decision.detach);
     if (decision.attach) attachWebgl();
+    onCleanup(() => webglPool.hide(poolId));
     requestAnimationFrame(() => {
       if (disposed) return;
       safeFit();

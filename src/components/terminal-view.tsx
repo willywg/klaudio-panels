@@ -109,11 +109,12 @@ export function TerminalView(props: Props) {
   const encoder = new TextEncoder();
 
   let webgl: WebglAddon | undefined;
-  // True while this tab is on the DOM renderer by choice. A fit then would
-  // measure the DOM cell (8.035 px) instead of WebGL's (8 px) and change
-  // cols, which sends a SIGWINCH. Stays false if WebGL cannot be created
-  // at all, so a machine without it still fits as before.
-  let webglDetached = true;
+  // True only after the pool takes WebGL from this hidden tab. A fit then
+  // would measure the DOM cell (8.035 px) instead of WebGL's (8 px) and
+  // change cols, which sends a SIGWINCH. Starts false so a tab that mounts
+  // hidden still fits. A context loss leaves it false too: that terminal is
+  // on the DOM renderer on purpose, and a visible one must keep fitting.
+  let webglDetached = false;
   const poolId = `agent:${props.id}`;
 
   function attachWebgl() {
@@ -123,7 +124,6 @@ export function TerminalView(props: Props) {
       addon.onContextLoss(() => {
         addon.dispose();
         if (webgl === addon) webgl = undefined;
-        webglDetached = true;
         webglPool.lost(poolId);
       });
       term.loadAddon(addon);
@@ -477,7 +477,7 @@ export function TerminalView(props: Props) {
   createEffect(() => {
     if (!props.active) return;
 
-    const decision = webglPool.touch(poolId);
+    const decision = webglPool.show(poolId);
     runWebglDetaches(decision.detach);
     if (decision.attach) attachWebgl();
 
@@ -490,6 +490,7 @@ export function TerminalView(props: Props) {
     const fitTimer = window.setTimeout(() => safeFit(), 250);
 
     onCleanup(() => {
+      webglPool.hide(poolId);
       window.clearTimeout(fitTimer);
     });
   });

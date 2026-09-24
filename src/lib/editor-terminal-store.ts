@@ -122,9 +122,8 @@ export type EditorTerminal = {
    *  rather than in the component so a remount can't spawn a second child on
    *  the same id — which used to leave two editors writing to one channel. */
   spawned: boolean;
-  /** True while the addon is off, so the view skips fit (DOM cell width
-   *  differs from WebGL). False when WebGL is on, or when it cannot be
-   *  created at all. */
+  /** True only after the pool takes WebGL from this hidden editor. A
+   *  context loss leaves it false so a visible nvim keeps fitting. */
   webglDetached: boolean;
   attachWebgl: () => void;
   detachWebgl: () => void;
@@ -191,7 +190,6 @@ export function acquireEditorTerminal(
       addon.onContextLoss(() => {
         addon.dispose();
         if (webgl === addon) webgl = undefined;
-        entry.webglDetached = true;
         webglPool.lost(poolId);
       });
       term.loadAddon(addon);
@@ -264,7 +262,7 @@ export function acquireEditorTerminal(
     writePtyChunk(ptyId, term, stripDecrqm(bytes));
   });
 
-  entry = { ptyId, host, term, fit, spawned: false, webglDetached: true, attachWebgl, detachWebgl };
+  entry = { ptyId, host, term, fit, spawned: false, webglDetached: false, attachWebgl, detachWebgl };
   registerWebglDetacher(poolId, detachWebgl);
   terminals.set(ptyId, entry);
   teardowns.set(ptyId, () => {

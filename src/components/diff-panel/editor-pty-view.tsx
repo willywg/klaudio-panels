@@ -51,8 +51,9 @@ export function EditorPtyView(props: Props) {
     // Racy: ResizeObserver/setTimeout callbacks can fire after onCleanup has
     // released the terminal. Fitting against a detached host measures 0 and
     // would reflow the editor to a garbage size, so bail on both.
-    // Also skip while WebGL is off: DOM and WebGL disagree on cell width
-    // (8.035 px vs 8 px), and a fit then changes cols and sends SIGWINCH.
+    // Also skip when the pool has taken WebGL from this hidden editor:
+    // DOM and WebGL disagree on cell width (8.035 px vs 8 px), and a fit
+    // then changes cols and sends SIGWINCH. A visible editor always fits.
     if (disposed || !entry || !container || !entry.host.isConnected) return;
     if (entry.webglDetached) return;
     const rect = container.getBoundingClientRect();
@@ -151,9 +152,11 @@ export function EditorPtyView(props: Props) {
   // clicks. See PRP 017 / #40.
   createEffect(() => {
     if (!props.active || !entry) return;
-    const decision = webglPool.touch(`editor:${props.ptyId}`);
+    const poolId = `editor:${props.ptyId}`;
+    const decision = webglPool.show(poolId);
     runWebglDetaches(decision.detach);
     if (decision.attach) entry.attachWebgl();
+    onCleanup(() => webglPool.hide(poolId));
     requestAnimationFrame(() => {
       safeFit("active-change");
       repaint();
