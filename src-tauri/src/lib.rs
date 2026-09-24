@@ -23,6 +23,7 @@ pub mod session_watcher;
 pub mod sessions;
 pub mod shell_env;
 pub mod shell_install;
+pub mod shell_integration;
 
 /// Best-effort restoration of the outer terminal's tty modes when we exit.
 /// `bun tauri dev` runs cargo + vite inside the user's iTerm/Warp. If any
@@ -68,6 +69,9 @@ pub fn run() {
                 );
             }
             clipboard_history::install(app.handle().clone());
+            if let Err(e) = shell_integration::install() {
+                debug_log::write("shell", &format!("zsh wrapper install failed: {e}"));
+            }
             agent_hooks::install(app.handle().clone());
             let handle = app.handle().clone();
             std::thread::spawn(move || {

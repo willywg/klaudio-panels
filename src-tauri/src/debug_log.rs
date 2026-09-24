@@ -11,8 +11,9 @@
 //! on that first write and only its tail is kept, so one launch bounds the
 //! directory. `get_log_path` always returns the live `klaudio.log` path.
 //!
-//! Tests call [`LogState::append`] with a directory they created. They must
-//! not call [`write`], which targets the real log directory.
+//! In a test build [`write`] targets a per-process temp dir, never the real
+//! log (#118). The rotation tests call [`LogState::append`] with a directory
+//! they created.
 
 use std::borrow::Cow;
 use std::fs::{self, File, OpenOptions};
@@ -30,6 +31,15 @@ const CHECK_EVERY_WRITES: u32 = 32;
 const MAX_MSG_BYTES: usize = 16 * 1024;
 const TRUNCATED_SUFFIX: &str = "... [truncated]";
 
+/// A test build never touches the real log (#118): code under test calls
+/// [`write`] freely, and a test run rotating the user's `klaudio.log` left the
+/// installed app writing into an unlinked file until it restarted.
+#[cfg(test)]
+fn log_dir() -> Option<PathBuf> {
+    Some(std::env::temp_dir().join(format!("klaudio-test-log-{}", std::process::id())))
+}
+
+#[cfg(not(test))]
 fn log_dir() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     #[cfg(target_os = "macos")]
@@ -291,6 +301,15 @@ mod tests {
         assert!(current.contains("hello"));
         assert!(current.len() < 1000);
         assert!(!current.contains(&"x".repeat(1000)));
+    }
+
+    #[test]
+    fn a_test_build_never_writes_the_real_log() {
+        let dir = log_dir().unwrap();
+        assert!(dir.starts_with(std::env::temp_dir()), "{dir:?}");
+        if let Some(home) = dirs::home_dir() {
+            assert!(!dir.starts_with(home.join("Library/Logs")), "{dir:?}");
+        }
     }
 
     #[test]

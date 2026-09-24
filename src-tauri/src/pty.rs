@@ -684,6 +684,9 @@ pub async fn pty_open_shell(
             ("KLAUDIO_SHELL".into(), "1".into()),
         ],
     );
+    // A login zsh's path_helper would put /usr/bin/pbcopy ahead of the shim
+    // (#117); the wrapper puts it back after the user's startup files.
+    let env = crate::shell_integration::shell_tab_env(&shell, env);
     // POSIX /bin/sh doesn't understand `-l` the same way; keep it to `-i`
     // there. Every other shell (zsh/bash/fish) accepts `-l -i`.
     let args: Vec<String> = if shell.ends_with("/sh") {
