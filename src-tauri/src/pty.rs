@@ -581,6 +581,10 @@ pub async fn pty_open(
         &mut env,
     );
 
+    // cursor-agent runs each command in a login zsh, whose path_helper
+    // would put /usr/bin/pbcopy ahead of the shim (#117).
+    let env = crate::shell_integration::agent_env(agent_id == crate::agent::AgentId::Cursor, env);
+
     let bin_str = bin
         .to_str()
         .ok_or_else(|| format!("{} binary path is not valid UTF-8", spec.display_name))?
@@ -684,6 +688,9 @@ pub async fn pty_open_shell(
             ("KLAUDIO_SHELL".into(), "1".into()),
         ],
     );
+    // A login zsh's path_helper would put /usr/bin/pbcopy ahead of the shim
+    // (#117); the wrapper puts it back after the user's startup files.
+    let env = crate::shell_integration::shell_tab_env(&shell, env);
     // POSIX /bin/sh doesn't understand `-l` the same way; keep it to `-i`
     // there. Every other shell (zsh/bash/fish) accepts `-l -i`.
     let args: Vec<String> = if shell.ends_with("/sh") {

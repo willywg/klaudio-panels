@@ -16,6 +16,21 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   take it back out. Outside Klaudio the script does nothing. Cursor still
   does not send permission alerts.
 
+### Fixed
+- **`pbcopy` from a shell tab or from Cursor shows up in the clipboard
+  history again** ([#117](https://github.com/willywg/klaudio-panels/issues/117)).
+  Both run a login zsh: a shell tab for your prompt, and `cursor-agent` for
+  every command it runs. macOS's `/etc/zprofile` rebuilds `PATH` with
+  `/usr/bin` in front, so they found the system `pbcopy` instead of
+  Klaudio's. zsh now starts through a small Klaudio-owned `ZDOTDIR` that
+  sources your own startup files and then puts the shim back in front. Your
+  dotfiles are not touched, and your prompt, aliases and `ZDOTDIR` are the
+  same as before. Claude tabs, bash and fish are unchanged.
+- **`cargo test` no longer writes into the real `klaudio.log`**
+  ([#118](https://github.com/willywg/klaudio-panels/issues/118)). A test run
+  could rotate the log out from under a running Klaudio, which then kept
+  writing into a file nobody could see. Test builds now log to a temp dir.
+
 ## [1.13.0] — 2026-09-23
 
 ### Fixed
