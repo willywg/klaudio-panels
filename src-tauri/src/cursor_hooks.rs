@@ -86,9 +86,13 @@ pub fn uninstall(path: &Path, command: &str) -> Result<(), HookEditError> {
 }
 
 pub fn snippet(command: &str) -> String {
-    format!(
-        "{{\n  \"version\": 1,\n  \"hooks\": {{\n    \"stop\": [\n      {{ \"command\": \"{command}\" }}\n    ]\n  }}\n}}"
-    )
+    // The command is shell-quoted and may carry characters JSON must
+    // escape; let serde do it rather than interpolating into a literal.
+    serde_json::to_string_pretty(&serde_json::json!({
+        "version": 1,
+        "hooks": { "stop": [ { "command": command } ] }
+    }))
+    .unwrap_or_default()
 }
 
 fn empty_doc() -> Value {
@@ -113,10 +117,22 @@ fn read_editable(path: &Path, command: &str) -> Result<Option<Value>, HookEditEr
             command,
         ));
     }
-    match serde_json::from_str::<Value>(&raw) {
-        Ok(v) if v.is_object() => Ok(Some(v)),
-        _ => Err(unmanaged("hooks.json is not a JSON object", command)),
+    let doc = match serde_json::from_str::<Value>(&raw) {
+        Ok(v) if v.is_object() => v,
+        _ => return Err(unmanaged("hooks.json is not a JSON object", command)),
+    };
+    // A `hooks` or `stop` of the wrong shape is someone else's data we
+    // cannot merge into; rewriting it would throw it away.
+    match doc.get("hooks") {
+        None => {}
+        Some(h) if h.is_object() => {
+            if h.get("stop").is_some_and(|s| !s.is_array()) {
+                return Err(unmanaged("hooks.stop in hooks.json is not a list", command));
+            }
+        }
+        Some(_) => return Err(unmanaged("hooks in hooks.json is not an object", command)),
     }
+    Ok(Some(doc))
 }
 
 fn unmanaged(reason: &str, command: &str) -> HookEditError {
@@ -315,6 +331,28 @@ mod tests {
         assert_eq!(v["hooks"]["stop"][1]["command"], OURS);
         assert_eq!(v["hooks"]["sessionStart"][0]["command"], "/bin/keep");
         assert_eq!(v["extra"], true);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refuses_a_hooks_or_stop_of_the_wrong_shape() {
+        let dir = scratch();
+        let path = dir.join("hooks.json");
+        for raw in [
+            r#"{"version":1,"hooks":{"stop":{"command":"/bin/other"}}}"#,
+            r#"{"version":1,"hooks":["nope"]}"#,
+        ] {
+            fs::write(&path, raw).unwrap();
+            assert!(matches!(
+                install(&path, OURS),
+                Err(HookEditError::Unmanaged { .. })
+            ));
+            assert!(matches!(
+                uninstall(&path, OURS),
+                Err(HookEditError::Unmanaged { .. })
+            ));
+            assert_eq!(fs::read_to_string(&path).unwrap(), raw);
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 

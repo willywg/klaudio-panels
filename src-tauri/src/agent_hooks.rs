@@ -43,8 +43,12 @@ pub const HOOK_SCRIPT: &str = r#"#!/bin/sh
 # Klaudio Panels — cursor-agent stop hook. Inert unless this process is a
 # Klaudio Cursor tab (KLAUDIO_HOOK_SOCK set). Generated at app boot; edits
 # here are overwritten.
+# stdin is always drained: exiting with the payload unread could fail
+# cursor-agent's write with EPIPE.
 if [ -n "$KLAUDIO_HOOK_SOCK" ] && [ -S "$KLAUDIO_HOOK_SOCK" ] && command -v nc >/dev/null 2>&1; then
   { printf '%s\n' "$KLAUDIO_PTY_ID"; cat; } | nc -U -w 1 "$KLAUDIO_HOOK_SOCK" >/dev/null 2>&1
+else
+  cat >/dev/null
 fi
 printf '{}\n'
 exit 0
@@ -267,8 +271,17 @@ pub fn user_hooks_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".cursor/hooks.json"))
 }
 
+/// The `command` string written into `hooks.json`. cursor-agent runs it
+/// through a shell, and the script lives under `Application Support` — the
+/// space would split an unquoted path into a command and an argument, and
+/// the hook would never run. Single-quoted, with any `'` in the path
+/// escaped the POSIX way.
 pub fn user_hooks_command() -> Option<String> {
-    script_path().map(|p| p.to_string_lossy().into_owned())
+    script_path().map(|p| shell_quote(&p.to_string_lossy()))
+}
+
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
 }
 
 #[cfg(test)]
@@ -367,6 +380,34 @@ mod tests {
         assert!(cursor
             .iter()
             .any(|(k, v)| k == "KLAUDIO_PTY_ID" && v == "pty-1"));
+    }
+
+    #[test]
+    fn the_hook_command_survives_a_shell_with_spaces_and_quotes() {
+        let dir = std::env::temp_dir().join(format!(
+            "klaudio hook quote's {}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("klaudio-cursor-hook");
+        std::fs::write(&path, HOOK_SCRIPT).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // How cursor-agent runs a hook: the command string, through a shell,
+        // with the payload on stdin.
+        let command = format!(
+            "{} <<'CURSOR_HOOK_EOF'\n{{}}\nCURSOR_HOOK_EOF",
+            shell_quote(&path.to_string_lossy())
+        );
+        let out = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&command)
+            .env_clear()
+            .output()
+            .expect("run");
+        assert!(out.status.success(), "{:?}", out);
+        assert_eq!(out.stdout, b"{}\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
