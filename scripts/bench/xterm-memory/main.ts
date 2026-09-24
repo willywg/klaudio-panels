@@ -3,6 +3,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
+import { createWebglPool, WEBGL_POOL_CAP } from "../../../src/lib/webgl-pool";
 
 const THEME = {
   background: "#0b0b0c",
@@ -34,6 +35,8 @@ const FONT_FAMILY =
 const CHUNK = 64 * 1024;
 
 const params = new URLSearchParams(location.search);
+const mode = params.get("mode") ?? "matrix";
+const usePool = params.get("pool") === "1";
 const n = Math.max(1, Number(params.get("n") ?? "1"));
 const renderer = params.get("renderer") === "dom" ? "dom" : "webgl";
 const fill = Math.max(0, Number(params.get("fill") ?? "0"));
@@ -100,7 +103,83 @@ function painted(container: HTMLElement): boolean {
   return canvas != null && canvas.width > 0 && canvas.height > 0;
 }
 
+function median(values: number[]): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+/** Time a WebGL attach on a hidden, full terminal until the first painted
+ *  frame after it is shown. One page, ten samples, so the bench is a single
+ *  window. */
+async function measureAttachLatency() {
+  const stack = document.getElementById("stack");
+  if (!stack) throw new Error("missing #stack");
+  const div = document.createElement("div");
+  div.className = "term";
+  div.style.visibility = "hidden";
+  stack.appendChild(div);
+
+  const term = new Terminal({
+    fontFamily: FONT_FAMILY,
+    fontSize: 13,
+    lineHeight: 1.0,
+    letterSpacing: 0,
+    theme: THEME,
+    cursorBlink: true,
+    allowProposedApi: true,
+    scrollback: 10_000,
+    convertEol: false,
+    cols,
+    rows,
+  });
+  term.loadAddon(new FitAddon());
+  term.loadAddon(new Unicode11Addon());
+  term.open(div);
+  term.unicode.activeVersion = "11";
+  term.resize(cols, rows);
+  await document.fonts.ready;
+  term.resize(cols, rows);
+
+  const lines: string[] = [];
+  for (let i = 0; i < 10_000; i++) lines.push(agentLine(i));
+  await writeAll(term, lines.join(""));
+
+  const samples: number[] = [];
+  for (let i = 0; i < 10; i++) {
+    div.style.visibility = "hidden";
+    await twoFrames();
+    const started = performance.now();
+    const webgl = new WebglAddon();
+    term.loadAddon(webgl);
+    div.style.visibility = "visible";
+    await new Promise<void>((resolve) => {
+      const wait = () => {
+        const canvas = div.querySelector("canvas");
+        if (canvas && canvas.width > 0 && canvas.height > 0) {
+          requestAnimationFrame(() => resolve());
+          return;
+        }
+        if (performance.now() - started > 2000) {
+          resolve();
+          return;
+        }
+        requestAnimationFrame(wait);
+      };
+      requestAnimationFrame(wait);
+    });
+    samples.push(Math.round((performance.now() - started) * 10) / 10);
+    webgl.dispose();
+  }
+
+  document.title = `READY latency=${median(samples)} samples=${samples.join(",")}`;
+}
+
 async function main() {
+  if (mode === "latency") {
+    await measureAttachLatency();
+    return;
+  }
   const stack = document.getElementById("stack");
   if (!stack) throw new Error("missing #stack");
 
@@ -135,7 +214,7 @@ async function main() {
     term.unicode.activeVersion = "11";
     term.resize(cols, rows);
 
-    if (renderer === "webgl") {
+    if (renderer === "webgl" && !usePool) {
       try {
         const webgl = new WebglAddon();
         const index = i;
@@ -150,6 +229,34 @@ async function main() {
     }
 
     terms.push(term);
+  }
+
+  if (usePool && renderer === "webgl") {
+    const pool = createWebglPool(WEBGL_POOL_CAP);
+    const addons = new Map<number, WebglAddon>();
+    const detachAt = (index: number) => {
+      addons.get(index)?.dispose();
+      addons.delete(index);
+    };
+    for (let i = 0; i < terms.length; i++) {
+      const decision = pool.touch(String(i));
+      for (const id of decision.detach) detachAt(Number(id));
+      if (!decision.attach) continue;
+      try {
+        const webgl = new WebglAddon();
+        const index = i;
+        webgl.onContextLoss(() => {
+          lostIdx.push(index);
+          webgl.dispose();
+          addons.delete(index);
+          pool.lost(String(index));
+        });
+        terms[i].loadAddon(webgl);
+        addons.set(i, webgl);
+      } catch (err) {
+        console.warn("WebGL renderer unavailable; falling back to canvas.", err);
+      }
+    }
   }
 
   await document.fonts.ready;

@@ -18,8 +18,9 @@ final class Host: NSObject, NSApplicationDelegate {
             defer: false
         )
         window.contentView = webView
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        // Show the window without activating the app, so a matrix of runs
+        // does not pull the user out of whatever they are doing.
+        window.orderFrontRegardless()
         self.webView = webView
         self.window = window
         webView.load(URLRequest(url: url))

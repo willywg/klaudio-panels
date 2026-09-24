@@ -10,6 +10,7 @@ import {
   registerTerminalFocus,
   unregisterTerminalFocus,
 } from "@/lib/terminal-focus-bus";
+import { runWebglDetaches, webglPool } from "@/lib/webgl-pool";
 
 type Props = {
   ptyId: string;
@@ -50,7 +51,10 @@ export function EditorPtyView(props: Props) {
     // Racy: ResizeObserver/setTimeout callbacks can fire after onCleanup has
     // released the terminal. Fitting against a detached host measures 0 and
     // would reflow the editor to a garbage size, so bail on both.
+    // Also skip while WebGL is off: DOM and WebGL disagree on cell width
+    // (8.035 px vs 8 px), and a fit then changes cols and sends SIGWINCH.
     if (disposed || !entry || !container || !entry.host.isConnected) return;
+    if (entry.webglDetached) return;
     const rect = container.getBoundingClientRect();
     if (rect.width < 1 || rect.height < 1) return;
     try {
@@ -146,7 +150,10 @@ export function EditorPtyView(props: Props) {
   // with Claude's. xterm's canvas click handler still focuses on direct
   // clicks. See PRP 017 / #40.
   createEffect(() => {
-    if (!props.active) return;
+    if (!props.active || !entry) return;
+    const decision = webglPool.touch(`editor:${props.ptyId}`);
+    runWebglDetaches(decision.detach);
+    if (decision.attach) entry.attachWebgl();
     requestAnimationFrame(() => {
       safeFit("active-change");
       repaint();
