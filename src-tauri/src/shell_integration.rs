@@ -1,24 +1,32 @@
-//! Keeps the `pbcopy` shim first on `PATH` in shell tabs (#117).
+//! Keeps the `pbcopy` shim first on `PATH` in zsh (#117).
 //!
-//! `spawn_pty` puts the shim dir first on every child's `PATH`. Agent tabs
-//! exec the agent directly, so that holds. A shell tab runs `$SHELL -l -i`,
-//! and on macOS a login zsh reads `/etc/zprofile`, whose `path_helper`
-//! rebuilds `PATH` with the system dirs in front: `/usr/bin/pbcopy` wins and
-//! the copy never reaches the clipboard history.
+//! `spawn_pty` puts the shim dir first on every child's `PATH`. A login zsh
+//! undoes that: `/etc/zprofile` runs `path_helper`, which rebuilds `PATH`
+//! with the system dirs in front, and the user's own files often prepend
+//! more. `/usr/bin/pbcopy` wins and the copy never reaches the clipboard
+//! history. Two children start one: a shell tab runs `$SHELL -l -i`, and
+//! `cursor-agent` runs every command through `$SHELL -l -c` (measured: `$-`
+//! carries `l`, not `i`). Claude's Bash tool keeps the order and is left
+//! alone.
 //!
 //! The fix re-asserts the shim dir *after* the user's startup files without
-//! touching them, the way VS Code's shell integration does. A zsh shell tab
-//! starts with `ZDOTDIR` pointing at a Klaudio-owned dir. Each file there
-//! sources the user's real one, at top level (inside a function, a bare
-//! `typeset` in the user's file would become a local), with `ZDOTDIR` set
-//! back to the user's value while it runs. The `.zshrc` wrapper then moves
-//! the shim dir to the front and restores the user's `ZDOTDIR`, so zsh reads
-//! the user's own `.zlogin` and anything the shell spawns sees their
-//! `ZDOTDIR`, not ours.
+//! touching them, the way VS Code's shell integration does. zsh starts with
+//! `ZDOTDIR` pointing at a Klaudio-owned dir. Each file there sources the
+//! user's real one, at top level (inside a function, a bare `typeset` in the
+//! user's file would become a local), with `ZDOTDIR` set back to the user's
+//! value while it runs. The last file zsh reads in its mode then moves the
+//! shim dir to the front and restores the user's `ZDOTDIR`, so anything the
+//! shell spawns sees their `ZDOTDIR`, not ours:
+//!
+//! | mode                          | files read                   | last  |
+//! | ----------------------------- | ---------------------------- | ----- |
+//! | login (`-l`, `-l -i`)         | zshenv, zprofile, [zshrc], zlogin | zlogin |
+//! | interactive only (`-i`)       | zshenv, zshrc                | zshrc |
+//! | neither (`-c`)                | zshenv                       | zshenv |
 //!
 //! Only zsh is wrapped. bash ignores `--rcfile` in a login shell, and
 //! emulating a login shell around it would change more than it fixes; bash
-//! and fish shell tabs keep today's behavior.
+//! and fish keep today's behavior.
 
 use std::path::{Path, PathBuf};
 
@@ -51,23 +59,39 @@ unset _klaudio_zdotdir
     )
 }
 
-fn zshrc() -> String {
+/// Move the shim dir to the front, give the shell back the user's
+/// `ZDOTDIR`, and drop our variables. Runs once, from whichever file zsh
+/// reads last in its mode.
+fn finish() -> String {
     format!(
-        r#"{HEADER}{source}if [[ -n ${SHIM_DIR} ]]; then
+        r#"if [[ -n ${SHIM_DIR} ]]; then
   path=("${SHIM_DIR}" ${{path:#${{(b){SHIM_DIR}}}}})
 fi
 if [[ -n ${{{USER_ZDOTDIR}+x}} ]]; then export ZDOTDIR=${USER_ZDOTDIR}; else unset ZDOTDIR; fi
 unset {USER_ZDOTDIR} {SHIM_DIR}
-"#,
-        source = source_user_file(".zshrc"),
+"#
     )
 }
 
-fn wrapper_files() -> [(&'static str, String); 3] {
+fn wrapper_files() -> [(&'static str, String); 4] {
+    let finish = finish();
     [
-        (".zshenv", format!("{HEADER}{}", source_user_file(".zshenv"))),
+        (
+            ".zshenv",
+            format!(
+                "{HEADER}{}if [[ ! -o login && ! -o interactive ]]; then\n{finish}fi\n",
+                source_user_file(".zshenv")
+            ),
+        ),
         (".zprofile", format!("{HEADER}{}", source_user_file(".zprofile"))),
-        (".zshrc", zshrc()),
+        (
+            ".zshrc",
+            format!(
+                "{HEADER}{}if [[ ! -o login ]]; then\n{finish}fi\n",
+                source_user_file(".zshrc")
+            ),
+        ),
+        (".zlogin", format!("{HEADER}{}{finish}", source_user_file(".zlogin"))),
     ]
 }
 
@@ -109,20 +133,40 @@ fn apply_zsh_env(
     out
 }
 
-/// The env for a shell tab running `shell`. Unchanged unless it is zsh, the
-/// shim is live, and the wrapper files are in place: a missing wrapper must
-/// never leave the user's shell reading an empty `ZDOTDIR`.
-pub fn shell_tab_env(shell: &str, env: Vec<(String, String)>) -> Vec<(String, String)> {
+/// Point a zsh at the wrapper. Unchanged unless `shell` is zsh, the shim is
+/// live, and the wrapper files are in place: a missing wrapper must never
+/// leave the user's shell reading an empty `ZDOTDIR`.
+fn zsh_env(shell: &str, env: Vec<(String, String)>) -> Vec<(String, String)> {
     if !is_zsh(shell) || !crate::clipboard_history::shim_active() {
         return env;
     }
     let (Some(zsh_dir), Some(shim_dir)) = (zsh_dir(), crate::clipboard_history::shim_dir()) else {
         return env;
     };
-    if !zsh_dir.join(".zshrc").is_file() {
+    if !zsh_dir.join(".zlogin").is_file() {
         return env;
     }
     apply_zsh_env(env, &zsh_dir, &shim_dir)
+}
+
+/// The env for a shell tab running `shell`.
+pub fn shell_tab_env(shell: &str, env: Vec<(String, String)>) -> Vec<(String, String)> {
+    zsh_env(shell, env)
+}
+
+/// The env for a `cursor-agent` child. It runs commands through `$SHELL`
+/// from its own env, so that is the shell to check. Any other agent is
+/// returned unchanged.
+pub fn agent_env(is_cursor: bool, env: Vec<(String, String)>) -> Vec<(String, String)> {
+    if !is_cursor {
+        return env;
+    }
+    let shell = env
+        .iter()
+        .find(|(k, _)| k == "SHELL")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(crate::shell_env::get_user_shell);
+    zsh_env(&shell, env)
 }
 
 #[cfg(test)]
@@ -183,6 +227,15 @@ mod tests {
     /// Start a login, interactive zsh the way a shell tab does, through the
     /// env `apply_zsh_env` builds, and print what the script asks for.
     fn run_zsh(fx: &Fixture, extra_env: &[(&str, &str)], script: &str) -> Option<String> {
+        run_zsh_with(fx, &["-l", "-i"], extra_env, script)
+    }
+
+    fn run_zsh_with(
+        fx: &Fixture,
+        flags: &[&str],
+        extra_env: &[(&str, &str)],
+        script: &str,
+    ) -> Option<String> {
         if !Path::new("/bin/zsh").is_file() {
             return None;
         }
@@ -197,7 +250,8 @@ mod tests {
         env.extend(extra_env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
         let env = apply_zsh_env(env, &fx.wrapper, &fx.shim);
         let out = Command::new("/bin/zsh")
-            .args(["-l", "-i", "-c", script])
+            .args(flags)
+            .args(["-c", script])
             .env_clear()
             .envs(env)
             .current_dir(&fx.root.0)
@@ -289,6 +343,44 @@ mod tests {
             out.contains(&format!("rc=1 zdotdir={}\n", moved.display())),
             "{out}"
         );
+    }
+
+    /// Every mode zsh can start in ends with the shim first, the user's
+    /// files read, and nothing of ours left behind. `-l` alone is how
+    /// cursor-agent runs a command.
+    #[test]
+    fn every_zsh_mode_finds_the_shim_and_cleans_up() {
+        let fx = fixture("modes");
+        std::fs::write(fx.home.join(".zshenv"), "export PATH=/usr/bin:$PATH\n").unwrap();
+        std::fs::write(fx.home.join(".zprofile"), "export PATH=/usr/bin:$PATH\n").unwrap();
+        std::fs::write(fx.home.join(".zshrc"), "export PATH=/usr/bin:$PATH\nRC=1\n").unwrap();
+        std::fs::write(fx.home.join(".zlogin"), "LOGIN=1\n").unwrap();
+        let script = "print -r -- \"pbcopy=$(command -v pbcopy) rc=${RC-} login=${LOGIN-} \
+                      zdotdir=${ZDOTDIR-unset} leak=${KLAUDIO_USER_ZDOTDIR-}${KLAUDIO_SHIM_DIR-}\"";
+        let shim = fx.shim.join("pbcopy").display().to_string();
+        for (flags, rc, login) in [
+            (&["-l", "-i"][..], "1", "1"),
+            (&["-l"][..], "", "1"),
+            (&["-i"][..], "1", ""),
+            (&[][..], "", ""),
+        ] {
+            let Some(out) = run_zsh_with(&fx, flags, &[], script) else {
+                return;
+            };
+            let want = format!("pbcopy={shim} rc={rc} login={login} zdotdir=unset leak=\n");
+            assert!(out.contains(&want), "{flags:?}: {out}");
+        }
+    }
+
+    #[test]
+    fn only_cursor_gets_the_wrapper_among_agents() {
+        let env = vec![
+            ("SHELL".to_string(), "/bin/zsh".to_string()),
+            ("PATH".to_string(), "/usr/bin".to_string()),
+        ];
+        assert_eq!(agent_env(false, env.clone()), env);
+        let bash = vec![("SHELL".to_string(), "/bin/bash".to_string())];
+        assert_eq!(agent_env(true, bash.clone()), bash);
     }
 
     #[test]

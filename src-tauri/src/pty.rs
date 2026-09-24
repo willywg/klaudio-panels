@@ -581,6 +581,10 @@ pub async fn pty_open(
         &mut env,
     );
 
+    // cursor-agent runs each command in a login zsh, whose path_helper
+    // would put /usr/bin/pbcopy ahead of the shim (#117).
+    let env = crate::shell_integration::agent_env(agent_id == crate::agent::AgentId::Cursor, env);
+
     let bin_str = bin
         .to_str()
         .ok_or_else(|| format!("{} binary path is not valid UTF-8", spec.display_name))?
