@@ -10,6 +10,12 @@ import {
 } from "@tauri-apps/plugin-clipboard-manager";
 import { useShellPty } from "@/context/shell-pty";
 import { writePtyChunk } from "@/lib/pty-stream";
+import {
+  registerWebglDetacher,
+  runWebglDetaches,
+  unregisterWebglDetacher,
+  webglPool,
+} from "@/lib/webgl-pool";
 import { openUrlInSystemBrowser } from "@/lib/open-url";
 import { makeBareUrlLinkProvider } from "@/lib/xterm-bare-url-links";
 import {
@@ -77,7 +83,39 @@ export function ShellTerminalView(props: Props) {
 
   const encoder = new TextEncoder();
 
+  let webgl: WebglAddon | undefined;
+  // True only after the pool takes WebGL from this hidden tab. Starts false
+  // so a shell that mounts hidden still fits, and a context loss leaves it
+  // false so a visible shell keeps refitting.
+  let webglDetached = false;
+  const poolId = `shell:${props.ptyId}`;
+
+  function attachWebgl() {
+    if (!term || webgl) return;
+    try {
+      const addon = new WebglAddon();
+      addon.onContextLoss(() => {
+        addon.dispose();
+        if (webgl === addon) webgl = undefined;
+        webglPool.lost(poolId);
+      });
+      term.loadAddon(addon);
+      webgl = addon;
+      webglDetached = false;
+    } catch (err) {
+      console.warn("WebGL unavailable for shell; using canvas.", err);
+      webglDetached = false;
+    }
+  }
+
+  function detachWebgl() {
+    webgl?.dispose();
+    webgl = undefined;
+    webglDetached = true;
+  }
+
   function safeFit() {
+    if (webglDetached) return;
     if (disposed || !fit || !container) return;
     const rect = container.getBoundingClientRect();
     if (rect.width < 1 || rect.height < 1) return;
@@ -113,14 +151,7 @@ export function ShellTerminalView(props: Props) {
     // collision rationale).
     bareUrlDisposable = term.registerLinkProvider(makeBareUrlLinkProvider(term));
 
-    let webgl: WebglAddon | undefined;
-    try {
-      webgl = new WebglAddon();
-      webgl.onContextLoss(() => webgl?.dispose());
-      term.loadAddon(webgl);
-    } catch (err) {
-      console.warn("WebGL unavailable for shell; using canvas.", err);
-    }
+    registerWebglDetacher(poolId, detachWebgl);
 
     requestAnimationFrame(() => safeFit());
     // Second fit after the resize handle + tab strip have settled.
@@ -270,6 +301,10 @@ export function ShellTerminalView(props: Props) {
   // so the only regression is clicking the tab strip header.
   createEffect(() => {
     if (!props.active) return;
+    const decision = webglPool.show(poolId);
+    runWebglDetaches(decision.detach);
+    if (decision.attach) attachWebgl();
+    onCleanup(() => webglPool.hide(poolId));
     requestAnimationFrame(() => {
       if (disposed) return;
       safeFit();
@@ -291,6 +326,9 @@ export function ShellTerminalView(props: Props) {
     bareUrlDisposable?.dispose();
     unregisterTerminalScroller(props.ptyId);
     unregisterTerminalFocus(props.ptyId);
+    unregisterWebglDetacher(poolId);
+    webglPool.release(poolId);
+    detachWebgl();
     try {
       term?.dispose();
     } catch (err) {

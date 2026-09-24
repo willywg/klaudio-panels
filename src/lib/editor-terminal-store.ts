@@ -9,6 +9,11 @@ import { openUrlInSystemBrowser } from "@/lib/open-url";
 import { makeBareUrlLinkProvider } from "@/lib/xterm-bare-url-links";
 import { recordClip } from "@/lib/record-clip";
 import { writePtyChunk } from "@/lib/pty-stream";
+import {
+  registerWebglDetacher,
+  unregisterWebglDetacher,
+  webglPool,
+} from "@/lib/webgl-pool";
 
 /** Editor PTY terminals live HERE, not in the component that shows them.
  *
@@ -117,6 +122,11 @@ export type EditorTerminal = {
    *  rather than in the component so a remount can't spawn a second child on
    *  the same id — which used to leave two editors writing to one channel. */
   spawned: boolean;
+  /** True only after the pool takes WebGL from this hidden editor. A
+   *  context loss leaves it false so a visible nvim keeps fitting. */
+  webglDetached: boolean;
+  attachWebgl: () => void;
+  detachWebgl: () => void;
 };
 
 const terminals = new Map<string, EditorTerminal>();
@@ -152,7 +162,7 @@ export function acquireEditorTerminal(
     theme: THEME,
     cursorBlink: true,
     allowProposedApi: true,
-    scrollback: 10_000,
+    scrollback: 1_000,
     convertEol: false,
   });
   const fit = new FitAddon();
@@ -170,12 +180,31 @@ export function acquireEditorTerminal(
   const bareUrl = term.registerLinkProvider(makeBareUrlLinkProvider(term));
 
   let webgl: WebglAddon | undefined;
-  try {
-    webgl = new WebglAddon();
-    webgl.onContextLoss(() => webgl?.dispose());
-    term.loadAddon(webgl);
-  } catch (err) {
-    console.warn("WebGL renderer unavailable for editor; using canvas.", err);
+  const poolId = `editor:${ptyId}`;
+  let entry: EditorTerminal;
+
+  function attachWebgl() {
+    if (webgl) return;
+    try {
+      const addon = new WebglAddon();
+      addon.onContextLoss(() => {
+        addon.dispose();
+        if (webgl === addon) webgl = undefined;
+        webglPool.lost(poolId);
+      });
+      term.loadAddon(addon);
+      webgl = addon;
+      entry.webglDetached = false;
+    } catch (err) {
+      console.warn("WebGL renderer unavailable for editor; using canvas.", err);
+      entry.webglDetached = false;
+    }
+  }
+
+  function detachWebgl() {
+    webgl?.dispose();
+    webgl = undefined;
+    entry.webglDetached = true;
   }
 
   term.onData((data) => deps.write(ptyId, encoder.encode(data)));
@@ -233,9 +262,13 @@ export function acquireEditorTerminal(
     writePtyChunk(ptyId, term, stripDecrqm(bytes));
   });
 
-  const entry: EditorTerminal = { ptyId, host, term, fit, spawned: false };
+  entry = { ptyId, host, term, fit, spawned: false, webglDetached: false, attachWebgl, detachWebgl };
+  registerWebglDetacher(poolId, detachWebgl);
   terminals.set(ptyId, entry);
   teardowns.set(ptyId, () => {
+    unregisterWebglDetacher(poolId);
+    webglPool.release(poolId);
+    detachWebgl();
     detachData();
     bareUrl.dispose();
     host.remove();

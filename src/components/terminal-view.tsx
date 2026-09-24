@@ -34,6 +34,12 @@ import {
 } from "@/lib/image-files";
 import { recordClip } from "@/lib/record-clip";
 import {
+  registerWebglDetacher,
+  runWebglDetaches,
+  unregisterWebglDetacher,
+  webglPool,
+} from "@/lib/webgl-pool";
+import {
   isAbsoluteish,
   pathKind,
   resolveProjectFile,
@@ -102,7 +108,41 @@ export function TerminalView(props: Props) {
 
   const encoder = new TextEncoder();
 
+  let webgl: WebglAddon | undefined;
+  // True only after the pool takes WebGL from this hidden tab. A fit then
+  // would measure the DOM cell (8.035 px) instead of WebGL's (8 px) and
+  // change cols, which sends a SIGWINCH. Starts false so a tab that mounts
+  // hidden still fits. A context loss leaves it false too: that terminal is
+  // on the DOM renderer on purpose, and a visible one must keep fitting.
+  let webglDetached = false;
+  const poolId = `agent:${props.id}`;
+
+  function attachWebgl() {
+    if (!term || webgl) return;
+    try {
+      const addon = new WebglAddon();
+      addon.onContextLoss(() => {
+        addon.dispose();
+        if (webgl === addon) webgl = undefined;
+        webglPool.lost(poolId);
+      });
+      term.loadAddon(addon);
+      webgl = addon;
+      webglDetached = false;
+    } catch (err) {
+      console.warn("WebGL renderer unavailable; falling back to canvas.", err);
+      webglDetached = false;
+    }
+  }
+
+  function detachWebgl() {
+    webgl?.dispose();
+    webgl = undefined;
+    webglDetached = true;
+  }
+
   function safeFit() {
+    if (webglDetached) return;
     if (!fit || !container) return;
     const rect = container.getBoundingClientRect();
     if (rect.width < 1 || rect.height < 1) return;
@@ -147,13 +187,7 @@ export function TerminalView(props: Props) {
       () => true,
     );
 
-    try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => webgl.dispose());
-      term.loadAddon(webgl);
-    } catch (err) {
-      console.warn("WebGL renderer unavailable; falling back to canvas.", err);
-    }
+    registerWebglDetacher(poolId, detachWebgl);
 
     // Multiple staggered fits — the single rAF call caches a narrow width on
     // the very first project/session load because the split container is
@@ -443,6 +477,10 @@ export function TerminalView(props: Props) {
   createEffect(() => {
     if (!props.active) return;
 
+    const decision = webglPool.show(poolId);
+    runWebglDetaches(decision.detach);
+    if (decision.attach) attachWebgl();
+
     try {
       if (term) term.refresh(0, term.rows - 1);
     } catch {
@@ -452,6 +490,7 @@ export function TerminalView(props: Props) {
     const fitTimer = window.setTimeout(() => safeFit(), 250);
 
     onCleanup(() => {
+      webglPool.hide(poolId);
       window.clearTimeout(fitTimer);
     });
   });
@@ -467,6 +506,9 @@ export function TerminalView(props: Props) {
     scrollDisposable?.dispose();
     unregisterTerminalScroller(props.id);
     unregisterTerminalFocus(props.id);
+    unregisterWebglDetacher(poolId);
+    webglPool.release(poolId);
+    detachWebgl();
     term?.dispose();
     // NOTE: intentionally NOT calling ctx.closeTab here — unmounting the view
     // (e.g. changing project) is separate from killing the PTY. The shell owns
