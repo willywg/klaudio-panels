@@ -207,7 +207,10 @@ function SettingsView(props: { onBack: () => void }) {
 
   const permissionHelp = (): JSX.Element =>
     permissionEnabled() ? (
-      <>Notify when Claude needs permission to use a tool (Bash, Edit, …).</>
+      <>
+        Notify when Claude needs permission to use a tool (Bash, Edit, …).
+        Cursor does not send these.
+      </>
     ) : (
       <>
         Requires the warp/claude-code-warp plugin.{" "}

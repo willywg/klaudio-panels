@@ -215,6 +215,34 @@ fn run_with_timeout(
     }
 }
 
+/// Whether Klaudio's entry is in `~/.cursor/hooks.json`. Status comes from
+/// the file, never from a stored flag.
+#[tauri::command]
+pub fn cursor_hook_status() -> Result<crate::cursor_hooks::HookFileStatus, String> {
+    let path =
+        crate::agent_hooks::user_hooks_path().ok_or("could not resolve the home directory")?;
+    let command = crate::agent_hooks::user_hooks_command().unwrap_or_default();
+    Ok(crate::cursor_hooks::status(&path, &command))
+}
+
+#[tauri::command]
+pub fn cursor_hook_install() -> Result<(), String> {
+    let path =
+        crate::agent_hooks::user_hooks_path().ok_or("could not resolve the home directory")?;
+    let command =
+        crate::agent_hooks::user_hooks_command().ok_or("could not resolve the hook script path")?;
+    crate::cursor_hooks::install(&path, &command).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cursor_hook_uninstall() -> Result<(), String> {
+    let path =
+        crate::agent_hooks::user_hooks_path().ok_or("could not resolve the home directory")?;
+    let command =
+        crate::agent_hooks::user_hooks_command().ok_or("could not resolve the hook script path")?;
+    crate::cursor_hooks::uninstall(&path, &command).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

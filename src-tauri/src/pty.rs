@@ -22,6 +22,11 @@ pub struct PtySession {
     /// Shared with the reader thread. `pty_pause` blocks the next `read`;
     /// `pty_kill` and child exit both wake it (see `PauseGate`).
     pause: Arc<PauseGate>,
+    /// Set for agent tabs. Shell and editor PTYs leave this empty, so a
+    /// Cursor hook event cannot be routed to them.
+    pub(crate) agent: Option<crate::agent::AgentId>,
+    pub(crate) project_path: String,
+    pub(crate) session_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -278,6 +283,8 @@ fn spawn_pty(
     env: Vec<(String, String)>,
     initial_cols: Option<u16>,
     initial_rows: Option<u16>,
+    agent: Option<crate::agent::AgentId>,
+    session_id: Option<String>,
 ) -> Result<(), String> {
     // Ids are minted by the frontend (crypto.randomUUID), so a collision is
     // always a caller bug — and a costly one: `sessions.insert` would replace
@@ -457,6 +464,9 @@ fn spawn_pty(
         writer: Arc::new(Mutex::new(writer)),
         child,
         pause,
+        agent,
+        project_path: cwd.clone(),
+        session_id,
     };
 
     state
@@ -556,11 +566,20 @@ pub async fn pty_open(
         ));
     }
 
-    let launch = match session_id {
-        Some(s) => crate::agent::Launch::Resume(s),
+    let launch = match &session_id {
+        Some(s) => crate::agent::Launch::Resume(s.clone()),
         None => crate::agent::Launch::New,
     };
     let args = crate::agent::argv(agent_id, &launch);
+
+    let sock = crate::agent_hooks::socket_path().map(|p| p.display().to_string());
+    crate::agent_hooks::apply_cursor_hook_env(
+        agent_id == crate::agent::AgentId::Cursor,
+        crate::agent_hooks::hook_active(),
+        sock.as_deref(),
+        &id,
+        &mut env,
+    );
 
     let bin_str = bin
         .to_str()
@@ -576,6 +595,8 @@ pub async fn pty_open(
         env,
         None,
         None,
+        Some(agent_id),
+        session_id,
     )
 }
 
@@ -638,6 +659,8 @@ pub async fn pty_open_editor(
         env,
         cols,
         rows,
+        None,
+        None,
     )
 }
 
@@ -672,7 +695,19 @@ pub async fn pty_open_shell(
         "shell",
         &format!("id={id} shell={shell} cwd={project_path}"),
     );
-    spawn_pty(app, &state, id, shell, args, project_path, env, None, None)
+    spawn_pty(
+        app,
+        &state,
+        id,
+        shell,
+        args,
+        project_path,
+        env,
+        None,
+        None,
+        None,
+        None,
+    )
 }
 
 #[tauri::command]
@@ -821,6 +856,21 @@ fn kill_if_still_alive(child: &Mutex<Box<dyn Child + Send>>) -> bool {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    #[test]
+    fn a_claude_spawn_never_gets_the_cursor_hook_env() {
+        let mut env = vec![("PATH".into(), "/usr/bin".into())];
+        crate::agent_hooks::apply_cursor_hook_env(
+            false,
+            true,
+            Some("/tmp/hook.sock"),
+            "pty-claude",
+            &mut env,
+        );
+        assert!(env
+            .iter()
+            .all(|(k, _)| k != "KLAUDIO_HOOK_SOCK" && k != "KLAUDIO_PTY_ID"));
+    }
 
     /// Spawns a real child (`std::process::Child`, which portable-pty's
     /// `Child`/`ChildKiller` impls target directly — see `lib.rs:271` and

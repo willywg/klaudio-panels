@@ -6,6 +6,16 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
 ## [Unreleased]
 
+### Added
+- **Cursor tabs chime when a turn finishes**
+  ([#109](https://github.com/willywg/klaudio-panels/issues/109)). A Cursor
+  `stop` hook reports the finished turn to the window that spawned it, and
+  that window raises the same completion chime, toast, bell entry and amber
+  pulse a Claude tab already gets. The hook is off until it is turned on in
+  the Agents dialog, which adds one entry to `~/.cursor/hooks.json` and can
+  take it back out. Outside Klaudio the script does nothing. Cursor still
+  does not send permission alerts.
+
 ## [1.13.0] — 2026-09-23
 
 ### Fixed
