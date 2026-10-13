@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { CLAUDE, CURSOR } from "@/lib/agents";
+import { CLAUDE, CURSOR, CODEX } from "@/lib/agents";
 import { resolveCompleteTabId } from "./notifications";
 import type { TerminalTab } from "./terminal";
 
@@ -48,6 +48,15 @@ describe("resolveCompleteTabId", () => {
       "/replace",
       "session-1",
     );
+    expect(tabId).toBeNull();
+  });
+
+  // Codex has no completion-event source yet (deferred — see the agent
+  // registry plan), but the gate itself is agent-generic, so a third agent
+  // must be just as isolated as the second was from the first.
+  test("a completion naming codex cannot update a cursor tab", () => {
+    const tab = makeTab({ agentId: CURSOR });
+    const tabId = resolveCompleteTabId([tab], CODEX, "/replace", "session-1");
     expect(tabId).toBeNull();
   });
 

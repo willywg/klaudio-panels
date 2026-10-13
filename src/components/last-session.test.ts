@@ -166,7 +166,7 @@ describe("last agent", () => {
   });
 
   test("a value this build does not know reads as no preference", () => {
-    localStorage.setItem(lastAgentKey("/proj"), "codex");
+    localStorage.setItem(lastAgentKey("/proj"), "opencode");
     expect(getLastAgent("/proj")).toBeNull();
   });
 });

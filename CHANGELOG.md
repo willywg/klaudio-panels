@@ -4,6 +4,22 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [Unreleased]
+
+### Added
+- **Codex as a third agent.** Klaudio can discover and run the real `codex`
+  TUI, list its rollout sessions alongside Claude and Cursor, and resume a
+  conversation with `codex resume <id>`. Codex is opt-in from the existing
+  Agents dialog. Its date-partitioned rollout store is filtered by project,
+  repeated resumes collapse to one conversation, synthetic environment
+  prompts are omitted from previews, and a first-ever session is watched
+  even when `~/.codex/sessions` did not exist at app startup.
+
+### Tracked work
+- PRP: [`PRPs/027--codex-third-agent.md`](PRPs/027--codex-third-agent.md)
+- PR: [#123](https://github.com/willywg/klaudio-panels/pull/123)
+- Issue: [#122](https://github.com/willywg/klaudio-panels/issues/122)
+
 ## [1.15.0] — 2026-10-13
 
 ### Changed

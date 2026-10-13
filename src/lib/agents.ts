@@ -9,10 +9,11 @@
 
 export const CLAUDE = "claude";
 export const CURSOR = "cursor";
+export const CODEX = "codex";
 
 /** Every agent this build knows, in the order they are offered. Whether one
  *  is *enabled* is a setting the backend owns (`context/agents.tsx`). */
-export const AGENT_IDS = [CLAUDE, CURSOR] as const;
+export const AGENT_IDS = [CLAUDE, CURSOR, CODEX] as const;
 
 export type AgentId = (typeof AGENT_IDS)[number];
 
@@ -25,9 +26,9 @@ export function isAgentId(v: unknown): v is AgentId {
   return typeof v === "string" && (AGENT_IDS as readonly string[]).includes(v);
 }
 
-/** How an agent is shown. Both names start with a C, so the compact badge
- *  uses two letters rather than an initial that would say nothing: Claude
- *  Code's own initials, and the first two of Cursor. */
+/** How an agent is shown. All three names start with a C, so the compact
+ *  badge uses two letters rather than an initial that would say nothing:
+ *  Claude Code's own initials, and the first two of Cursor and Codex. */
 export const AGENT_DISPLAY: Record<
   AgentId,
   {
@@ -53,6 +54,13 @@ export const AGENT_DISPLAY: Record<
     bin: "cursor-agent",
     short: "Cu",
     badgeClass: "text-sky-300 bg-sky-500/10 border-sky-500/30",
+  },
+  codex: {
+    name: "Codex",
+    product: "Codex",
+    bin: "codex",
+    short: "Co",
+    badgeClass: "text-emerald-300 bg-emerald-500/10 border-emerald-500/30",
   },
 };
 

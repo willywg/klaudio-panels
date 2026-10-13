@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { chooseWakeTarget, resolveRestoredTabs } from "./restore-tabs";
-import { CLAUDE, CURSOR } from "./agents";
+import { CLAUDE, CURSOR, CODEX } from "./agents";
 import type { SessionLike } from "./session-label";
 
 function session(id: string, title: string | null = null): SessionLike {
@@ -121,6 +121,18 @@ describe("chooseWakeTarget", () => {
       null,
     );
     expect(target).toEqual({ groupIndex: 0, sessionId: "u1" });
+  });
+
+  test("works with three agents in the picture, not just two", () => {
+    const target = chooseWakeTarget(
+      [
+        { agentId: CLAUDE, restored: [tab("c1")], wanted: "c1" },
+        { agentId: CURSOR, restored: [tab("u1")], wanted: "u1" },
+        { agentId: CODEX, restored: [tab("x1"), tab("x2")], wanted: "x2" },
+      ],
+      CODEX,
+    );
+    expect(target).toEqual({ groupIndex: 2, sessionId: "x2" });
   });
 
   test("nothing to restore means nothing to wake", () => {

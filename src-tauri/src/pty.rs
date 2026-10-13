@@ -506,6 +506,13 @@ pub async fn pty_open(
         ));
     }
     let bin = crate::binary::find_agent_binary(agent_id)?;
+    if agent_id == crate::agent::AgentId::Codex {
+        crate::session_watcher::ensure_codex_watcher(app.clone(), true).map_err(|e| {
+            format!(
+                "could not start the Codex session watcher; no session would be resumable: {e}"
+            )
+        })?;
+    }
     let shell_env = crate::shell_env::cached_shell_env().clone();
 
     let mut extra_env: Vec<(String, String)> = vec![

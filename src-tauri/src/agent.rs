@@ -24,15 +24,17 @@ use crate::sessions::SessionMeta;
 pub enum AgentId {
     Claude,
     Cursor,
+    Codex,
 }
 
 impl AgentId {
-    pub const ALL: &'static [AgentId] = &[AgentId::Claude, AgentId::Cursor];
+    pub const ALL: &'static [AgentId] = &[AgentId::Claude, AgentId::Cursor, AgentId::Codex];
 
     pub fn as_str(self) -> &'static str {
         match self {
             AgentId::Claude => "claude",
             AgentId::Cursor => "cursor",
+            AgentId::Codex => "codex",
         }
     }
 
@@ -83,10 +85,20 @@ static CURSOR: AgentSpec = AgentSpec {
                 or point Klaudio at it explicitly in the agent settings.",
 };
 
+static CODEX: AgentSpec = AgentSpec {
+    id: AgentId::Codex,
+    display_name: "Codex",
+    bin_name: "codex",
+    not_found: "Codex CLI not found. Install with `npm i -g @openai/codex`, the standalone \
+                installer at https://github.com/openai/codex, or point Klaudio at it explicitly \
+                in the agent settings.",
+};
+
 pub fn spec(id: AgentId) -> &'static AgentSpec {
     match id {
         AgentId::Claude => &CLAUDE,
         AgentId::Cursor => &CURSOR,
+        AgentId::Codex => &CODEX,
     }
 }
 
@@ -105,6 +117,11 @@ pub fn installer_candidates(id: AgentId) -> Vec<PathBuf> {
         ],
         // Cursor's installer symlinks this into its versioned install dir.
         AgentId::Cursor => vec![home.join(".local/bin/cursor-agent")],
+        // The standalone installer's shim — confirmed on this machine via
+        // `codex doctor`, which reports the real binary living under
+        // `~/.codex/packages/standalone/releases/<ver>-<arch>/bin/codex`
+        // with this path as its PATH entry.
+        AgentId::Codex => vec![home.join(".local/bin/codex")],
     }
 }
 
@@ -143,6 +160,29 @@ pub fn fallback_candidates(id: AgentId) -> Vec<PathBuf> {
         AgentId::Cursor => dirs::home_dir()
             .map(|h| vec![h.join(".local/bin/agent")])
             .unwrap_or_default(),
+        // Codex also ships as `@openai/codex` on npm, unlike Cursor, so the
+        // same node-version-manager shims Claude's arm walks apply here too.
+        AgentId::Codex => {
+            let mut out = vec![
+                PathBuf::from("/opt/homebrew/bin/codex"),
+                PathBuf::from("/usr/local/bin/codex"),
+                PathBuf::from("/usr/bin/codex"),
+            ];
+            if let Some(home) = dirs::home_dir() {
+                out.extend([
+                    home.join(".bun/bin/codex"),
+                    home.join(".volta/bin/codex"),
+                    home.join(".asdf/shims/codex"),
+                ]);
+                let nvm_root = home.join(".nvm/versions/node");
+                if let Ok(entries) = std::fs::read_dir(&nvm_root) {
+                    for entry in entries.flatten() {
+                        out.push(entry.path().join("bin/codex"));
+                    }
+                }
+            }
+            out
+        }
     }
 }
 
@@ -163,6 +203,15 @@ pub fn accepts_version(id: AgentId, stdout: &str) -> bool {
             .map(str::trim)
             .find(|l| !l.is_empty())
             .is_some_and(is_cursor_release),
+        // `codex --version` prints `codex-cli <semver>` (`codex-cli 0.146.0`,
+        // measured directly). Checking the prefix rather than parsing the
+        // whole line out is enough to tell it apart from anything else that
+        // might answer to the name `codex`.
+        AgentId::Codex => stdout
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .is_some_and(|l| l.starts_with("codex-cli ")),
     }
 }
 
@@ -193,6 +242,11 @@ pub fn mints_session_ids(id: AgentId) -> bool {
     match id {
         AgentId::Claude => false,
         AgentId::Cursor => true,
+        // Like Claude: no mint-and-resume path exists. A session id only
+        // exists once Codex has written the rollout file's first line, so a
+        // new tab goes through the same FIFO/`session:new` correlation
+        // Claude's tabs do (see `session_watcher.rs`).
+        AgentId::Codex => false,
     }
 }
 
@@ -203,6 +257,7 @@ pub fn create_session_argv(id: AgentId) -> Option<Vec<String>> {
     match id {
         AgentId::Claude => None,
         AgentId::Cursor => Some(vec!["create-chat".to_string()]),
+        AgentId::Codex => None,
     }
 }
 
@@ -220,6 +275,14 @@ pub fn argv(id: AgentId, launch: &Launch) -> Vec<String> {
         // measured, not assumed (PRP 024).
         (AgentId::Cursor, Launch::Resume(session_id)) => {
             vec!["--resume".to_string(), session_id.clone()]
+        }
+        (AgentId::Codex, Launch::New) => Vec::new(),
+        // `codex resume <id>` is a SUBCOMMAND, not a `--resume` flag —
+        // confirmed via `codex resume --help`. Copying Cursor's arm here
+        // verbatim would ship a broken argv (`codex --resume <id>` is not a
+        // thing codex understands).
+        (AgentId::Codex, Launch::Resume(session_id)) => {
+            vec!["resume".to_string(), session_id.clone()]
         }
     }
 }
@@ -245,6 +308,8 @@ pub fn extra_env(id: AgentId) -> Vec<(String, String)> {
         // CLI reads it as a fallback conversation id — but it is undocumented
         // and `--resume <id>` is the documented route to the same place.
         AgentId::Cursor => Vec::new(),
+        // No warp-equivalent protocol to unlock.
+        AgentId::Codex => Vec::new(),
     }
 }
 
@@ -308,6 +373,32 @@ fn blocked_env(id: AgentId) -> &'static [&'static str] {
             "CURSOR_REQUEST_ID",
             "__CURSOR_SANDBOX_ENV_RESTORE",
         ],
+        // Measured, not read off the bundle (same gate PRP 024 ran for
+        // Cursor): ran `codex exec --sandbox read-only` asking it to execute
+        // `env | cut -d= -f1 | sort` (names only, so no value reached a
+        // transcript) and diffed that against the parent's names. Codex's
+        // child added eight in 0.146.0; 0.160.0 additionally exposes
+        // `CODEX_SESSION_ID` and `CODEX_PERMISSION_PROFILE` in the live
+        // session environment. These names are this *launching* session's
+        // identity and execution policy — exactly the #104 shape, where a
+        // fresh `codex` must not adopt the outer session id, CI mode, or
+        // sandbox/permission decision as its own.
+        //
+        // Left alone on purpose, same reasoning PRP 024 used for Cursor's
+        // `CURSOR_RIPGREP_PATH` and `NO_COLOR`: `GH_PAGER` / `GIT_PAGER` /
+        // `LC_ALL` / `LC_CTYPE` point at output formatting, not session
+        // identity, and a nested Codex inheriting them behaves the same way
+        // the outer one chose to, which is harmless. `NO_COLOR` is a
+        // convention a user may set on purpose; stripping it to protect no
+        // one would uncolour every agent's TUI launched from inside a Codex
+        // shell.
+        AgentId::Codex => &[
+            "CODEX_CI",
+            "CODEX_PERMISSION_PROFILE",
+            "CODEX_SANDBOX_NETWORK_DISABLED",
+            "CODEX_SESSION_ID",
+            "CODEX_THREAD_ID",
+        ],
     }
 }
 
@@ -341,6 +432,7 @@ pub fn enabled_by_default(id: AgentId) -> bool {
     match id {
         AgentId::Claude => true,
         AgentId::Cursor => false,
+        AgentId::Codex => false,
     }
 }
 
@@ -360,6 +452,17 @@ pub fn supports_profiles(id: AgentId) -> bool {
         // a `.envrc` that sets them reaches the spawned agent (direnv still
         // applies) but not Klaudio's bookkeeping — see PRP 024.
         AgentId::Cursor => false,
+        // Codex's single `CODEX_HOME` controls both config and session
+        // storage together — structurally the same shape as
+        // `CLAUDE_CONFIG_DIR`, unlike Cursor's split pair — which would make
+        // `true` sound here. Deferred anyway: `project_env.rs`'s
+        // `CLAUDE_CONFIG_DIR`-hardcoded resolution would need generalizing
+        // to a per-agent variable name first, and that is a separate change
+        // from adding the third agent. Filed as a follow-up, same shape as
+        // Cursor's own deferred profiles. A `.envrc` that sets `CODEX_HOME`
+        // reaches the spawned process (direnv still applies) but not
+        // Klaudio's bookkeeping.
+        AgentId::Codex => false,
     }
 }
 
@@ -367,6 +470,7 @@ pub fn list_sessions(id: AgentId, project_path: &str) -> Result<Vec<SessionMeta>
     match id {
         AgentId::Claude => crate::sessions::list_claude_sessions(project_path),
         AgentId::Cursor => crate::cursor_sessions::list_cursor_sessions(project_path),
+        AgentId::Codex => crate::codex_sessions::list_codex_sessions(project_path),
     }
 }
 
@@ -378,6 +482,9 @@ pub fn watch_root(id: AgentId) -> Option<PathBuf> {
     match id {
         AgentId::Claude => dirs::home_dir().map(|h| h.join(".claude/projects")),
         AgentId::Cursor => crate::cursor_sessions::chats_root(),
+        // Default root only — same caveat as Cursor's `CURSOR_DATA_DIR`,
+        // consistent with deferring Codex profiles above.
+        AgentId::Codex => crate::codex_sessions::sessions_root(),
     }
 }
 
@@ -389,6 +496,7 @@ mod tests {
     fn parses_known_ids_and_rejects_others() {
         assert_eq!(AgentId::parse("claude").unwrap(), AgentId::Claude);
         assert_eq!(AgentId::parse("cursor").unwrap(), AgentId::Cursor);
+        assert_eq!(AgentId::parse("codex").unwrap(), AgentId::Codex);
         assert!(AgentId::parse("agent").is_err());
         assert!(AgentId::parse("").is_err());
     }
@@ -510,6 +618,38 @@ mod tests {
         assert!(strip_blocked_env(AgentId::Cursor, &mut e).is_empty());
     }
 
+    // Gate 2: a fresh `codex` that inherits the launching session's own
+    // thread id, CI flag, or sandbox decision would read them as its own.
+    // `GH_PAGER`/`LC_ALL`/`NO_COLOR` are formatting, not identity, and reach
+    // the child unchanged — same as Cursor's `CURSOR_RIPGREP_PATH`.
+    #[test]
+    fn strips_the_markers_a_fresh_codex_would_adopt_as_its_own_session() {
+        let mut e = env(&[
+            ("CODEX_THREAD_ID", "the-launching-thread"),
+            ("CODEX_SESSION_ID", "the-launching-session"),
+            ("CODEX_CI", "1"),
+            ("CODEX_PERMISSION_PROFILE", "managed"),
+            ("CODEX_SANDBOX_NETWORK_DISABLED", "1"),
+            ("CODEX_VERSION", "0.160.0"),
+            ("GH_PAGER", "cat"),
+            ("NO_COLOR", "1"),
+            ("PATH", "/usr/bin"),
+        ]);
+        let stripped = strip_blocked_env(AgentId::Codex, &mut e);
+
+        assert_eq!(
+            stripped,
+            vec![
+                "CODEX_CI",
+                "CODEX_PERMISSION_PROFILE",
+                "CODEX_SANDBOX_NETWORK_DISABLED",
+                "CODEX_SESSION_ID",
+                "CODEX_THREAD_ID",
+            ]
+        );
+        assert_eq!(names(&e), vec!["CODEX_VERSION", "GH_PAGER", "NO_COLOR", "PATH"]);
+    }
+
     #[test]
     fn cursor_is_recognised_by_its_release_shaped_version() {
         assert!(accepts_version(AgentId::Cursor, "2026.09.18-9a7762b\n"));
@@ -522,6 +662,15 @@ mod tests {
         assert!(!accepts_version(AgentId::Cursor, "agent 0.4.1\n"));
         assert!(!accepts_version(AgentId::Cursor, ""));
         assert!(accepts_version(AgentId::Claude, "2.1.280 (Claude Code)"));
+    }
+
+    // Measured directly: `codex --version` on this machine prints
+    // `codex-cli 0.146.0`.
+    #[test]
+    fn codex_is_recognised_by_its_codex_cli_prefixed_version() {
+        assert!(accepts_version(AgentId::Codex, "codex-cli 0.146.0\n"));
+        assert!(!accepts_version(AgentId::Codex, "0.146.0\n"));
+        assert!(!accepts_version(AgentId::Codex, ""));
     }
 
     #[test]
@@ -545,6 +694,17 @@ mod tests {
         assert_eq!(
             argv(AgentId::Claude, &Launch::Resume("abc".into())),
             vec!["--resume".to_string(), "abc".to_string()]
+        );
+    }
+
+    // `codex resume <id>` is a subcommand, not a `--resume` flag — the one
+    // spot copying Cursor's arm verbatim would have shipped broken.
+    #[test]
+    fn codex_argv_matches_the_cli() {
+        assert!(argv(AgentId::Codex, &Launch::New).is_empty());
+        assert_eq!(
+            argv(AgentId::Codex, &Launch::Resume("sess".into())),
+            vec!["resume".to_string(), "sess".to_string()]
         );
     }
 }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { findPromotionCandidate, shouldApplySessionMeta } from "./session-watcher";
 import type { TerminalTab } from "./terminal";
-import { CLAUDE } from "@/lib/agents";
+import { CLAUDE, CODEX } from "@/lib/agents";
 
 function makeTab(overrides: Partial<TerminalTab> = {}): TerminalTab {
   return {
@@ -53,6 +53,18 @@ describe("findPromotionCandidate", () => {
     );
     expect(found?.id).toBe("d");
   });
+
+  // Decision #10's structural gate: with a third agent now registered, a
+  // pending tab must still only ever be promoted by its OWN agent's event.
+  test("a different agent's session:new never promotes this tab", () => {
+    const tab = makeTab({ agentId: CLAUDE, profileId: "default" });
+    const found = findPromotionCandidate([tab], {
+      agent: CODEX,
+      project_path: "/replace",
+      jsonl_created_at_ms: 1_500,
+    });
+    expect(found).toBeUndefined();
+  });
 });
 
 describe("shouldApplySessionMeta", () => {
@@ -70,5 +82,10 @@ describe("shouldApplySessionMeta", () => {
 
   test("false when no tab was found", () => {
     expect(shouldApplySessionMeta(undefined, CLAUDE)).toBe(false);
+  });
+
+  test("false when the tab belongs to a different agent", () => {
+    const tab = makeTab({ agentId: CODEX, profileId: "default" });
+    expect(shouldApplySessionMeta(tab, CLAUDE)).toBe(false);
   });
 });

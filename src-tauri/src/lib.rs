@@ -6,6 +6,7 @@ pub mod binary;
 pub mod cli_agent;
 pub mod cli_args;
 pub mod clipboard_history;
+pub mod codex_sessions;
 pub mod cursor_hooks;
 pub mod cursor_sessions;
 pub mod debug_log;

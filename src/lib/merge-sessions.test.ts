@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mergeSessionListings, type AgentListing } from "./merge-sessions";
-import { CLAUDE, CURSOR, type AgentId } from "./agents";
+import { CLAUDE, CURSOR, CODEX, type AgentId } from "./agents";
 
 type Row = {
   id: string;
@@ -61,6 +61,16 @@ describe("mergeSessionListings", () => {
       "claude:same",
       "cursor:same",
     ]);
+  });
+
+  test("interleaves all three agents by recency", () => {
+    const merged = mergeSessionListings<Row>([
+      { agent: CLAUDE, ok: true, sessions: [row(CLAUDE, "c", "2026-09-22T10:00:00Z")] },
+      { agent: CURSOR, ok: true, sessions: [row(CURSOR, "u", "2026-09-21T10:00:00Z")] },
+      { agent: CODEX, ok: true, sessions: [row(CODEX, "x", "2026-09-20T10:00:00Z")] },
+    ]);
+    expect(merged.sessions.map((s) => s.id)).toEqual(["c", "u", "x"]);
+    expect(merged.errors).toEqual([]);
   });
 
   test("rows with no timestamp sink to the bottom", () => {
