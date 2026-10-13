@@ -4,7 +4,7 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
-## [Unreleased]
+## [1.16.0] — 2026-10-13
 
 ### Added
 - **Codex as a third agent.** Klaudio can discover and run the real `codex`
@@ -13,7 +13,11 @@ semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
   Agents dialog. Its date-partitioned rollout store is filtered by project,
   repeated resumes collapse to one conversation, synthetic environment
   prompts are omitted from previews, and a first-ever session is watched
-  even when `~/.codex/sessions` did not exist at app startup.
+  even when `~/.codex/sessions` did not exist at app startup. Not yet: a
+  finished Codex turn raises no chime or notification
+  ([#126](https://github.com/willywg/klaudio-panels/issues/126)), and a
+  rename made inside Codex does not reach the tab or the list
+  ([#125](https://github.com/willywg/klaudio-panels/issues/125)).
 
 ### Tracked work
 - PRP: [`PRPs/027--codex-third-agent.md`](PRPs/027--codex-third-agent.md)
