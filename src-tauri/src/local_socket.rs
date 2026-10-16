@@ -5,7 +5,9 @@
 //! would unlink the name out from under the first (#96). The key is the
 //! executable path, so it is stable across restarts and toolchain upgrades.
 
+#[cfg(unix)]
 use std::io;
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
@@ -35,14 +37,22 @@ pub(crate) fn install_key() -> String {
 /// Removing an abandoned socket is necessary — `bind` fails with
 /// `EADDRINUSE` on a leftover from a crash even though nothing is listening.
 /// Removing a live one unlinks the name out from under a running instance.
+#[cfg(unix)]
 pub(crate) fn has_live_listener(path: &Path) -> bool {
     UnixStream::connect(path).is_ok()
+}
+
+#[cfg(not(unix))]
+#[allow(dead_code)]
+pub(crate) fn has_live_listener(_path: &Path) -> bool {
+    false
 }
 
 /// Bind `path`, refusing to take it from a live listener.
 ///
 /// `Ok(None)` means another process is already listening. A leftover file
 /// with nobody behind it is removed first.
+#[cfg(unix)]
 pub(crate) fn bind_exclusive(path: &Path) -> io::Result<Option<UnixListener>> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -58,7 +68,7 @@ pub(crate) fn cache_socket(name: &str) -> Option<PathBuf> {
     dirs::cache_dir().map(|c| c.join(format!("klaudio-panels/{name}-{}.sock", install_key())))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

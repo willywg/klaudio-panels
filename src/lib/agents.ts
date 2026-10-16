@@ -10,10 +10,11 @@
 export const CLAUDE = "claude";
 export const CURSOR = "cursor";
 export const CODEX = "codex";
+export const AGY = "agy";
 
 /** Every agent this build knows, in the order they are offered. Whether one
  *  is *enabled* is a setting the backend owns (`context/agents.tsx`). */
-export const AGENT_IDS = [CLAUDE, CURSOR, CODEX] as const;
+export const AGENT_IDS = [CLAUDE, CURSOR, CODEX, AGY] as const;
 
 export type AgentId = (typeof AGENT_IDS)[number];
 
@@ -61,6 +62,13 @@ export const AGENT_DISPLAY: Record<
     bin: "codex",
     short: "Co",
     badgeClass: "text-emerald-300 bg-emerald-500/10 border-emerald-500/30",
+  },
+  agy: {
+    name: "Antigravity",
+    product: "Antigravity",
+    bin: "agy",
+    short: "AG",
+    badgeClass: "text-purple-300 bg-purple-500/10 border-purple-500/30",
   },
 };
 

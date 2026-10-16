@@ -21,8 +21,8 @@ const WARP_PLUGIN_INSTALL_URL =
 type View = "list" | "settings";
 
 function projectName(projectPath: string): string {
-  const trimmed = projectPath.replace(/\/+$/, "");
-  const slash = trimmed.lastIndexOf("/");
+  const trimmed = projectPath.replace(/[/\\]+$/, "");
+  const slash = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
 }
 

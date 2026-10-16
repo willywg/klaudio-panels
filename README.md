@@ -40,7 +40,37 @@ older Homebrew versions don't have (or need) the command.
 
 **Or download directly:** grab `Klaudio Panels_<version>_universal.dmg` from the [latest release](https://github.com/willywg/klaudio-panels/releases/latest) and drag the app into `/Applications`.
 
-## First launch
+## Install & Run (Windows via Terminal)
+
+Klaudio Panels can be built and run directly from your terminal (PowerShell or Command Prompt):
+
+### 1. Prerequisites
+- [Rust](https://rustup.rs/) (Windows toolchain)
+- [Node.js](https://nodejs.org/) (v18+) or [Bun](https://bun.sh/)
+
+### 2. Clone & Build
+```powershell
+git clone https://github.com/willywg/klaudio-panels.git
+cd klaudio-panels
+npm install
+npm run tauri build
+```
+The compiled standalone executable will be at `src-tauri\target\release\klaudio-panels.exe`.
+
+### 3. Install the `klaudio` CLI command
+Once Klaudio Panels is running, use the app menu:
+**Klaudio → Install 'klaudio' command**.
+
+This installs `klaudio.cmd` to a standard user PATH directory (`~/.cargo/bin`, `~/.local/bin`, or `~/bin`). You can then launch any project straight from your terminal:
+
+```powershell
+klaudio .              # open current directory in Klaudio Panels
+klaudio C:\my-project  # open specific project
+```
+
+> For full architectural details of the Windows port, see [WINDOWS_PORT.md](WINDOWS_PORT.md).
+
+## First launch (macOS)
 
 Klaudio Panels is **not yet signed with an Apple Developer ID** — see [Platform support](#platform-support) for why. On first launch, macOS will refuse to open the app and show one of these two warnings:
 
@@ -69,8 +99,8 @@ Both warnings are Gatekeeper defaults for unsigned apps, not signs that anything
 | OS | Status | Notes |
 | --- | --- | --- |
 | **macOS 14+** (Sonoma, Sequoia) | ✅ primary target | Tested on Apple Silicon and Intel. Universal `.dmg` is what the maintainer ships. |
+| **Windows 10/11** | ✅ supported | Native Windows port with ConPTY shell, NSIS installer, deep linking, and custom titlebar. Resolves [#2](https://github.com/willywg/klaudio-panels/issues/2). See [WINDOWS_PORT.md](WINDOWS_PORT.md). |
 | **Linux** | 🧪 untested | Every release carries an `.AppImage` and a `.deb` built by CI, named `-untested` because that is exactly what they are — they compile, but nobody has run them end to end. Notifications, clipboard history and "Open in…" take macOS-only paths that have no Linux equivalent yet. Help validating is very welcome — see [#1](https://github.com/willywg/klaudio-panels/issues/1). |
-| **Windows** | ❌ not supported yet | Several backend modules are stubbed on Windows. Help porting is welcome — see [#2](https://github.com/willywg/klaudio-panels/issues/2). |
 
 **About code signing.** Apple's Developer Program is US$99/year. We'll pay it once the project has real usage; until then, the first-launch workaround above is the cost of keeping the project free. Apple has been tightening the unsigned-app escape hatches with each macOS release, so this is a temporary state, not a permanent stance.
 

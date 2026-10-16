@@ -6,6 +6,7 @@ pub mod binary;
 pub mod cli_agent;
 pub mod cli_args;
 pub mod clipboard_history;
+pub mod clipboard_image;
 pub mod codex_sessions;
 pub mod cursor_hooks;
 pub mod cursor_sessions;
@@ -52,7 +53,7 @@ impl Drop for TtyGuard {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _tty_guard = TtyGuard;
-    use tauri::menu::{Menu, MenuItem, Submenu};
+    #[cfg(target_os = "macos")]
     use tauri::Emitter;
 
     tauri::Builder::default()
@@ -70,6 +71,7 @@ pub fn run() {
                 );
             }
             clipboard_history::install(app.handle().clone());
+            #[cfg(unix)]
             if let Err(e) = shell_integration::install() {
                 debug_log::write("shell", &format!("zsh wrapper install failed: {e}"));
             }
@@ -89,11 +91,21 @@ pub fn run() {
                     }
                 });
             }
+            #[cfg(target_os = "windows")]
+            {
+                use tauri::Manager;
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_decorations(false);
+                }
+            }
+
             // Append a "Klaudio" submenu to the default OS menu bar with the
             // Install / Uninstall CLI items. These just emit intents to the
             // frontend which invokes the Tauri commands and shows the result
             // dialog — keeps all dialog plumbing on the JS side.
+            #[cfg(target_os = "macos")]
             {
+                use tauri::menu::{Menu, MenuItem, Submenu};
                 let install_item = MenuItem::with_id(
                     app,
                     "install_cli",
@@ -176,6 +188,7 @@ pub fn run() {
             clipboard_history::clipboard_history_clear,
             clipboard_history::clipboard_history_set_enabled,
             clipboard_history::clipboard_shim_active,
+            clipboard_image::paste_clipboard_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

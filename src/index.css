@@ -63,6 +63,37 @@ button:not(:disabled) {
   background: rgba(99, 102, 241, 0.18);
   transition: background 400ms ease-out;
 }
+
+/* Terminal scrollbar: hide completely while preserving full scrollability via wheel/keys */
+.xterm .xterm-viewport {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+.xterm .xterm-viewport::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* Global sleek dark scrollbars across WebView2 on Windows */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* Hover thumbnail for image paths in the terminal. Absolutely positioned
    inside `Terminal.element`, which is why it also carries xterm's
    `.xterm-hover` class — that's what keeps it from swallowing the mouse

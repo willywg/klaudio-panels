@@ -7,8 +7,11 @@
 //! `session:complete` event. The payload is never logged: it can carry the
 //! user's email.
 
+#[cfg(unix)]
 use std::io::Read;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,7 +21,9 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::agent::AgentId;
 use crate::debug_log;
-use crate::local_socket::{self, bind_exclusive};
+use crate::local_socket;
+#[cfg(unix)]
+use crate::local_socket::bind_exclusive;
 use crate::session_watcher::SessionCompletePayload;
 
 const MAX_MESSAGE: u64 = 64 * 1024;
@@ -165,6 +170,7 @@ pub fn apply_cursor_hook_env(
     env.push(("KLAUDIO_PTY_ID".into(), pty_id.to_string()));
 }
 
+#[cfg(unix)]
 pub fn install(app: AppHandle) {
     if let Err(e) = write_script() {
         debug_log::write("hooks", &format!("script install failed: {e}"));
@@ -186,6 +192,10 @@ pub fn install(app: AppHandle) {
     }
 }
 
+#[cfg(not(unix))]
+pub fn install(_app: AppHandle) {}
+
+#[cfg(unix)]
 fn write_script() -> std::io::Result<()> {
     let Some(path) = script_path() else {
         return Ok(());
@@ -198,6 +208,7 @@ fn write_script() -> std::io::Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn accept_loop(app: AppHandle, listener: UnixListener) {
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
@@ -213,6 +224,7 @@ fn accept_loop(app: AppHandle, listener: UnixListener) {
     }
 }
 
+#[cfg(unix)]
 fn deliver(app: &AppHandle, buf: &[u8]) {
     let parsed = match parse_hook_message(buf) {
         Ok(p) => p,
@@ -254,6 +266,7 @@ fn deliver(app: &AppHandle, buf: &[u8]) {
     }
 }
 
+#[cfg(unix)]
 fn lookup_pty(app: &AppHandle, pty_id: &str) -> Option<OpenPty> {
     let state = app.state::<crate::pty::PtyState>();
     let sessions = state.sessions.lock().ok()?;
@@ -383,6 +396,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn the_hook_command_survives_a_shell_with_spaces_and_quotes() {
         let dir = std::env::temp_dir().join(format!(
             "klaudio hook quote's {}",
@@ -411,6 +425,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn the_script_always_exits_clean_and_stays_off_disk() {
         assert!(HOOK_SCRIPT.starts_with("#!/bin/sh\n"));
         assert!(HOOK_SCRIPT.contains("printf '{}\\n'"));

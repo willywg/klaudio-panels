@@ -69,9 +69,13 @@ export const TERMINAL_EDITOR_APPS: readonly OpenInApp[] = [
   { id: "micro", label: "Micro",  openWith: "micro", kind: "terminal", icon: Terminal, color: "text-amber-300",    terminalEditor: "micro" },
 ] as const;
 
+const isMac =
+  typeof navigator !== "undefined" &&
+  navigator.platform.toUpperCase().includes("MAC");
+
 export const FINDER_APP: OpenInApp = {
   id: "finder",
-  label: "Finder",
+  label: isMac ? "Finder" : "File Explorer",
   openWith: "Finder",
   kind: "finder",
   icon: Folder,

@@ -1,0 +1,6 @@
+# Auto-detect text files and normalize line endings to LF for cross-platform repo
+* text=auto eol=lf
+
+# Windows batch files require CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf

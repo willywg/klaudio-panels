@@ -163,8 +163,12 @@ export function HomeScreen(props: Props) {
 }
 
 function abbreviateHome(path: string): string {
-  // Infer $HOME from any known project path (first segment "/Users/<name>").
-  const m = path.match(/^(\/Users\/[^/]+)/);
-  if (m) return "~" + path.slice(m[1].length);
+  // Infer $HOME from any known project path ("/Users/<name>" or "C:\Users\<name>").
+  const m = path.match(/^([A-Za-z]:[/\\]Users[/\\][^/\\]+|\/Users\/[^/]+)/i);
+  if (m) {
+    const rest = path.slice(m[1].length);
+    const sep = path.includes("\\") ? "\\" : "/";
+    return "~" + (rest.startsWith("/") || rest.startsWith("\\") ? rest : sep + rest);
+  }
   return path;
 }

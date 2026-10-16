@@ -8,7 +8,6 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -232,16 +231,21 @@ fn write_doc(path: &Path, doc: &Value) -> Result<(), HookEditError> {
     }
     write_backup_once(path)?;
     let body = serde_json::to_vec_pretty(doc).map_err(|e| HookEditError::Io(e.to_string()))?;
-    let mode = fs::metadata(path)
-        .ok()
-        .map(|m| m.permissions().mode() & 0o777)
-        .unwrap_or(0o644);
     let tmp = temp_path(path);
     {
-        let mut f = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(mode)
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(path)
+                .ok()
+                .map(|m| m.permissions().mode() & 0o777)
+                .unwrap_or(0o644);
+            opts.mode(mode);
+        }
+        let mut f = opts
             .open(&tmp)
             .map_err(|e| HookEditError::Io(e.to_string()))?;
         f.write_all(&body)
@@ -392,6 +396,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn refuses_comments_invalid_json_and_a_symlink() {
         let dir = scratch();
         let path = dir.join("hooks.json");
