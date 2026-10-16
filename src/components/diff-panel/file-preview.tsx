@@ -44,6 +44,8 @@ function isProsePath(relPath: string): boolean {
   return PROSE_EXTENSIONS.has(ext);
 }
 
+const isMac = typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC");
+
 export function FilePreview(props: Props) {
   const panel = useDiffPanel();
   const [html, setHtml] = createSignal<string>("");
@@ -301,8 +303,8 @@ export function FilePreview(props: Props) {
             class="absolute top-2 right-3 z-10 w-7 h-7 rounded-md flex items-center justify-center bg-neutral-900/90 border border-neutral-700 text-neutral-400 hover:text-neutral-100 hover:border-neutral-500 transition"
             title={
               mode() === "rendered"
-                ? "View source (⌘⇧M)"
-                : "View rendered (⌘⇧M)"
+                ? `View source (${isMac ? "⌘⇧M" : "Ctrl+Shift+M"})`
+                : `View rendered (${isMac ? "⌘⇧M" : "Ctrl+Shift+M"})`
             }
             onClick={toggleMode}
           >

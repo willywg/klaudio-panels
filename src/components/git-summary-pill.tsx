@@ -19,12 +19,16 @@ export function GitSummaryPill(props: Props) {
     panel.toggle(props.projectPath);
   }
 
+  const isMac =
+    typeof navigator !== "undefined" &&
+    navigator.platform.toUpperCase().includes("MAC");
+
   return (
     <Show when={visible()}>
       <button
         onClick={onClick}
         class="h-6 px-2 rounded-md flex items-center gap-1.5 text-[11px] font-mono bg-neutral-900/70 border border-neutral-800 hover:border-neutral-700 hover:bg-neutral-800 transition"
-        title="Toggle diff panel (⌘⇧D)"
+        title={`Toggle diff panel (${isMac ? "⌘⇧D" : "Ctrl+Shift+D"})`}
       >
         <span class="text-emerald-400">+{summary().adds}</span>
         <span class="text-neutral-700">·</span>

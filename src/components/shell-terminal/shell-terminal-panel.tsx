@@ -22,6 +22,10 @@ type Props = {
   isActive: boolean;
 };
 
+const isMac =
+  typeof navigator !== "undefined" &&
+  navigator.platform.toUpperCase().includes("MAC");
+
 export function ShellTerminalPanel(props: Props) {
   const pty = useShellPty();
   const panel = useShellPanel();
@@ -182,7 +186,7 @@ export function ShellTerminalPanel(props: Props) {
         <button
           class="h-full w-9 flex items-center justify-center text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/60 transition"
           onClick={handleClosePanel}
-          title="Hide terminal (⌘J)"
+          title={`Hide terminal (${isMac ? "⌘J" : "Ctrl+J"})`}
         >
           <X size={14} strokeWidth={1.75} />
         </button>

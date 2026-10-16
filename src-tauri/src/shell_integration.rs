@@ -169,7 +169,7 @@ pub fn agent_env(is_cursor: bool, env: Vec<(String, String)>) -> Vec<(String, St
     zsh_env(&shell, env)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::process::Command;

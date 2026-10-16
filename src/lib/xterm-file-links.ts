@@ -5,6 +5,9 @@ import {
   readLogicalLine,
 } from "@/lib/xterm-logical-line";
 
+/** Path segment separator: forward slash or Windows backslash. */
+const S = String.raw`[/\\]`;
+
 /** One path segment: word characters plus the punctuation real filenames
  *  carry. */
 const SEG = String.raw`[\w.@-]+`;
@@ -28,33 +31,30 @@ const EXT = String.raw`\.[a-zA-Z][\w]{0,9}`;
  *  ordinary prose — `and/or`, `input/output`, `2026/08/20` — so each needs
  *  one more thing that prose does not have. */
 const FORMS = [
-  // 1. Absolute, two segments or more. `/Users/me/proj/.env`. No extension
-  //    required: nothing in prose starts with `/Users/`. Two segments rather
-  //    than one keeps Claude's own slash commands (`/compact`, `/model`)
-  //    plain text (#91).
+  // 1a. Windows absolute: drive letter followed by slash/backslash — `C:\Users\foo\.env`.
+  String.raw`[A-Za-z]:${S}${SEG}(?:${S}${SEG})*`,
+  // 1b. Unix absolute, two segments or more. `/Users/me/proj/.env`. No extension
+  //     required: nothing in prose starts with `/Users/`. Two segments rather
+  //     than one keeps Claude's own slash commands (`/compact`, `/model`)
+  //     plain text (#91).
   String.raw`\/${SEG}(?:\/${SEG})+`,
-  // 2. Home or explicitly relative — `~/.zshrc`, `./foo.ts:42`, `../bin/run`.
+  // 2. Home or explicitly relative — `~/.zshrc`, `~\.zshrc`, `./foo.ts:42`, `..\bin\run`.
   //    The prefix is unambiguous, so one segment is enough.
-  String.raw`(?:~\/|\.{1,2}\/)${SEG}(?:\/${SEG})*`,
-  // 3. Bare relative carrying an extension — `src/lib/bar.rs`, `CLAUDE.md:12`.
-  String.raw`${NAME}(?:\/${SEG})*${EXT}`,
-  // 4. Bare relative with a dot-leading segment — `.env`, `web/.env`,
+  String.raw`(?:~${S}|\.{1,2}${S})${SEG}(?:${S}${SEG})*`,
+  // 3. Bare relative carrying an extension — `src/lib/bar.rs`, `src\lib\bar.rs`, `CLAUDE.md:12`.
+  String.raw`${NAME}(?:${S}${SEG})*${EXT}`,
+  // 4. Bare relative with a dot-leading segment — `.env`, `web/.env`, `web\.env`,
   //    `.kamal/secrets`. A dotfile has no second dot to spend on an
   //    extension, and prose does not begin a word with a dot, so the dot is
   //    the evidence. The segment may sit anywhere: `.kamal/secrets` carries
   //    it first and `web/.env` last (#95).
-  String.raw`(?:${SEG}\/)*\.[a-zA-Z][\w.@-]*(?:\/${SEG})*`,
-  // 5. Bare relative ending in a slash — `docs/assets/brand/`, `web/`. A
+  String.raw`(?:${SEG}${S})*\.[a-zA-Z][\w.@-]*(?:${S}${SEG})*`,
+  // 5. Bare relative ending in a slash — `docs/assets/brand/`, `web\`. A
   //    directory has no extension to offer, but a *trailing* slash is
   //    evidence prose lacks: `and/or` has a slash between words, never after
   //    the last one. The lookahead is what makes that distinction — without
   //    it `and/or` matches as `and/` (#95).
-  //
-  //    Known cost: a sed expression, `s/foo/bar/`, is this exact shape and
-  //    does linkify. It resolves to nothing and the preview says so. Ruling
-  //    it out would mean ruling out one-segment directories like `web/`,
-  //    which Claude prints far more often than sed one-liners.
-  String.raw`${SEG}(?:\/${SEG})*\/(?![\w.@-])`,
+  String.raw`${SEG}(?:${S}${SEG})*${S}(?![\w.@-])`,
 ].join("|");
 
 /** Matches tokens that look like paths, optionally trailed by a `:line[:col]`
@@ -104,13 +104,14 @@ export function makeFileLinkProvider(
         // registered once per row.
         if (!rangeSpansRow(range, bufferLineNumber)) continue;
         // Split file:line[:col]
-        const colonIdx = full.indexOf(":");
+        // On Windows an absolute path has a colon at index 1 (`C:\...`);
+        // only match line numbers from trailing colons.
         let path = full;
         let lineNum: number | undefined;
-        if (colonIdx !== -1 && /^\d+(?::\d+)?$/.test(full.slice(colonIdx + 1))) {
-          path = full.slice(0, colonIdx);
-          const lineStr = full.slice(colonIdx + 1).split(":")[0];
-          lineNum = Number.parseInt(lineStr, 10) || undefined;
+        const lineMatch = /:(\d+)(?::\d+)?$/.exec(full);
+        if (lineMatch && lineMatch.index > (full.charAt(1) === ":" ? 1 : 0)) {
+          path = full.slice(0, lineMatch.index);
+          lineNum = Number.parseInt(lineMatch[1], 10) || undefined;
         }
         links.push({
           range,
@@ -133,4 +134,3 @@ export function makeFileLinkProvider(
     },
   };
 }
-

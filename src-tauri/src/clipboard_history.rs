@@ -25,11 +25,15 @@
 //! Nothing is written to disk either. The ring dies with the process.
 
 use std::collections::VecDeque;
+#[cfg(unix)]
 use std::io::Read;
+#[cfg(unix)]
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 
-use crate::local_socket::{self, has_live_listener};
+#[cfg(unix)]
+use crate::local_socket::has_live_listener;
+use crate::local_socket;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -37,6 +41,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
+#[cfg(unix)]
 use crate::debug_log;
 
 const MAX_ENTRIES: usize = 10;
@@ -47,6 +52,7 @@ const MAX_TEXT_BYTES: usize = 64 * 1024;
 
 /// Hard ceiling on a single socket read, so a runaway writer cannot make us
 /// buffer without bound before `normalize` gets a chance to truncate.
+#[cfg(unix)]
 const MAX_SOCKET_READ: u64 = (MAX_TEXT_BYTES * 2) as u64;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -73,11 +79,19 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// otherwise be lies: the panel says recording is unavailable, and `pty.rs`
 /// withholds `KLAUDIO_CLIP_SOCK` so a terminal copy falls through to the real
 /// `pbcopy` rather than surfacing in a different window's list (#96).
+#[allow(dead_code)]
 static SHIM_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Whether terminal copies reach this window's history.
 pub fn shim_active() -> bool {
-    SHIM_ACTIVE.load(Ordering::Relaxed)
+    #[cfg(target_os = "windows")]
+    {
+        true
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        SHIM_ACTIVE.load(Ordering::Relaxed)
+    }
 }
 
 #[tauri::command]
@@ -186,17 +200,12 @@ pub fn socket_path() -> Option<PathBuf> {
 
 /// The single shared socket every version through v1.10.1 used. Left behind
 /// on upgrade, and nothing will ever bind it again.
+#[cfg(unix)]
 fn legacy_socket_path() -> Option<PathBuf> {
     dirs::cache_dir().map(|c| c.join("klaudio-panels/clip.sock"))
 }
 
-/// `pbcopy` replacement placed ahead of `/usr/bin` on the PTY's `PATH`.
-///
-/// Every branch falls through to the real `pbcopy`, and its exit status is
-/// what we return: recording is strictly best-effort, and breaking the user's
-/// `pbcopy` to feed a history panel would be a terrible trade. `tee` into a
-/// process substitution keeps the payload off disk — a clip may well be a
-/// secret, and it has no business in a temp file.
+#[allow(dead_code)]
 const PBCOPY_SHIM: &str = r#"#!/bin/bash
 # Klaudio Panels — pbcopy shim. Tees the clip to Klaudio's clipboard history
 # and then hands it to the real pbcopy unchanged. Generated at app boot; edits
@@ -216,6 +225,7 @@ exec /usr/bin/pbcopy "$@"
 /// child `KLAUDIO_CLIP_SOCK`, and binding on the worker thread would leave a
 /// PTY opened in the first instants after boot reading a flag that had not
 /// settled yet.
+#[cfg(unix)]
 pub fn install(app: AppHandle) {
     if let Err(e) = write_shim() {
         debug_log::write("clipboard", &format!("shim install failed: {e}"));
@@ -235,6 +245,10 @@ pub fn install(app: AppHandle) {
     }
 }
 
+#[cfg(not(unix))]
+pub fn install(_app: AppHandle) {}
+
+#[cfg(unix)]
 fn write_shim() -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -254,6 +268,7 @@ fn write_shim() -> std::io::Result<()> {
 /// binary launched twice, since a second *install* gets its own path. We
 /// decline rather than take it over: stealing is what made a whole day of
 /// clips disappear from a window that still said it was recording (#96).
+#[cfg(unix)]
 fn bind_listener() -> std::io::Result<Option<UnixListener>> {
     let Some(path) = socket_path() else {
         return Ok(None);
@@ -285,6 +300,7 @@ fn bind_listener() -> std::io::Result<Option<UnixListener>> {
     Ok(Some(UnixListener::bind(&path)?))
 }
 
+#[cfg(unix)]
 fn accept_loop(app: &AppHandle, listener: &UnixListener) {
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
@@ -425,6 +441,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn an_absent_socket_has_no_live_listener() {
         // The predicate that replaced the unconditional `remove_file`. A
         // missing path must read as "safe to bind", not as "someone is
@@ -435,6 +452,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_bound_socket_reads_as_live_and_a_dead_one_does_not() {
         let path = std::env::temp_dir().join("klaudio-clip-probe-live.sock");
         let _ = std::fs::remove_file(&path);
@@ -452,6 +470,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn the_socket_path_fits_in_sun_path() {
         // Unix domain socket paths are capped around 104 bytes on macOS;
         // exceeding it fails at bind time with a confusing error.

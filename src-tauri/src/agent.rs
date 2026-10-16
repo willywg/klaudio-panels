@@ -25,16 +25,23 @@ pub enum AgentId {
     Claude,
     Cursor,
     Codex,
+    Agy,
 }
 
 impl AgentId {
-    pub const ALL: &'static [AgentId] = &[AgentId::Claude, AgentId::Cursor, AgentId::Codex];
+    pub const ALL: &'static [AgentId] = &[
+        AgentId::Claude,
+        AgentId::Cursor,
+        AgentId::Codex,
+        AgentId::Agy,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
             AgentId::Claude => "claude",
             AgentId::Cursor => "cursor",
             AgentId::Codex => "codex",
+            AgentId::Agy => "agy",
         }
     }
 
@@ -94,11 +101,19 @@ static CODEX: AgentSpec = AgentSpec {
                 in the agent settings.",
 };
 
+static AGY: AgentSpec = AgentSpec {
+    id: AgentId::Agy,
+    display_name: "Antigravity",
+    bin_name: "agy",
+    not_found: "Antigravity CLI (`agy`) not found. Verify it is installed and present in your PATH.",
+};
+
 pub fn spec(id: AgentId) -> &'static AgentSpec {
     match id {
         AgentId::Claude => &CLAUDE,
         AgentId::Cursor => &CURSOR,
         AgentId::Codex => &CODEX,
+        AgentId::Agy => &AGY,
     }
 }
 
@@ -110,19 +125,53 @@ pub fn installer_candidates(id: AgentId) -> Vec<PathBuf> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
     };
-    match id {
+    let mut v = match id {
         AgentId::Claude => vec![
             home.join(".local/bin/claude"),
             home.join(".claude/local/claude"),
+            home.join(".claude/local/claude.exe"),
         ],
         // Cursor's installer symlinks this into its versioned install dir.
-        AgentId::Cursor => vec![home.join(".local/bin/cursor-agent")],
+        AgentId::Cursor => vec![
+            home.join(".local/bin/cursor-agent"),
+            home.join(".cursor/bin/cursor-agent.exe"),
+        ],
         // The standalone installer's shim — confirmed on this machine via
         // `codex doctor`, which reports the real binary living under
         // `~/.codex/packages/standalone/releases/<ver>-<arch>/bin/codex`
         // with this path as its PATH entry.
-        AgentId::Codex => vec![home.join(".local/bin/codex")],
+        AgentId::Codex => vec![
+            home.join(".local/bin/codex"),
+            home.join(".codex/bin/codex.exe"),
+        ],
+        AgentId::Agy => vec![
+            home.join(".local/bin/agy"),
+            home.join(".agy/bin/agy.exe"),
+        ],
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(local) = dirs::data_local_dir() {
+            let programs = local.join("Programs");
+            match id {
+                AgentId::Claude => {
+                    v.push(programs.join("Claude/claude.exe"));
+                }
+                AgentId::Cursor => {
+                    v.push(programs.join("cursor/Cursor.exe"));
+                }
+                AgentId::Codex => {
+                    v.push(programs.join("OpenAI/Codex/bin/codex.exe"));
+                }
+                AgentId::Agy => {
+                    v.push(local.join("agy/bin/agy.exe"));
+                }
+            }
+        }
     }
+
+    v
 }
 
 /// Paths to try only after the PATH lookups have failed — package managers
@@ -150,6 +199,17 @@ pub fn fallback_candidates(id: AgentId) -> Vec<PathBuf> {
                     }
                 }
             }
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(app_data) = dirs::data_dir() {
+                    out.push(app_data.join("npm/claude.cmd"));
+                    out.push(app_data.join("npm/claude"));
+                }
+                if let Some(local) = dirs::data_local_dir() {
+                    out.push(local.join("npm/claude.cmd"));
+                    out.push(local.join("Programs/Claude/claude.exe"));
+                }
+            }
             out
         }
         // The installer writes a second name for the same binary, `agent` —
@@ -158,7 +218,7 @@ pub fn fallback_candidates(id: AgentId) -> Vec<PathBuf> {
         // `--version` answers like Cursor (see `accepts_version`). Never
         // `cursor`: that is a shim that finds and launches the Cursor IDE.
         AgentId::Cursor => dirs::home_dir()
-            .map(|h| vec![h.join(".local/bin/agent")])
+            .map(|h| vec![h.join(".local/bin/agent"), h.join(".local/bin/agent.exe")])
             .unwrap_or_default(),
         // Codex also ships as `@openai/codex` on npm, unlike Cursor, so the
         // same node-version-manager shims Claude's arm walks apply here too.
@@ -179,6 +239,33 @@ pub fn fallback_candidates(id: AgentId) -> Vec<PathBuf> {
                     for entry in entries.flatten() {
                         out.push(entry.path().join("bin/codex"));
                     }
+                }
+            }
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(local) = dirs::data_local_dir() {
+                    out.push(local.join("Programs/OpenAI/Codex/bin/codex.exe"));
+                    out.push(local.join("npm/codex.cmd"));
+                }
+                if let Some(app_data) = dirs::data_dir() {
+                    out.push(app_data.join("npm/codex.cmd"));
+                    out.push(app_data.join("npm/codex"));
+                }
+            }
+            out
+        }
+        AgentId::Agy => {
+            let mut out = vec![
+                PathBuf::from("/usr/local/bin/agy"),
+                PathBuf::from("/usr/bin/agy"),
+            ];
+            if let Some(home) = dirs::home_dir() {
+                out.push(home.join(".local/bin/agy"));
+            }
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(local) = dirs::data_local_dir() {
+                    out.push(local.join("agy/bin/agy.exe"));
                 }
             }
             out
@@ -212,6 +299,13 @@ pub fn accepts_version(id: AgentId, stdout: &str) -> bool {
             .map(str::trim)
             .find(|l| !l.is_empty())
             .is_some_and(|l| l.starts_with("codex-cli ")),
+        AgentId::Agy => stdout
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .is_some_and(|l| {
+                l.chars().next().map_or(false, |c| c.is_ascii_digit()) || l.contains("agy")
+            }),
     }
 }
 
@@ -247,6 +341,7 @@ pub fn mints_session_ids(id: AgentId) -> bool {
         // new tab goes through the same FIFO/`session:new` correlation
         // Claude's tabs do (see `session_watcher.rs`).
         AgentId::Codex => false,
+        AgentId::Agy => false,
     }
 }
 
@@ -258,6 +353,7 @@ pub fn create_session_argv(id: AgentId) -> Option<Vec<String>> {
         AgentId::Claude => None,
         AgentId::Cursor => Some(vec!["create-chat".to_string()]),
         AgentId::Codex => None,
+        AgentId::Agy => None,
     }
 }
 
@@ -283,6 +379,10 @@ pub fn argv(id: AgentId, launch: &Launch) -> Vec<String> {
         // thing codex understands).
         (AgentId::Codex, Launch::Resume(session_id)) => {
             vec!["resume".to_string(), session_id.clone()]
+        }
+        (AgentId::Agy, Launch::New) => Vec::new(),
+        (AgentId::Agy, Launch::Resume(session_id)) => {
+            vec!["--conversation".to_string(), session_id.clone()]
         }
     }
 }
@@ -310,6 +410,7 @@ pub fn extra_env(id: AgentId) -> Vec<(String, String)> {
         AgentId::Cursor => Vec::new(),
         // No warp-equivalent protocol to unlock.
         AgentId::Codex => Vec::new(),
+        AgentId::Agy => Vec::new(),
     }
 }
 
@@ -399,6 +500,7 @@ fn blocked_env(id: AgentId) -> &'static [&'static str] {
             "CODEX_SESSION_ID",
             "CODEX_THREAD_ID",
         ],
+        AgentId::Agy => &[],
     }
 }
 
@@ -433,6 +535,7 @@ pub fn enabled_by_default(id: AgentId) -> bool {
         AgentId::Claude => true,
         AgentId::Cursor => false,
         AgentId::Codex => false,
+        AgentId::Agy => true,
     }
 }
 
@@ -463,6 +566,7 @@ pub fn supports_profiles(id: AgentId) -> bool {
         // reaches the spawned process (direnv still applies) but not
         // Klaudio's bookkeeping.
         AgentId::Codex => false,
+        AgentId::Agy => false,
     }
 }
 
@@ -471,6 +575,7 @@ pub fn list_sessions(id: AgentId, project_path: &str) -> Result<Vec<SessionMeta>
         AgentId::Claude => crate::sessions::list_claude_sessions(project_path),
         AgentId::Cursor => crate::cursor_sessions::list_cursor_sessions(project_path),
         AgentId::Codex => crate::codex_sessions::list_codex_sessions(project_path),
+        AgentId::Agy => Ok(Vec::new()),
     }
 }
 
@@ -485,6 +590,7 @@ pub fn watch_root(id: AgentId) -> Option<PathBuf> {
         // Default root only — same caveat as Cursor's `CURSOR_DATA_DIR`,
         // consistent with deferring Codex profiles above.
         AgentId::Codex => crate::codex_sessions::sessions_root(),
+        AgentId::Agy => dirs::home_dir().map(|h| h.join(".gemini/antigravity-cli/conversations")),
     }
 }
 
@@ -497,6 +603,7 @@ mod tests {
         assert_eq!(AgentId::parse("claude").unwrap(), AgentId::Claude);
         assert_eq!(AgentId::parse("cursor").unwrap(), AgentId::Cursor);
         assert_eq!(AgentId::parse("codex").unwrap(), AgentId::Codex);
+        assert_eq!(AgentId::parse("agy").unwrap(), AgentId::Agy);
         assert!(AgentId::parse("agent").is_err());
         assert!(AgentId::parse("").is_err());
     }

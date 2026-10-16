@@ -5,9 +5,13 @@
 //! `~/.local/bin` when that isn't writable; Linux goes straight to
 //! `~/.local/bin`. Windows is deferred.
 
+#[cfg(not(target_os = "windows"))]
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+#[cfg(not(target_os = "windows"))]
+use tauri::Manager;
 
+#[cfg(not(target_os = "windows"))]
 use crate::debug_log;
 
 #[cfg(not(target_os = "windows"))]
@@ -92,13 +96,51 @@ pub fn uninstall_cli() -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
+fn windows_candidates() -> Vec<std::path::PathBuf> {
+    let mut v = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        if home.join(".cargo/bin").exists() {
+            v.push(home.join(".cargo/bin/klaudio.cmd"));
+        }
+        v.push(home.join(".local/bin/klaudio.cmd"));
+        v.push(home.join("bin/klaudio.cmd"));
+    }
+    if let Some(local) = dirs::data_local_dir() {
+        v.push(local.join("Microsoft/WindowsApps/klaudio.cmd"));
+    }
+    v
+}
+
+#[cfg(target_os = "windows")]
 #[tauri::command]
 pub fn install_cli(_app: AppHandle) -> Result<String, String> {
-    Err("klaudio CLI install is not yet supported on Windows.".to_string())
+    let script_content = "@echo off\r\nif \"%~1\"==\"\" (\r\n    start \"\" \"klaudio://open\"\r\n) else (\r\n    start \"\" \"klaudio://open?path=%~f1\"\r\n)\r\n";
+    for target in windows_candidates() {
+        if let Some(parent) = target.parent() {
+            if !parent.exists() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+        }
+        if std::fs::write(&target, script_content).is_ok() {
+            crate::debug_log::write("cli", &format!("installed {}", target.display()));
+            return Ok(format!("Installed 'klaudio' command to {}", target.display()));
+        }
+    }
+    Err("Could not install klaudio.cmd in any standard PATH directory.".to_string())
 }
 
 #[cfg(target_os = "windows")]
 #[tauri::command]
 pub fn uninstall_cli() -> Result<(), String> {
-    Err("klaudio CLI uninstall is not yet supported on Windows.".to_string())
+    let mut removed_any = false;
+    for target in windows_candidates() {
+        if target.exists() && std::fs::remove_file(&target).is_ok() {
+            crate::debug_log::write("cli", &format!("uninstalled {}", target.display()));
+            removed_any = true;
+        }
+    }
+    if !removed_any {
+        return Err("klaudio was not installed in any known location.".to_string());
+    }
+    Ok(())
 }

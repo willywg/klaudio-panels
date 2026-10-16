@@ -2248,6 +2248,7 @@ dependencies = [
  "futures",
  "git2",
  "ignore",
+ "image",
  "lru",
  "notify",
  "notify-debouncer-full",

@@ -5,6 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
+import { invoke } from "@tauri-apps/api/core";
 import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { AGENT_DISPLAY, DEFAULT_AGENT } from "@/lib/agents";
 import { useTerminal } from "@/context/terminal";
@@ -46,6 +47,10 @@ import {
 } from "@/lib/resolve-file";
 import { useReveal } from "@/context/reveal";
 import { toast } from "@/lib/toast";
+
+const isMac =
+  typeof navigator !== "undefined" &&
+  navigator.platform.toUpperCase().includes("MAC");
 
 const THEME = {
   background: "#0b0b0c",
@@ -157,7 +162,7 @@ export function TerminalView(props: Props) {
     term = new Terminal({
       fontFamily: FONT_FAMILY,
       fontSize: 13,
-      lineHeight: 1.0,
+      lineHeight: 1.2,
       letterSpacing: 0,
       theme: THEME,
       cursorBlink: true,
@@ -251,55 +256,76 @@ export function TerminalView(props: Props) {
       if (e.key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) {
         return false;
       }
-      if (e.metaKey && e.altKey && /^Digit[1-9]$/.test(e.code)) {
+      const mac = navigator.platform.toUpperCase().includes("MAC");
+      const mod = mac ? e.metaKey : e.ctrlKey;
+      if (mod && e.altKey && /^Digit[1-9]$/.test(e.code)) {
         return false;
       }
-      const mac = navigator.platform.toUpperCase().includes("MAC");
-      const meta = mac ? e.metaKey : e.ctrlKey && e.shiftKey;
-      if (!meta) return true;
+      if (mod && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+        return false;
+      }
       const key = e.key.toLowerCase();
-      if (key === "c" && term!.hasSelection()) {
+      const isCopy = key === "c" && (mac ? e.metaKey : e.ctrlKey);
+      const isPaste = key === "v" && (mac ? e.metaKey : e.ctrlKey);
+      const isClear = key === "k" && (mac ? e.metaKey : (e.ctrlKey && e.shiftKey));
+      const isHome = key === "arrowleft" && mac && e.metaKey;
+      const isEnd = key === "arrowright" && mac && e.metaKey;
+
+      if (isCopy && term!.hasSelection()) {
         recordClip(term!.getSelection());
         navigator.clipboard
           .writeText(term!.getSelection())
           .catch((err) => console.warn("clipboard write failed", err));
         return false;
       }
-      if (key === "v") {
-        // Read via the Tauri plugin (native macOS pasteboard) instead of
-        // navigator.clipboard.readText(), which pops WebKit's "Paste"
-        // permission bubble every time. term.paste() wraps the text in
-        // bracketed-paste markers when the PTY has ?2004h active so Claude
-        // Code can tell pasted input apart from typed input.
-        // preventDefault() is critical — without it the webview also fires
-        // its native paste into xterm's hidden textarea, xterm forwards
-        // those bytes as onData, and the PTY receives the text twice.
-        // Always call term.paste(), even with empty text: the bracketed-
-        // paste markers alone trigger Claude Code to sniff the NSPasteboard
-        // for an image (same path that the WebKit right-click Paste used
-        // to reach).
+      if (isPaste) {
+        // Read via the Tauri plugin instead of navigator.clipboard.readText().
+        // If text is present, term.paste() handles bracketed paste.
+        // If text is empty, attempt to read clipboard bitmap via paste_clipboard_image,
+        // which saves to a temp file and returns its path so agents can access the screenshot.
         e.preventDefault();
         readClipboardText()
-          .then((text) => term!.paste(text ?? ""))
-          .catch((err) => {
+          .then(async (text) => {
+            if (text && text.length > 0) {
+              term!.paste(text);
+            } else {
+              try {
+                const imgPath = await invoke<string | null>("paste_clipboard_image");
+                if (imgPath) {
+                  term!.paste(`"${imgPath}" `);
+                } else {
+                  term!.paste(text ?? "");
+                }
+              } catch {
+                term!.paste(text ?? "");
+              }
+            }
+          })
+          .catch(async (err) => {
             console.warn("clipboard read failed", err);
-            term!.paste("");
+            try {
+              const imgPath = await invoke<string | null>("paste_clipboard_image");
+              if (imgPath) {
+                term!.paste(`"${imgPath}" `);
+              } else {
+                term!.paste("");
+              }
+            } catch {
+              term!.paste("");
+            }
           });
         return false;
       }
-      if (key === "k") {
+      if (isClear) {
         term!.clear();
         return false;
       }
-      // Cmd+Left/Right → beginning/end of line (iTerm2 "Natural Text
-      // Editing" preset, Warp default). Ink's text input (used by
-      // Claude Code's prompt) reads Ctrl+A / Ctrl+E as home/end.
-      if (key === "arrowleft") {
+      if (isHome) {
         e.preventDefault();
         void ctx.write(props.id, encoder.encode("\x01"));
         return false;
       }
-      if (key === "arrowright") {
+      if (isEnd) {
         e.preventDefault();
         void ctx.write(props.id, encoder.encode("\x05"));
         return false;
@@ -336,8 +362,35 @@ export function TerminalView(props: Props) {
       });
       const onTextareaFocus = () => recordTerminalFocus(props.id);
       term.textarea?.addEventListener("focus", onTextareaFocus);
+      const onPaste = async (e: ClipboardEvent) => {
+        const items = e.clipboardData?.items;
+        let hasImage = false;
+        if (items) {
+          for (let i = 0; i < items.length; i++) {
+            if (items[i].type.startsWith("image/")) {
+              hasImage = true;
+              break;
+            }
+          }
+        }
+        const text = e.clipboardData?.getData("text");
+        if (hasImage || !text || text.length === 0) {
+          try {
+            const imgPath = await invoke<string | null>("paste_clipboard_image");
+            if (imgPath) {
+              e.preventDefault();
+              term?.paste(`"${imgPath}" `);
+              return;
+            }
+          } catch (err) {
+            console.warn("paste_clipboard_image failed", err);
+          }
+        }
+      };
+      term.textarea?.addEventListener("paste", onPaste);
       onCleanup(() => {
         term?.textarea?.removeEventListener("focus", onTextareaFocus);
+        term?.textarea?.removeEventListener("paste", onPaste);
       });
     }
 
@@ -590,7 +643,7 @@ export function TerminalView(props: Props) {
         host.appendChild(img);
         const caption = document.createElement("div");
         caption.className = "terminal-thumb-caption";
-        caption.textContent = `${formatBytes(payload.bytes)} · ⌘-click to open`;
+        caption.textContent = `${formatBytes(payload.bytes)} · ${isMac ? "⌘-click" : "Ctrl-click"} to open`;
         host.appendChild(caption);
         term.element.appendChild(host);
         thumbEl = host;
@@ -610,7 +663,7 @@ export function TerminalView(props: Props) {
       data-pty-kind="claude"
       data-pty-id={props.id}
     >
-      <div ref={container} class="flex-1 min-h-0 min-w-0 overflow-hidden p-2" />
+      <div ref={container} class="flex-1 min-h-0 min-w-0 overflow-hidden" />
       <ScrollToBottomButton visible={isScrolledUp()} onClick={scrollToBottom} />
       <Show when={isDragOver()}>
         <div class="absolute inset-1 border-2 border-dashed border-indigo-400/60 rounded pointer-events-none flex items-center justify-center">

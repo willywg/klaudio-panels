@@ -23,7 +23,7 @@ const IMAGE_EXTENSIONS = new Set([
 ]);
 
 export function isImagePath(path: string): boolean {
-  const base = path.split("/").pop() ?? path;
+  const base = path.split(/[/\\]/).pop() ?? path;
   const dot = base.lastIndexOf(".");
   if (dot <= 0) return false;
   return IMAGE_EXTENSIONS.has(base.slice(dot + 1).toLowerCase());
@@ -125,17 +125,18 @@ export async function resolveImagePath(
 
 /** Express an absolute path relative to a project when it lives inside it.
  *  Keeps preview tabs on the project-relative paths every other caller uses,
- *  and leaves outside-the-project images absolute. */
+ *  and leaves outside-the-project images absolute. Normalizes slashes and
+ *  handles case-insensitive comparison on Windows. */
 export function relativizeToProject(
   projectPath: string,
   absPath: string,
 ): string {
-  const base = projectPath.endsWith("/")
-    ? projectPath.slice(0, -1)
-    : projectPath;
-  return absPath.startsWith(`${base}/`)
-    ? absPath.slice(base.length + 1)
-    : absPath;
+  const normBase = projectPath.replace(/\\/g, "/").replace(/\/+$/, "");
+  const normAbs = absPath.replace(/\\/g, "/");
+  if (normAbs.toLowerCase().startsWith(normBase.toLowerCase() + "/")) {
+    return normAbs.slice(normBase.length + 1);
+  }
+  return absPath;
 }
 
 export function imageDataUrl(payload: ImagePayload): string {

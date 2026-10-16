@@ -247,7 +247,7 @@ export function CommandPalette(props: {
                 <ul class="pb-1">
                   <For each={filesList()}>
                     {(rel, i) => {
-                      const lastSlash = rel.lastIndexOf("/");
+                      const lastSlash = Math.max(rel.lastIndexOf("/"), rel.lastIndexOf("\\"));
                       const dir =
                         lastSlash >= 0 ? rel.slice(0, lastSlash + 1) : "";
                       const base =

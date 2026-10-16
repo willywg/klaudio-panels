@@ -170,12 +170,19 @@ static VALIDATED: LazyLock<Mutex<HashMap<(&'static str, PathBuf), Fingerprint>>>
 
 fn probe_version(id: AgentId, path: &Path) -> bool {
     let deadline = Instant::now() + Duration::from_secs(2);
-    let Ok(mut child) = Command::new(path)
-        .arg("--version")
+    let mut cmd = Command::new(path);
+    cmd.arg("--version")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .stdin(std::process::Stdio::null())
-        .spawn()
+        .stdin(std::process::Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let Ok(mut child) = cmd.spawn()
     else {
         return false;
     };

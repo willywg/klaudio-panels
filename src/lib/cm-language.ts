@@ -6,7 +6,7 @@ import type { Extension } from "@codemirror/state";
 const cache = new Map<string, Promise<Extension | null>>();
 
 function ext(path: string): string {
-  const slash = path.lastIndexOf("/");
+  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   const name = slash >= 0 ? path.slice(slash + 1) : path;
   const dot = name.lastIndexOf(".");
   if (dot <= 0) return "";

@@ -127,14 +127,20 @@ function dirname(p: string): string {
 }
 
 function installSuccessMessage(where: string): string {
+  const isMac =
+    typeof navigator !== "undefined" &&
+    navigator.platform.toUpperCase().includes("MAC");
+  if (!isMac) {
+    return `Installed at ${where}.\n\nRestart your terminal or open a new terminal window to pick up the updated PATH.`;
+  }
   const dir = dirname(where);
   const inPrimary = where.startsWith("/usr/local/bin");
   const header = `Installed at ${where}.`;
   const reloadHint =
     "Open a new terminal window to pick it up. In a still-open shell, run `rehash` (zsh) or `hash -r` (bash).";
   const pathHint = inPrimary
-    ? `If klaudio is still "not found", /usr/local/bin may be missing from your PATH — common in iTerm profiles that aren't set to "Login shell". Fix the profile, or add:\n\n  export PATH="/usr/local/bin:$PATH"\n\nto ~/.zshrc.`
-    : `Make sure ${dir} is on your PATH. Add this to ~/.zshrc (or ~/.bashrc) if needed:\n\n  export PATH="${dir}:$PATH"`;
+    ? `If klaudio is still "not found", /usr/local/bin may be missing from your PATH — common in iTerm profiles that aren't set to "Login shell". Fix the profile, or add:\n\n  export PATH="/usr/local/bin:\$PATH"\n\nto ~/.zshrc.`
+    : `Make sure ${dir} is on your PATH. Add this to ~/.zshrc (or ~/.bashrc) if needed:\n\n  export PATH="${dir}:\$PATH"`;
   return `${header}\n\n${reloadHint}\n\n${pathHint}`;
 }
 
@@ -501,9 +507,9 @@ function Shell() {
       // for "Jump to Downloads" when nothing is focused — preventDefault
       // stops it stealing the shortcut.
       if (mod && !e.shiftKey && !e.altKey && (e.key === "j" || e.key === "J")) {
+        e.preventDefault();
         const p = activeProjectPath();
         if (!p) return;
-        e.preventDefault();
         shellPanel.toggleFor(p);
       }
       // Cmd+T opens a new tab, contextual to where focus is: if the user
@@ -512,9 +518,9 @@ function Shell() {
       // because the key event on xterm's hidden textarea still reports
       // the textarea as activeElement, which lets `closest` walk up.
       if (mod && !e.shiftKey && !e.altKey && (e.key === "t" || e.key === "T")) {
+        e.preventDefault();
         const p = activeProjectPath();
         if (!p) return;
-        e.preventDefault();
         const inShellDock =
           document.activeElement instanceof Element &&
           document.activeElement.closest("[data-shell-dock]") !== null;
@@ -1180,10 +1186,11 @@ function Shell() {
     void listen("menu:uninstall-cli", async () => {
       try {
         await invoke("uninstall_cli");
-        await message(
-          "The klaudio command has been removed from PATH.\n\nOpen a new terminal window — shells opened before this will still have klaudio cached until you run `rehash` (zsh) or `hash -r` (bash).",
-          { title: "klaudio CLI uninstalled", kind: "info" },
-        );
+        const isMac = typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC");
+        const msg = isMac
+          ? "The klaudio command has been removed from PATH.\n\nOpen a new terminal window — shells opened before this will still have klaudio cached until you run `rehash` (zsh) or `hash -r` (bash)."
+          : "The klaudio command has been removed from PATH.\n\nOpen a new terminal window to ensure PATH changes take effect.";
+        await message(msg, { title: "klaudio CLI uninstalled", kind: "info" });
       } catch (err) {
         await message(String(err), {
           title: "Uninstall failed",

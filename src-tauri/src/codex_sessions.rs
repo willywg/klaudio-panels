@@ -507,7 +507,6 @@ mod tests {
         assert_eq!(ids, vec!["ok"]);
     }
 
-    #[cfg(unix)]
     fn set_mtime(path: &Path, time: SystemTime) {
         let file = fs::File::options().write(true).open(path).unwrap();
         file.set_modified(time).unwrap();

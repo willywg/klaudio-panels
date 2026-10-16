@@ -5,6 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
+import { invoke } from "@tauri-apps/api/core";
 import {
   readText as readClipboardText,
 } from "@tauri-apps/plugin-clipboard-manager";
@@ -130,7 +131,7 @@ export function ShellTerminalView(props: Props) {
     term = new Terminal({
       fontFamily: FONT_FAMILY,
       fontSize: 13,
-      lineHeight: 1.0,
+      lineHeight: 1.2,
       letterSpacing: 0,
       theme: THEME,
       cursorBlink: true,
@@ -171,56 +172,79 @@ export function ShellTerminalView(props: Props) {
       if (e.key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) {
         return false;
       }
-      if (e.metaKey && e.altKey && /^Digit[1-9]$/.test(e.code)) {
+      const mac = navigator.platform.toUpperCase().includes("MAC");
+      const mod = mac ? e.metaKey : e.ctrlKey;
+      if (mod && e.altKey && /^Digit[1-9]$/.test(e.code)) {
         return false;
       }
-      const mac = navigator.platform.toUpperCase().includes("MAC");
-      const meta = mac ? e.metaKey : e.ctrlKey && e.shiftKey;
-      if (!meta) return true;
+      if (mod && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+        return false;
+      }
       const key = e.key.toLowerCase();
-      if (key === "c" && term!.hasSelection()) {
+      const isCopy = key === "c" && (mac ? e.metaKey : e.ctrlKey);
+      const isPaste = key === "v" && (mac ? e.metaKey : e.ctrlKey);
+      const isClear = key === "k" && (mac ? e.metaKey : (e.ctrlKey && e.shiftKey));
+      const isHome = key === "arrowleft" && mac && e.metaKey;
+      const isEnd = key === "arrowright" && mac && e.metaKey;
+
+      if (isCopy && term!.hasSelection()) {
         recordClip(term!.getSelection());
         navigator.clipboard
           .writeText(term!.getSelection())
           .catch((err) => console.warn("clipboard write failed", err));
         return false;
       }
-      if (key === "v") {
-        // Tauri plugin bypasses WebKit's "Paste" permission bubble.
-        // term.paste() handles bracketed paste when the PTY enables it.
-        // preventDefault() is critical — without it WebKit also fires
-        // its native paste into xterm's hidden textarea and the shell
-        // receives the clipboard text twice (same fix Claude view got
-        // in v0.9.3).
+      if (isPaste) {
         e.preventDefault();
         readClipboardText()
-          .then((text) => term!.paste(text ?? ""))
-          .catch((err) => {
+          .then(async (text) => {
+            if (text && text.length > 0) {
+              term!.paste(text);
+            } else {
+              try {
+                const imgPath = await invoke<string | null>("paste_clipboard_image");
+                if (imgPath) {
+                  term!.paste(`"${imgPath}" `);
+                } else {
+                  term!.paste(text ?? "");
+                }
+              } catch {
+                term!.paste(text ?? "");
+              }
+            }
+          })
+          .catch(async (err) => {
             console.warn("clipboard read failed", err);
-            term!.paste("");
+            try {
+              const imgPath = await invoke<string | null>("paste_clipboard_image");
+              if (imgPath) {
+                term!.paste(`"${imgPath}" `);
+              } else {
+                term!.paste("");
+              }
+            } catch {
+              term!.paste("");
+            }
           });
         return false;
       }
-      if (key === "k") {
+      if (isClear) {
         term!.clear();
         return false;
       }
-      // Cmd+Left/Right → beginning/end of line (iTerm2 "Natural Text
-      // Editing" preset). Works in bash/zsh/fish line editors via
-      // Ctrl+A / Ctrl+E.
-      if (key === "arrowleft") {
+      if (isHome) {
         e.preventDefault();
         void ctx.write(props.ptyId, encoder.encode("\x01"));
         return false;
       }
-      if (key === "arrowright") {
+      if (isEnd) {
         e.preventDefault();
         void ctx.write(props.ptyId, encoder.encode("\x05"));
         return false;
       }
-      // Cmd+J / Cmd+W / Cmd+B are app-level; don't forward a literal letter
-      // into the PTY when the global handler is about to claim it.
-      if (key === "j" || key === "w" || key === "b") return false;
+      // Cmd+J / Cmd+W / Cmd+B (or Ctrl+J/W/B on Windows) are app-level; don't forward
+      // a literal letter into the PTY when the global handler is about to claim it.
+      if (mod && (key === "j" || key === "w" || key === "b")) return false;
       return true;
     });
 
@@ -248,8 +272,35 @@ export function ShellTerminalView(props: Props) {
       // current even when the bus isn't called.
       const onTextareaFocus = () => recordTerminalFocus(props.ptyId);
       term.textarea?.addEventListener("focus", onTextareaFocus);
+      const onPaste = async (e: ClipboardEvent) => {
+        const items = e.clipboardData?.items;
+        let hasImage = false;
+        if (items) {
+          for (let i = 0; i < items.length; i++) {
+            if (items[i].type.startsWith("image/")) {
+              hasImage = true;
+              break;
+            }
+          }
+        }
+        const text = e.clipboardData?.getData("text");
+        if (hasImage || !text || text.length === 0) {
+          try {
+            const imgPath = await invoke<string | null>("paste_clipboard_image");
+            if (imgPath) {
+              e.preventDefault();
+              term?.paste(`"${imgPath}" `);
+              return;
+            }
+          } catch (err) {
+            console.warn("paste_clipboard_image failed", err);
+          }
+        }
+      };
+      term.textarea?.addEventListener("paste", onPaste);
       onCleanup(() => {
         term?.textarea?.removeEventListener("focus", onTextareaFocus);
+        term?.textarea?.removeEventListener("paste", onPaste);
       });
     }
 
@@ -347,7 +398,7 @@ export function ShellTerminalView(props: Props) {
       <div
         ref={container}
         onContextMenu={(e) => e.preventDefault()}
-        class="flex-1 min-h-0 min-w-0 overflow-hidden p-2"
+        class="flex-1 min-h-0 min-w-0 overflow-hidden"
       />
       <ScrollToBottomButton
         visible={isScrolledUp()}

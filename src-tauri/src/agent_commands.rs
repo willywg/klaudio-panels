@@ -177,14 +177,22 @@ fn run_with_timeout(
 ) -> Result<String, String> {
     use std::io::Read;
 
-    let mut child = Command::new(bin)
-        .args(args)
+    let mut cmd = Command::new(bin);
+    cmd.args(args)
         .current_dir(cwd)
         .env_clear()
         .envs(env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("could not start {}: {e}", bin.display()))?;
 

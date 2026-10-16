@@ -157,7 +157,7 @@ export function acquireEditorTerminal(
   const term = new Terminal({
     fontFamily: FONT_FAMILY,
     fontSize: 13,
-    lineHeight: 1.0,
+    lineHeight: 1.2,
     letterSpacing: 0,
     theme: THEME,
     cursorBlink: true,
@@ -217,10 +217,14 @@ export function acquireEditorTerminal(
     if (e.key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) {
       return false;
     }
-    if (e.metaKey && e.altKey && /^Digit[1-9]$/.test(e.code)) {
+    const mac = navigator.platform.toUpperCase().includes("MAC");
+    const mod = mac ? e.metaKey : e.ctrlKey;
+    if (mod && e.altKey && /^Digit[1-9]$/.test(e.code)) {
       return false;
     }
-    const mac = navigator.platform.toUpperCase().includes("MAC");
+    if (mod && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+      return false;
+    }
     const meta = mac ? e.metaKey : e.ctrlKey && e.shiftKey;
     if (!meta) return true;
     const key = e.key.toLowerCase();
@@ -243,7 +247,7 @@ export function acquireEditorTerminal(
         .catch((err) => console.warn("clipboard read failed", err));
       return false;
     }
-    // Swallow Cmd+W so the app-level handler closes the editor tab cleanly
+    // Swallow Cmd+W / Ctrl+Shift+W so the app-level handler closes the editor tab cleanly
     // instead of xterm.js seeing the keydown.
     if (key === "w") return false;
     return true;

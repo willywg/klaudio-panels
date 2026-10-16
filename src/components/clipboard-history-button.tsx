@@ -131,7 +131,7 @@ export function ClipboardHistoryButton() {
             <Show when={!clips.shimActive()}>
               <p class="px-3 py-2 border-t border-neutral-800 shrink-0 text-[11px] text-amber-300/90 leading-relaxed">
                 Another Klaudio window is recording terminal copies. Copies
-                made in this one's terminals won't be listed here; ⌘C still is.
+                made in this one's terminals won't be listed here; {typeof navigator !== "undefined" && navigator.platform.toUpperCase().includes("MAC") ? "⌘C" : "Ctrl+C"} still is.
               </p>
             </Show>
 
