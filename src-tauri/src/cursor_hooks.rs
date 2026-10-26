@@ -20,6 +20,7 @@ const BACKUP_SUFFIX: &str = ".klaudio-backup";
 pub enum HookFileStatus {
     On,
     Off,
+    Unsupported { reason: String },
     Unmanaged { reason: String, snippet: String },
 }
 

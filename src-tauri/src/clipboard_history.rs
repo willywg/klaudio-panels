@@ -31,9 +31,9 @@ use std::io::Read;
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 
+use crate::local_socket;
 #[cfg(unix)]
 use crate::local_socket::has_live_listener;
-use crate::local_socket;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -84,14 +84,7 @@ static SHIM_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Whether terminal copies reach this window's history.
 pub fn shim_active() -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        true
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        SHIM_ACTIVE.load(Ordering::Relaxed)
-    }
+    SHIM_ACTIVE.load(Ordering::Relaxed)
 }
 
 #[tauri::command]
@@ -329,6 +322,12 @@ fn accept_loop(app: &AppHandle, listener: &UnixListener) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_clipboard_capture_does_not_claim_an_installed_shim() {
+        assert!(!clipboard_shim_active());
+    }
 
     fn entry(id: u64, text: &str) -> ClipEntry {
         ClipEntry {

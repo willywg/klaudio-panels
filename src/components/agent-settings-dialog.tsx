@@ -15,6 +15,7 @@ import { AGENT_DISPLAY, CURSOR, type AgentId } from "@/lib/agents";
 type HookStatus =
   | { state: "on" }
   | { state: "off" }
+  | { state: "unsupported"; reason: string }
   | { state: "unmanaged"; reason: string; snippet: string };
 
 type Draft = { enabled: boolean; binaryPath: string };
@@ -112,7 +113,7 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
 
   async function toggleHook() {
     const current = hook();
-    if (!current || current.state === "unmanaged") return;
+    if (!current || current.state === "unmanaged" || current.state === "unsupported") return;
     setHookBusy(true);
     setHookError(null);
     try {
@@ -167,7 +168,7 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
       >
         <div
           ref={panelRef}
-          class="w-[520px] max-w-[calc(100vw-32px)] rounded-lg border border-neutral-700 bg-neutral-900 shadow-2xl p-4 text-[12.5px] text-neutral-200"
+          class="w-[520px] max-w-[calc(100vw-32px)] max-h-[calc(100dvh-32px)] overflow-y-auto rounded-lg border border-neutral-700 bg-neutral-900 shadow-2xl p-4 text-[12.5px] text-neutral-200"
         >
           <div class="font-semibold text-[13px] text-neutral-100">Agents</div>
           <div class="text-neutral-400 mt-1 mb-4 leading-snug">
@@ -295,11 +296,13 @@ function CursorHookToggle(props: {
   const status = () => props.status;
   const on = () => status()?.state === "on";
   const unmanaged = () => status()?.state === "unmanaged";
+  const unavailable = () => unmanaged() || status()?.state === "unsupported";
   const label = () => {
     const s = status();
     if (!s) return "Checking hooks.json…";
     if (s.state === "on") return "On";
     if (s.state === "off") return "Off";
+    if (s.state === "unsupported") return s.reason;
     return "Can't manage (edited by hand)";
   };
 
@@ -308,14 +311,14 @@ function CursorHookToggle(props: {
       <label
         class={
           "flex items-start gap-2 text-[12px] select-none " +
-          (unmanaged() ? "text-neutral-500 cursor-not-allowed" : "text-neutral-300 cursor-pointer")
+          (unavailable() ? "text-neutral-500 cursor-not-allowed" : "text-neutral-300 cursor-pointer")
         }
       >
         <input
           type="checkbox"
           class="accent-indigo-500 mt-0.5"
           checked={on()}
-          disabled={props.busy || unmanaged() || !status()}
+          disabled={props.busy || unavailable() || !status()}
           onChange={() => props.onToggle()}
         />
         <span>
