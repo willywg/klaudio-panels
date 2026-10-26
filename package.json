@@ -11,7 +11,8 @@
     "tauri": "tauri",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "release:mac": "tauri build --target universal-apple-darwin"
+    "release:mac": "tauri build --target universal-apple-darwin",
+    "release:windows-gnu": "tauri build --target x86_64-pc-windows-gnu --bundles nsis"
   },
   "license": "MIT",
   "dependencies": {

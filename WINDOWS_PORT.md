@@ -1,13 +1,41 @@
 # Architecture & Engineering Report: Klaudio Panels Windows Native Port
 
 **Date:** October 2026  
-**Status:** Completed & Validated  
-**Target Binary:** `src-tauri/target/release/klaudio-panels.exe` (x86_64-pc-windows-gnu)  
+**Status:** Implementation available; validation in progress
+**Target Binary:** `src-tauri/target/x86_64-pc-windows-gnu/release/klaudio-panels.exe` (default GNU output)
 **Baseline Commit:** `8514f59` (v1.16.0 — Codex as a third agent)  
 
 ---
 
 ## Executive Summary
+
+### Current support limits
+
+- Install JavaScript dependencies with `bun install --frozen-lockfile`. Keep the committed Bun and Cargo lockfiles together so Tauri and its plugins resolve compatible major/minor versions on both sides.
+- Build GNU installers with `bun run release:windows-gnu`. Its explicit `--target x86_64-pc-windows-gnu` enables Tauri's built-in loader DLL packaging and uninstall cleanup. With the npm CLI's default target inference, the GNU executable can be built while the installer omits `WebView2Loader.dll`. No custom NSIS hook or vendored DLL is needed.
+- Terminal clipboard history capture and Cursor turn-notification hooks are not implemented on Windows. The UI reports these features as unavailable; normal copy/paste and clipboard-image insertion are separate features.
+- PowerShell file drops use literal single-quoted paths; Linux/macOS retain POSIX quoting. Editor detection and launch share the same Windows resolver.
+- Native macOS window decorations are preserved. Windows/Linux remove decorations during platform-specific startup. Development uses the Vite URL at `http://localhost:1420`.
+- A successful local frontend build is not proof of a complete Windows release. A clean-machine build, installer/deep-link checks, and native interactive smoke tests are still required.
+
+The sections below describe the original implementation report, not a guarantee that every subsystem has current end-to-end test coverage.
+
+### Native test validation (Windows GNU)
+
+The library test executable now embeds the same Common Controls v6 manifest as the app. Previously Tauri linked that manifest only into the application, so the test loader failed on `TaskDialogIndirect` with `0xc0000139` before running any tests. The build script keeps the app's icons/version resources and links one shared manifest for both executable types.
+
+Run `cargo test --manifest-path src-tauri/Cargo.toml --lib` with the resource compiler required by your Windows toolchain available. The local Windows GNU validation passed all 96 library tests and built the debug application. Test-only Codex/Cursor fixtures now JSON-escape Windows paths. No real agent session files are changed by these fixture fixes.
+
+The MSVC linker path and non-Windows builds still require platform-specific verification. These unit tests do not establish clean-machine installation or interactive end-to-end support.
+
+### Latest local validation (October 26, 2026)
+
+- `bun run typecheck`: passed; focused frontend tests: 11 passed.
+- Full `bun test`: 165 passed, 4 failed, 3 errors. The same failing cases were reproduced on the pre-port baseline; the full suite is not green.
+- `bun run release:windows-gnu --no-sign -- --offline`: passed using an isolated `CARGO_TARGET_DIR` and an existing GNU resource compiler. The generated NSIS script includes `WebView2Loader.dll` and its uninstall cleanup.
+- The agent settings dialog now limits its height to the viewport and allows vertical scrolling. Structural tests and compiled CSS were checked; rendered verification on short/narrow windows remains pending because no browser was available for visual QA.
+- The second-laptop tester reported working Git changes, file browsing, and terminal access. This is a partial smoke test, not completion of the installation, deep-link, external-editor launch, and uninstall matrix.
+- The installer is unsigned. MSVC, macOS, and Linux builds were not validated in this environment.
 
 Klaudio Panels was originally developed as an exclusive macOS desktop application built on Tauri v2, SolidJS, and Rust. It relied heavily on macOS-specific subsystems:
 - Shell & PTY: Hardcoded `/bin/zsh`, login shells (`login -fq`), and Apple-specific environment probing (`env -0`).
@@ -341,18 +369,16 @@ Building an autonomous standalone executable (`klaudio-panels.exe`) on Windows w
   ```powershell
   # Ensure windres.exe (e.g. from w64devkit or mingw-w64) is on PATH:
   $env:PATH = "$env:USERPROFILE\w64devkit\bin;" + $env:PATH
-  npm run tauri build
-  # Or via cargo directly:
-  cargo build --release
+  bun run release:windows-gnu
   ```
-- Generated target standalone binary: `src-tauri/target/release/klaudio-panels.exe` (38.2 MiB).
+- Default GNU release output: `src-tauri/target/x86_64-pc-windows-gnu/release/`. Distribute the generated NSIS installer; the GNU application executable requires the adjacent `WebView2Loader.dll` and a WebView2 Runtime. A bare executable is not a self-contained distribution.
 
 #### Decision Rationale & Tradeoffs
-* **Why standalone terminal binary over GUI installer:** For developer-focused tools, a standalone binary provides zero friction: developers can clone, build via terminal, and immediately run `klaudio-panels.exe` or alias it in their PATH. The built-in `klaudio.cmd` CLI installer connects the app directly to any terminal workflow.
+* **Why build from the terminal:** Developers can produce the NSIS installer without manually invoking packaging tools. End users do not need Rust, Cargo, Bun, or Node to install and open the compiled app. Agent CLIs are separate prerequisites for the agents they choose to run.
 
 ---
 
-## Verification & Validation Suite
+## Historical Verification & Validation Suite
 
 | Subsystem | Test Description | Result |
 | :--- | :--- | :--- |
@@ -375,4 +401,4 @@ Building an autonomous standalone executable (`klaudio-panels.exe`) on Windows w
 
 ## Architectural Conclusion
 
-The Windows port of Klaudio Panels is complete, verified, and ready for production use. The application runs as a first-class, fully native Windows desktop program with deep OS integration, native terminal CLI workflow, and full backward compatibility with macOS.
+The Windows GNU implementation and installer are ready for maintainer review, with the local evidence and limitations recorded above. Production readiness and cross-platform compatibility are not yet established: complete the remaining clean-machine, interactive, platform-build, and signing checks before making those claims.
