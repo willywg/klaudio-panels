@@ -91,7 +91,7 @@ pub fn run() {
                     }
                 });
             }
-            #[cfg(target_os = "windows")]
+            #[cfg(not(target_os = "macos"))]
             {
                 use tauri::Manager;
                 if let Some(window) = app.get_webview_window("main") {
@@ -193,3 +193,5 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+#[cfg(all(test, target_os = "windows"))]
+mod windows_manifest;

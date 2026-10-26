@@ -5,6 +5,7 @@
   "identifier": "com.willywg.klaudio-panels",
   "build": {
     "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
@@ -19,7 +20,6 @@
         "minHeight": 600,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "decorations": false,
         "dragDropEnabled": true,
         "backgroundThrottling": "disabled"
       }
