@@ -11,10 +11,6 @@
  *  with spaces or shell metacharacters gets quoted. */
 export type DropTargetKind = "claude" | "shell";
 
-const isMac =
-  typeof navigator !== "undefined" &&
-  navigator.platform.toUpperCase().includes("MAC");
-
 function norm(p: string): string {
   return p.replace(/\\/g, "/");
 }
@@ -22,11 +18,9 @@ function norm(p: string): string {
 /** Safe quoting for a shell prompt: leave boring paths bare, wrap
  *  anything else in quotes. Adapts for POSIX shell (macOS/Linux) and
  *  PowerShell (Windows). */
-function shellQuote(token: string): string {
+function shellQuote(token: string, windows: boolean): string {
   if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(token)) return token;
-  if (!isMac) {
-    return `"${token.replace(/"/g, '`"')}"`;
-  }
+  if (windows) return `'${token.replace(/'/g, "''")}'`;
   return `'${token.replace(/'/g, `'\\''`)}'`;
 }
 
@@ -34,6 +28,7 @@ export function buildDropPayload(
   absPaths: string[],
   projectPath: string,
   kind: DropTargetKind = "claude",
+  platform = typeof navigator === "undefined" ? "" : navigator.platform,
 ): string | null {
   const trimmed = absPaths.filter((p) => p && p.length > 0);
   if (trimmed.length === 0) return null;
@@ -53,7 +48,8 @@ export function buildDropPayload(
     return rawAbs;
   });
 
-  const out = kind === "shell" ? tokens.map(shellQuote) : tokens;
+  const windows = platform.toUpperCase().startsWith("WIN");
+  const out = kind === "shell" ? tokens.map((token) => shellQuote(token, windows)) : tokens;
   return `${out.join(" ")} `;
 }
 

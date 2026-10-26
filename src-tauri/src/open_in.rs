@@ -57,61 +57,7 @@ pub fn check_app_exists(app_name: String) -> bool {
             return true;
         }
         let bin_name = map_app_to_windows_bin(&app_name).unwrap_or(&app_name);
-        if which::which(bin_name).is_ok() {
-            return true;
-        }
-        if let Some(local) = dirs::data_local_dir() {
-            let programs = local.join("Programs");
-            match bin_name {
-                "code" => {
-                    if programs.join("Microsoft VS Code/bin/code.cmd").exists()
-                        || programs.join("Microsoft VS Code/Code.exe").exists()
-                    {
-                        return true;
-                    }
-                }
-                "cursor" => {
-                    if programs.join("cursor/Cursor.exe").exists() {
-                        return true;
-                    }
-                }
-                "windsurf" => {
-                    if programs.join("Windsurf/Windsurf.exe").exists() {
-                        return true;
-                    }
-                }
-                "antigravity" => {
-                    if programs.join("antigravity/antigravity.exe").exists() {
-                        return true;
-                    }
-                }
-                _ => {}
-            }
-        }
-        if let Some(prog) = std::env::var_os("ProgramFiles") {
-            let path = std::path::Path::new(&prog);
-            match bin_name {
-                "code" => {
-                    if path.join("Microsoft VS Code/bin/code.cmd").exists()
-                        || path.join("Microsoft VS Code/Code.exe").exists()
-                    {
-                        return true;
-                    }
-                }
-                "subl" => {
-                    if path.join("Sublime Text/sublime_text.exe").exists() {
-                        return true;
-                    }
-                }
-                "wezterm" => {
-                    if path.join("WezTerm/wezterm.exe").exists() {
-                        return true;
-                    }
-                }
-                _ => {}
-            }
-        }
-        false
+        resolve_windows_bin(bin_name).is_some()
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -123,33 +69,82 @@ pub fn check_app_exists(app_name: String) -> bool {
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-#[cfg(target_os = "windows")]
-fn resolve_windows_bin(bin: &str) -> (String, bool) {
-    if bin == "code" {
-        if let Some(local) = dirs::data_local_dir() {
-            let exe = local.join("Programs/Microsoft VS Code/Code.exe");
-            if exe.exists() {
-                return (exe.to_string_lossy().into_owned(), false);
-            }
-            let cmd = local.join("Programs/Microsoft VS Code/bin/code.cmd");
-            if cmd.exists() {
-                return (cmd.to_string_lossy().into_owned(), true);
-            }
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn windows_editors_use_the_same_known_paths_for_detection_and_launch() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let local =
+            std::env::temp_dir().join(format!("klaudio-editors-{}-{nonce}", std::process::id()));
+        for (bin, relative) in [
+            ("code", "Programs/Microsoft VS Code/Code.exe"),
+            ("cursor", "Programs/cursor/Cursor.exe"),
+            ("windsurf", "Programs/Windsurf/Windsurf.exe"),
+            ("antigravity", "Programs/antigravity/antigravity.exe"),
+        ] {
+            let exe = local.join(relative);
+            std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+            std::fs::write(&exe, b"test fixture").unwrap();
+            assert_eq!(resolve_windows_install(bin, Some(&local), None), Some(exe));
         }
-        if let Some(prog) = std::env::var_os("ProgramFiles") {
-            let p = std::path::Path::new(&prog);
-            let exe = p.join("Microsoft VS Code/Code.exe");
-            if exe.exists() {
-                return (exe.to_string_lossy().into_owned(), false);
-            }
-            let cmd = p.join("Microsoft VS Code/bin/code.cmd");
-            if cmd.exists() {
-                return (cmd.to_string_lossy().into_owned(), true);
-            }
-        }
+        assert_eq!(resolve_windows_install("missing", Some(&local), None), None);
+        let system_exe = local.join("system/Sublime Text/sublime_text.exe");
+        std::fs::create_dir_all(system_exe.parent().unwrap()).unwrap();
+        std::fs::write(&system_exe, b"test fixture").unwrap();
+        assert_eq!(
+            resolve_windows_install("subl", None, Some(&local.join("system"))),
+            Some(system_exe)
+        );
+        let batch = local.join("batch/Programs/Microsoft VS Code/bin/code.cmd");
+        std::fs::create_dir_all(batch.parent().unwrap()).unwrap();
+        std::fs::write(&batch, b"@echo off").unwrap();
+        assert_eq!(
+            resolve_windows_install("code", Some(&local.join("batch")), None),
+            Some(batch)
+        );
+        std::fs::remove_dir_all(&local).unwrap();
     }
-    let is_batch = bin.ends_with(".cmd") || bin.ends_with(".bat");
-    (bin.to_string(), is_batch)
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_windows_bin(bin: &str) -> Option<std::path::PathBuf> {
+    let local = dirs::data_local_dir();
+    let program_files = std::env::var_os("ProgramFiles").map(std::path::PathBuf::from);
+    resolve_windows_install(bin, local.as_deref(), program_files.as_deref())
+        .or_else(|| which::which(bin).ok())
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_windows_install(
+    bin: &str,
+    local: Option<&std::path::Path>,
+    program_files: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
+    let relative: &[&str] = match bin {
+        "code" => &[
+            "Microsoft VS Code/Code.exe",
+            "Microsoft VS Code/bin/code.cmd",
+        ],
+        "cursor" => &["cursor/Cursor.exe", "cursor/resources/app/bin/cursor.cmd"],
+        "windsurf" => &["Windsurf/Windsurf.exe", "Windsurf/bin/windsurf.cmd"],
+        "antigravity" => &["antigravity/antigravity.exe", "Antigravity/Antigravity.exe"],
+        "subl" => &["Sublime Text/sublime_text.exe"],
+        "wezterm" => &["WezTerm/wezterm.exe"],
+        _ => &[],
+    };
+    [
+        local.map(|p| p.join("Programs")),
+        program_files.map(std::path::Path::to_path_buf),
+    ]
+    .into_iter()
+    .flatten()
+    .flat_map(|root| relative.iter().map(move |path| root.join(path)))
+    .find(|path| path.is_file())
 }
 
 /// Open `path` with the given app (display name or command alias)
@@ -162,18 +157,13 @@ pub fn open_path_with(path: String, app_name: Option<String>) -> Result<(), Stri
 
         let target_bin = app_name.as_deref().and_then(map_app_to_windows_bin);
         if let Some(bin) = target_bin {
-            let (target, is_batch) = resolve_windows_bin(bin);
-            if is_batch {
-                let mut cmd = std::process::Command::new("cmd");
-                cmd.args(["/d", "/c", &target, &path]);
-                cmd.creation_flags(CREATE_NO_WINDOW);
-                cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
-            } else {
-                let mut cmd = std::process::Command::new(&target);
-                cmd.arg(&path);
-                cmd.creation_flags(CREATE_NO_WINDOW);
-                cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
-            }
+            let target =
+                resolve_windows_bin(bin).ok_or_else(|| format!("could not find editor: {bin}"))?;
+            // Rust applies batch-file argument escaping for explicit .cmd/.bat paths.
+            let mut cmd = std::process::Command::new(&target);
+            cmd.arg(&path);
+            cmd.creation_flags(CREATE_NO_WINDOW);
+            cmd.spawn().map(|_| ()).map_err(|e| e.to_string())
         } else {
             tauri_plugin_opener::open_path(path, None::<&str>).map_err(|e| e.to_string())
         }
@@ -219,9 +209,8 @@ fn render_app_icon_png(app_bundle_path: &str) -> Option<Vec<u8>> {
         let tiff = icon.TIFFRepresentation()?;
         let rep = NSBitmapImageRep::imageRepWithData(&tiff)?;
         let empty = NSDictionary::new();
-        let png = unsafe {
-            rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &empty)
-        }?;
+        let png =
+            unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &empty) }?;
         Some(png.to_vec())
     })
 }
