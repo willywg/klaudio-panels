@@ -17,13 +17,18 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::Deserialize;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::AppHandle;
+#[cfg(unix)]
+use tauri::{Emitter, Manager};
 
+#[cfg(unix)]
 use crate::agent::AgentId;
+#[cfg(unix)]
 use crate::debug_log;
 use crate::local_socket;
 #[cfg(unix)]
 use crate::local_socket::bind_exclusive;
+#[cfg(unix)]
 use crate::session_watcher::SessionCompletePayload;
 
 const MAX_MESSAGE: u64 = 64 * 1024;

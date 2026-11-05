@@ -15,7 +15,8 @@
 - Build GNU installers with `bun run release:windows-gnu`. Its explicit `--target x86_64-pc-windows-gnu` enables Tauri's built-in loader DLL packaging and uninstall cleanup. With the npm CLI's default target inference, the GNU executable can be built while the installer omits `WebView2Loader.dll`. No custom NSIS hook or vendored DLL is needed.
 - Terminal clipboard history capture and Cursor turn-notification hooks are not implemented on Windows. The UI reports these features as unavailable; normal copy/paste and clipboard-image insertion are separate features.
 - PowerShell file drops use literal single-quoted paths; Linux/macOS retain POSIX quoting. Editor detection and launch share the same Windows resolver.
-- Native macOS window decorations are preserved. Windows/Linux remove decorations during platform-specific startup. Development uses the Vite URL at `http://localhost:1420`.
+- Native macOS and Linux window decorations are preserved. Windows removes native decorations during startup and renders discrete min/max/close controls in the header. Development uses the Vite URL at `http://localhost:1420` (`beforeDevCommand: "bun run dev"`).
+- `src-tauri/Cargo.toml` sets `crate-type = ["rlib"]` instead of `["staticlib", "cdylib", "rlib"]` because desktop Tauri only links the library into the binary target (`main.rs`), and building a `cdylib` on `x86_64-pc-windows-gnu` overflows the GNU linker (`ld`) 65,535 PE export ordinal limit.
 - A successful local frontend build is not proof of a complete Windows release. A clean-machine build, installer/deep-link checks, and native interactive smoke tests are still required.
 
 The sections below describe the original implementation report, not a guarantee that every subsystem has current end-to-end test coverage.
@@ -24,14 +25,16 @@ The sections below describe the original implementation report, not a guarantee 
 
 The library test executable now embeds the same Common Controls v6 manifest as the app. Previously Tauri linked that manifest only into the application, so the test loader failed on `TaskDialogIndirect` with `0xc0000139` before running any tests. The build script keeps the app's icons/version resources and links one shared manifest for both executable types.
 
-Run `cargo test --manifest-path src-tauri/Cargo.toml --lib` with the resource compiler required by your Windows toolchain available. The local Windows GNU validation passed all 96 library tests and built the debug application. Test-only Codex/Cursor fixtures now JSON-escape Windows paths. No real agent session files are changed by these fixture fixes.
+Run `cargo test --manifest-path src-tauri/Cargo.toml --lib` with the resource compiler required by your Windows toolchain available. The local Windows GNU validation passed all library tests and built the debug application. Test-only Codex/Cursor fixtures now JSON-escape Windows paths. No real agent session files are changed by these fixture fixes.
 
 The MSVC linker path and non-Windows builds still require platform-specific verification. These unit tests do not establish clean-machine installation or interactive end-to-end support.
 
-### Latest local validation (October 26, 2026)
+### Latest local validation
 
-- `bun run typecheck`: passed; focused frontend tests: 11 passed.
-- Full `bun test`: 165 passed, 4 failed, 3 errors. The same failing cases were reproduced on the pre-port baseline; the full suite is not green.
+- `bun run typecheck`: passed; focused frontend tests: passed.
+- Full `bun test`: the 4 failing / 3 erroring cases observed on Windows are pre-existing test-runner / locale issues unrelated to the port:
+  1. `src/lib/relative-time.test.ts` (`commitTime > past a week it switches to a calendar date`): `NOW` is in August, so `secondsAgo(8 * DAY)` is August 12. `toLocaleDateString(undefined, ...)` formats using the OS locale (`es-PE` on the test machine), producing `"12 ago"` (*12 de agosto*), which trips `expect(...).not.toContain("ago")`.
+  2. `src/context/clipboard-history.test.ts`, `src/context/notifications.test.ts`, and `src/context/session-watcher.test.ts`: Bun's test runner on Windows imports `.tsx` files directly without Vite's `vite-plugin-solid` transform, throwing `SyntaxError: Export named 'jsxDEV' not found in module 'node_modules/solid-js/dist/solid.js'`.
 - `bun run release:windows-gnu --no-sign -- --offline`: passed using an isolated `CARGO_TARGET_DIR` and an existing GNU resource compiler. The generated NSIS script includes `WebView2Loader.dll` and its uninstall cleanup.
 - The agent settings dialog now limits its height to the viewport and allows vertical scrolling. Structural tests and compiled CSS were checked; rendered verification on short/narrow windows remains pending because no browser was available for visual QA.
 - The second-laptop tester reported working Git changes, file browsing, and terminal access. This is a partial smoke test, not completion of the installation, deep-link, external-editor launch, and uninstall matrix.
@@ -84,7 +87,7 @@ The terminal engine (`src-tauri/src/pty.rs` and `src-tauri/src/shell_env.rs`) pr
 - **PTY Backend (`pty.rs`):** Wired `portable-pty` to Windows ConPTY (Microsoft's native pseudoconsole subsystem).
 - **Environment & PATH Preservation:** 
   - Guarded `clipboard_history_env` behind `#[cfg(not(target_os = "windows"))]`, preventing Unix shim contamination on Windows.
-  - In `safe_baseline_env()`, synchronized `Path` and `PATH` so case-insensitive Windows lookups always find the full system path.
+  - In `safe_baseline_env()`, collapsed any mixed-case `Path` keys into a single `PATH` entry so `BTreeMap<String, String>` never carries duplicate `Path` and `PATH` keys into child processes.
   - In `which_in_shell()`, split `PATH` using semicolon delimiters (`;`) and probed executable extensions (`.exe`, `.cmd`, `.bat`) in addition to bare filenames.
 
 #### Decision Rationale & Tradeoffs
@@ -94,23 +97,17 @@ The terminal engine (`src-tauri/src/pty.rs` and `src-tauri/src/shell_env.rs`) pr
 
 ---
 
-### 3. Agent Lifecycle & Antigravity (AGY) Integration
+### 3. Agent Binary Discovery on Windows
 
 #### The Problem
-The agent supervisor (`src-tauri/src/agent.rs` and `src-tauri/src/binary.rs`) searched for binaries using hardcoded Unix paths (`~/.local/bin/claude`, `~/.local/bin/codex`). Windows installs AI CLI tools into `%LOCALAPPDATA%\Programs`, `%APPDATA%\npm`, or `~/.cargo/bin`, frequently wrapped as `.cmd` or `.exe` files. Furthermore, Antigravity (`agy`) was not supported as a native agent.
+The agent supervisor (`src-tauri/src/agent.rs` and `src-tauri/src/binary.rs`) searched for binaries using hardcoded Unix paths (`~/.local/bin/claude`, `~/.local/bin/codex`). Windows installs AI CLI tools into `%LOCALAPPDATA%\Programs`, `%APPDATA%\npm`, or `~/.cargo/bin`, frequently wrapped as `.cmd` or `.exe` files.
 
 #### Technical Implementation
 - **Windows Path Resolution:** Added search paths leveraging `dirs::data_local_dir()` (`AppData\Local\Programs\...`) and `dirs::data_dir()` (`AppData\Roaming\npm\...`).
-- **Binary Suffix Handling:** Explicitly probes `.exe`, `.cmd`, and `.bat`.
-- **First-Class Antigravity (AGY) Support:**
-  - Added `AgentId::Agy` enum variant.
-  - Implemented binary discovery for `agy.exe`.
-  - Added session watch root for `~/.gemini/antigravity-cli/conversations`.
-  - Implemented session resumption via `--conversation <id>`.
+- **Binary Suffix Handling:** Explicitly probes `.exe`, `.cmd`, and `.bat` for Claude Code, Cursor Agent, and Codex.
 
 #### Decision Rationale & Tradeoffs
 * **Why automatic multi-path discovery:** Zero-configuration developer experience. The user does not need to manually configure PATH variables or settings menus.
-* **Why add Antigravity as an AgentId:** Unifies Claude Code, OpenAI Codex, Cursor Agent, and Google Antigravity under the same multi-panel, session-aware UI.
 
 ---
 
@@ -166,20 +163,20 @@ On macOS, pasting images into Claude Code relies on Apple's `NSPasteboard` and `
 
 #### Technical Implementation
 - **Backend Rust Command (`src-tauri/src/clipboard_image.rs`):**
+  - Compiled on Windows (`#[cfg(target_os = "windows")]`, returning `Ok(None)` on other platforms so macOS retains its native `NSPasteboard` path).
   - Utilizes `tauri_plugin_clipboard_manager` to read raw clipboard image buffers (RGBA/DIB).
   - Encodes the buffer to a lossless PNG using the `image` crate.
   - Saves the image to `%TEMP%\klaudio-clipboard\image_<timestamp>.png`.
+  - Automatically prunes expired PNGs older than 15 minutes on paste and clears `%TEMP%\klaudio-clipboard` on application startup.
   - Exposes the command `paste_clipboard_image` returning the file path.
 - **Frontend Interception (`terminal-view.tsx` & `shell-terminal-view.tsx`):**
-  - On `Ctrl+V` or clipboard `paste` event, if the clipboard contains image data or text is empty:
+  - Gated to Windows (`isWindows`) so macOS and Linux paste behavior is untouched.
+  - On `Ctrl+V` (`terminal-view`) or `Ctrl+Shift+V` / clipboard `paste` event, if the clipboard contains image data or text is empty:
     1. Calls `paste_clipboard_image`.
-    2. Inserts `"C:\Users\...\AppData\Local\Temp\klaudio-clipboard\image_....png" ` directly into the terminal input buffer using bracketed paste.
-- **Clipboard History (`clipboard_history.rs`):**
-  - Enabled clipboard history monitoring on Windows.
-  - Suppressed macOS `pbcopy` shim warnings on Windows.
+    2. Inserts `"C:\Users\...\AppData\Local\Temp\klaudio-clipboard\image_....png" ` directly into the terminal input buffer using `term.paste(...)`.
 
 #### Decision Rationale & Tradeoffs
-* **Why write to a temp file instead of Base64:** Terminal PTYs have strict buffer size limits. Emitting megabytes of base64 data directly into xterm crashes line editors and overflows PTY queues. Passing a clean image file path allows AI agents (Claude, Codex, Antigravity) to read the file directly using their filesystem tools.
+* **Why write to a temp file instead of Base64:** Terminal PTYs have strict buffer size limits. Emitting megabytes of base64 data directly into xterm crashes line editors and overflows PTY queues. Passing a clean image file path allows AI agents (Claude, Codex, Cursor) to read the file directly using their filesystem tools.
 
 ---
 
@@ -227,9 +224,9 @@ The top titlebar (`src/components/titlebar.tsx`) reserved a hardcoded `72px` lef
 
 #### Technical Implementation
 - **Dynamic Header Layout:**
-  - Evaluates `isMac` at runtime.
-  - On macOS: maintains 72px left padding for traffic lights.
-  - On Windows/Linux: sets compact 10px padding and renders custom native-styled titlebar buttons:
+  - Evaluates `isMac` and `isWindows` at runtime.
+  - On macOS and Linux: preserves the existing layout and native window decorations.
+  - On Windows (`isWindows`): disables native OS decorations (`window.set_decorations(false)`), sets compact 10px left padding, and renders custom native-styled titlebar buttons:
     - **Minimize** (`Minus` icon) -> calls `appWindow.minimize()`
     - **Maximize/Restore** (`Square` icon) -> calls `appWindow.toggleMaximize()`
     - **Close** (`X` icon with red hover highlight) -> calls `appWindow.close()`
@@ -278,51 +275,30 @@ On macOS, running `klaudio` from the terminal opens projects via a Unix symlink 
 
 #### Technical Implementation
 - In `src-tauri/src/shell_install.rs`:
-  - Defined `windows_candidates()` probing user-writable PATH locations:
-    - `%USERPROFILE%\.cargo\bin\klaudio.cmd`
-    - `%USERPROFILE%\.local\bin\klaudio.cmd`
-    - `%USERPROFILE%\bin\klaudio.cmd`
-    - `%LOCALAPPDATA%\Microsoft\WindowsApps\klaudio.cmd`
-  - Generates and writes a native batch launcher script:
-    ```cmd
-    @echo off
-    if "%~1"=="" (
-        start "" "klaudio://open"
-    ) else (
-        start "" "klaudio://open?path=%~f1"
-    )
-    ```
-  - Resolves target paths to canonical absolute paths (`%~f1`) and invokes the Windows registered protocol handler `klaudio://open?path=...`.
-  - Implemented `uninstall_cli` to clean up candidate files across all standard locations.
+  - Installs `klaudio.cmd` into `%LOCALAPPDATA%\Programs\klaudio\klaudio.cmd` and appends that directory to the user's `HKCU\Environment\Path` registry value (broadcasting `WM_SETTINGCHANGE`).
+  - Exposes `install_cli` and `uninstall_cli` in the **Settings** dialog on Windows (`src/components/agent-settings-dialog.tsx`), while keeping the native `"Klaudio"` OS menu on macOS and Linux.
+  - Generates a batch launcher that URL-encodes the resolved path (`%~f1`) via `[uri]::EscapeDataString($env:KLAUDIO_PATH)` so paths containing `#`, `%`, `&`, or `?` survive deep-link parsing.
+  - Integrates `tauri-plugin-single-instance` (with the `deep-link` feature) on Windows so invoking `klaudio .` from a terminal forwards the `klaudio://open?path=...` URL to the already-running Klaudio Panels window and focuses it instead of spawning a second instance.
 
 #### Decision Rationale & Tradeoffs
 * **Why `.cmd` over PowerShell `.ps1`:** Windows execution policy blocks unsigned `.ps1` scripts by default (`Restricted` or `RemoteSigned`). A `.cmd` batch file executes instantly from CMD, PowerShell, Git Bash, and third-party terminal emulators without requiring policy changes.
-* **Why protocol deep-linking (`start "" "klaudio://..."`):** Using Tauri's native custom protocol registration allows detached CLI calls to communicate with existing running instances of Klaudio Panels without requiring custom Win32 Named Pipe daemons.
+* **Why protocol deep-linking + `tauri-plugin-single-instance`:** On Windows, OS protocol handlers launch a new process with the deep-link URL as an argument. `tauri-plugin-single-instance` with its `deep-link` feature intercepts that second launch and delivers the URL to the existing `on_open_url` listener in the primary window.
 
 ---
 
-### 12. Terminal Keybindings & Secondary Editor Event Routing
+### 12. Terminal Keybindings & Shell Shortcut Isolation
 
 #### The Problem
 In xterm.js, key events inside the terminal canvas do not bubble to the standard DOM by default. On macOS, `Cmd` is `e.metaKey`. On Windows:
-1. Users expect `Ctrl`, but xterm captured `Ctrl+Alt+1..9` (tab switching) and `Ctrl+1..9` (project switching), transmitting escape sequences to the shell rather than letting the application switch tabs.
-2. In embedded secondary editor terminals (`src/lib/editor-terminal-store.ts`, running Neovim or Helix), copy, paste, and tab close shortcuts were hardcoded to `e.metaKey`. On Windows, standard `Ctrl+C`, `Ctrl+V`, and `Ctrl+W` were swallowed by the terminal without triggering clipboard or tab actions.
+1. Users expect `Ctrl` for app-level navigation in the agent pane, where xterm would otherwise capture `Ctrl+Alt+1..9` (tab switching) and `Ctrl+1..9` (project switching).
+2. In the bottom shell terminal (`src/components/shell-terminal/shell-terminal-view.tsx`), bare `Ctrl+W` (readline backward-kill-word), `Ctrl+B` (tmux prefix), `Ctrl+J` (newline), and `Ctrl+C` (SIGINT) must reach the shell unmodified, so app shortcuts there stay on `Ctrl+Shift` off macOS (`const meta = mac ? e.metaKey : e.ctrlKey && e.shiftKey`).
 
 #### Technical Implementation
-- **Modifier Normalization:** Centralized platform modifier evaluation across `terminal-view.tsx`, `shell-terminal-view.tsx`, and `editor-terminal-store.ts`:
-  ```ts
-  const mac = navigator.platform.toUpperCase().includes("MAC");
-  const mod = mac ? e.metaKey : e.ctrlKey;
-  ```
-- **App-Level Shortcut Bubbling:** In `attachCustomKeyEventHandler`:
-  - Intercepted `mod && e.altKey && Digit[1-9]` and `mod && [1-9]`, returning `false` so the browser window handles tab and project navigation.
-  - Differentiated between terminal interrupt and copy: if `mod && key === "c"` and xterm has an active selection, it copies to the clipboard; if there is no selection, it passes through to send SIGINT (`\x03`) to the CLI process.
-  - Intercepted `mod && key === "v"` to invoke native clipboard paste with image branching.
-  - Intercepted `mod && key === "w"` in secondary editor terminals to cleanly close the editor tab.
-
-#### Decision Rationale & Tradeoffs
-* **Why bubble tab/project shortcuts:** Eliminates context switching friction. Users working in terminal panes can switch workspaces and tabs without clicking outside the terminal element.
-* **Why preserve SIGINT when no selection exists:** Developer muscle memory requires `Ctrl+C` to cancel running processes or CLI queries in the terminal. Only intercepting when text is selected gives the user intuitive copy behavior without breaking standard terminal signals.
+- **Agent Terminal (`terminal-view.tsx`):**
+  - On Windows (`win`), intercepts `Ctrl+C` (when selection is non-empty) and `Ctrl+V` (with clipboard image fallback), while keeping Linux on `Ctrl+Shift+C` / `Ctrl+Shift+V` and macOS on `Cmd+C` / `Cmd+V`.
+  - Bubbles app-level shortcuts (`Ctrl+B`, `Ctrl+J`, `Ctrl+K`, `Ctrl+T`, `Ctrl+W`, `Ctrl+1..9`, `Ctrl+Alt+1..9`) out of xterm.
+- **Shell Terminal (`shell-terminal-view.tsx`):**
+  - Uses `e.ctrlKey && e.shiftKey` on Windows and Linux so standard shell control keys (`Ctrl+W`, `Ctrl+B`, `Ctrl+J`, `Ctrl+C`) pass straight through to the shell.
 
 ---
 
@@ -357,13 +333,12 @@ Rust's standard library `std::fs::canonicalize()` on Windows prepends the UNC ve
 ### 14. Windows Terminal Build & Release Pipeline
 
 #### The Problem
-Building an autonomous standalone executable (`klaudio-panels.exe`) on Windows without an external GUI installer requires a streamlined terminal build process. During compilation with Tauri v2:
+Building a distributable NSIS installer (`klaudio-panels_..._x64-setup.exe`) and standalone executable (`klaudio-panels.exe`) on Windows requires a streamlined terminal build process. During compilation with Tauri v2:
 1. `tauri-winres` requires `windres.exe` on PATH to compile the Windows application manifest and icon resources into `libresource.a`.
-2. `tauri.conf.json` previously pointed `beforeBuildCommand` to `bun run build`, which fails on Windows systems where `bun` is not installed.
-3. The build must produce a self-contained binary that embeds all frontend assets via Tauri v2's custom-protocol without requiring external installer wrappers.
+2. When building with the GNU toolchain (`x86_64-pc-windows-gnu`), passing `--target x86_64-pc-windows-gnu` explicitly to `tauri build` is required so Tauri's bundler includes `WebView2Loader.dll` alongside the executable.
 
 #### Technical Implementation
-- Configured `tauri.conf.json` to execute `npm run build` during frontend bundle generation.
+- Added `"release:windows-gnu": "tauri build --target x86_64-pc-windows-gnu --bundles nsis"` in `package.json` while keeping `tauri.conf.json` on `bun run dev` / `bun run build`.
 - Ensured resource compiler `windres.exe` is available on the build PATH.
 - Invoked the terminal release build:
   ```powershell

@@ -53,10 +53,20 @@ impl Drop for TtyGuard {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _tty_guard = TtyGuard;
-    #[cfg(target_os = "macos")]
+    #[cfg(not(target_os = "windows"))]
     use tauri::Emitter;
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        use tauri::Manager;
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }));
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -71,6 +81,8 @@ pub fn run() {
                 );
             }
             clipboard_history::install(app.handle().clone());
+            #[cfg(target_os = "windows")]
+            clipboard_image::cleanup_temp_dir();
             #[cfg(unix)]
             if let Err(e) = shell_integration::install() {
                 debug_log::write("shell", &format!("zsh wrapper install failed: {e}"));
@@ -84,6 +96,8 @@ pub fn run() {
             });
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
+                #[cfg(target_os = "windows")]
+                let _ = app.deep_link().register_all();
                 let app_for_url = app.handle().clone();
                 app.deep_link().on_open_url(move |event| {
                     for url in event.urls() {
@@ -91,7 +105,7 @@ pub fn run() {
                     }
                 });
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "windows")]
             {
                 use tauri::Manager;
                 if let Some(window) = app.get_webview_window("main") {
@@ -103,7 +117,7 @@ pub fn run() {
             // Install / Uninstall CLI items. These just emit intents to the
             // frontend which invokes the Tauri commands and shows the result
             // dialog — keeps all dialog plumbing on the JS side.
-            #[cfg(target_os = "macos")]
+            #[cfg(not(target_os = "windows"))]
             {
                 use tauri::menu::{Menu, MenuItem, Submenu};
                 let install_item = MenuItem::with_id(

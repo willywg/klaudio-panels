@@ -24,8 +24,11 @@ pub struct PtySession {
     pause: Arc<PauseGate>,
     /// Set for agent tabs. Shell and editor PTYs leave this empty, so a
     /// Cursor hook event cannot be routed to them.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) agent: Option<crate::agent::AgentId>,
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) project_path: String,
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) session_id: Option<String>,
 }
 
@@ -241,7 +244,7 @@ fn log_startup_bytes(id: &str, bytes: &[u8]) {
 fn clipboard_history_env(env: Vec<(String, String)>) -> Vec<(String, String)> {
     #[cfg(target_os = "windows")]
     {
-        return env;
+        env
     }
     #[cfg(not(target_os = "windows"))]
     {

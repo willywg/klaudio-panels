@@ -46,8 +46,7 @@ Klaudio Panels can be built and run directly from your terminal (PowerShell or C
 
 ### 1. Prerequisites
 - [Rust](https://rustup.rs/) with the Windows GNU toolchain active (`x86_64-pc-windows-gnu`) and `windres` available for the GNU release command below
-- [Node.js](https://nodejs.org/) (v18+, for the npm build hook)
-- [Bun](https://bun.sh/) (for installation from the committed lockfile)
+- [Bun](https://bun.sh/) (for installing dependencies and running the frontend build)
 
 ### 2. Clone & Build
 ```powershell
@@ -63,17 +62,16 @@ The GNU release command explicitly selects its target so Tauri bundles the requi
 MSVC builds use their own target/toolchain; this GNU command does not change the existing macOS or generic Tauri commands.
 
 ### 3. Install the `klaudio` CLI command
-Once Klaudio Panels is running, use the app menu:
-**Klaudio → Install 'klaudio' command**.
+Once Klaudio Panels is running, open **Settings** (⚙️ in the top-right titlebar) and click **Install 'klaudio' in PATH** under **Terminal CLI (`klaudio`)** (on macOS and Linux, use the OS menu bar: **Klaudio → Install 'klaudio' Command in PATH**).
 
-This installs `klaudio.cmd` to a standard user PATH directory (`~/.cargo/bin`, `~/.local/bin`, or `~/bin`). You can then launch any project straight from your terminal:
+On Windows, this installs `klaudio.cmd` into `%LOCALAPPDATA%\Programs\klaudio` and adds that directory to your user `PATH`. You can then launch any project straight from a new terminal window:
 
 ```powershell
 klaudio .              # open current directory in Klaudio Panels
 klaudio C:\my-project  # open specific project
 ```
 
-> For full architectural details of the Windows port, see [WINDOWS_PORT.md](WINDOWS_PORT.md).
+> For full architectural details of the Windows port, see [docs/WINDOWS_PORT.md](./docs/WINDOWS_PORT.md).
 
 ## First launch (macOS)
 
@@ -104,7 +102,7 @@ Both warnings are Gatekeeper defaults for unsigned apps, not signs that anything
 | OS | Status | Notes |
 | --- | --- | --- |
 | **macOS 14+** (Sonoma, Sequoia) | ✅ primary target | Tested on Apple Silicon and Intel. Universal `.dmg` is what the maintainer ships. |
-| **Windows 10/11** | 🧪 validation in progress | Native ConPTY port. Terminal clipboard recording and Cursor turn-notification hooks are unavailable. Clean-machine build, installer, and end-to-end validation remain pending. See [WINDOWS_PORT.md](WINDOWS_PORT.md). |
+| **Windows 10/11** | 🧪 validation in progress | Native ConPTY port. Terminal clipboard recording and Cursor turn-notification hooks are unavailable. Clean-machine build, installer, and end-to-end validation remain pending. See [docs/WINDOWS_PORT.md](./docs/WINDOWS_PORT.md). |
 | **Linux** | 🧪 untested | Every release carries an `.AppImage` and a `.deb` built by CI, named `-untested` because that is exactly what they are — they compile, but nobody has run them end to end. Notifications, clipboard history and "Open in…" take macOS-only paths that have no Linux equivalent yet. Help validating is very welcome — see [#1](https://github.com/willywg/klaudio-panels/issues/1). |
 
 **About code signing.** Apple's Developer Program is US$99/year. We'll pay it once the project has real usage; until then, the first-launch workaround above is the cost of keeping the project free. Apple has been tightening the unsigned-app escape hatches with each macOS release, so this is a temporary state, not a permanent stance.

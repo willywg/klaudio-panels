@@ -12,6 +12,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { useAgents, type AgentInfo } from "@/context/agents";
 import { AGENT_DISPLAY, CURSOR, type AgentId } from "@/lib/agents";
 
+const isWindows =
+  typeof navigator !== "undefined" &&
+  navigator.platform.toUpperCase().startsWith("WIN");
+
 type HookStatus =
   | { state: "on" }
   | { state: "off" }
@@ -44,6 +48,11 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
   const [hook, setHook] = createSignal<HookStatus | null>(null);
   const [hookError, setHookError] = createSignal<string | null>(null);
   const [hookBusy, setHookBusy] = createSignal(false);
+  const [cliBusy, setCliBusy] = createSignal(false);
+  const [cliMessage, setCliMessage] = createSignal<{
+    kind: "ok" | "err";
+    text: string;
+  } | null>(null);
   let panelRef: HTMLDivElement | undefined;
 
   function reset(list: AgentInfo[]) {
@@ -68,6 +77,7 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
       () => props.open,
       (open) => {
         if (!open) return;
+        setCliMessage(null);
         void agents.refresh().then(() => {
           reset(agents.agents());
           for (const a of agents.agents()) void discover(a.id);
@@ -125,6 +135,38 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
       setHookError(String(err));
     } finally {
       setHookBusy(false);
+    }
+  }
+
+  async function installCli() {
+    setCliBusy(true);
+    setCliMessage(null);
+    try {
+      const where = await invoke<string>("install_cli");
+      setCliMessage({
+        kind: "ok",
+        text: `Installed at ${where}. Open a new terminal window to pick up the updated PATH.`,
+      });
+    } catch (err) {
+      setCliMessage({ kind: "err", text: String(err) });
+    } finally {
+      setCliBusy(false);
+    }
+  }
+
+  async function uninstallCli() {
+    setCliBusy(true);
+    setCliMessage(null);
+    try {
+      await invoke("uninstall_cli");
+      setCliMessage({
+        kind: "ok",
+        text: "Removed 'klaudio' from PATH. Open a new terminal window for changes to take effect.",
+      });
+    } catch (err) {
+      setCliMessage({ kind: "err", text: String(err) });
+    } finally {
+      setCliBusy(false);
     }
   }
 
@@ -263,6 +305,50 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
             and remembered tabs come back when it is enabled again. Tabs already
             open keep running.
           </div>
+
+          <Show when={isWindows}>
+            <div class="mt-4 pt-3 border-t border-neutral-800">
+              <div class="font-medium text-neutral-100">
+                Terminal CLI (<span class="font-mono text-[11.5px]">klaudio</span>)
+              </div>
+              <div class="text-[11px] text-neutral-500 mt-0.5 leading-snug">
+                Install or remove the <span class="font-mono">klaudio</span>{" "}
+                command in your user <span class="font-mono">PATH</span> so you
+                can open projects from any terminal with{" "}
+                <span class="font-mono">klaudio .</span>
+              </div>
+              <div class="flex items-center gap-2 mt-2">
+                <button
+                  type="button"
+                  class="px-2.5 h-7 rounded text-[11.5px] transition border border-neutral-700 hover:bg-neutral-800 text-neutral-200 disabled:opacity-50"
+                  disabled={cliBusy() || saving()}
+                  onClick={() => void installCli()}
+                >
+                  Install 'klaudio' in PATH
+                </button>
+                <button
+                  type="button"
+                  class="px-2.5 h-7 rounded text-[11.5px] transition border border-neutral-800 hover:bg-neutral-800 text-neutral-400 hover:text-neutral-200 disabled:opacity-50"
+                  disabled={cliBusy() || saving()}
+                  onClick={() => void uninstallCli()}
+                >
+                  Uninstall
+                </button>
+              </div>
+              <Show when={cliMessage()}>
+                {(msg) => (
+                  <div
+                    class={
+                      "mt-1.5 text-[11px] leading-snug break-words " +
+                      (msg().kind === "ok" ? "text-emerald-400" : "text-red-400")
+                    }
+                  >
+                    {msg().text}
+                  </div>
+                )}
+              </Show>
+            </div>
+          </Show>
 
           <div class="flex gap-2 justify-end mt-4">
             <button

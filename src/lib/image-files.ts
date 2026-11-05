@@ -126,14 +126,25 @@ export async function resolveImagePath(
 /** Express an absolute path relative to a project when it lives inside it.
  *  Keeps preview tabs on the project-relative paths every other caller uses,
  *  and leaves outside-the-project images absolute. Normalizes slashes and
- *  handles case-insensitive comparison on Windows. */
+ *  uses case-insensitive comparison on Windows and macOS while keeping Linux
+ *  case-sensitive. */
 export function relativizeToProject(
   projectPath: string,
   absPath: string,
+  platform = typeof navigator !== "undefined" && navigator.platform
+    ? navigator.platform
+    : typeof process !== "undefined" && process.platform
+      ? process.platform
+      : "",
 ): string {
   const normBase = projectPath.replace(/\\/g, "/").replace(/\/+$/, "");
   const normAbs = absPath.replace(/\\/g, "/");
-  if (normAbs.toLowerCase().startsWith(normBase.toLowerCase() + "/")) {
+  const upper = platform.toUpperCase();
+  const caseInsensitive =
+    upper.startsWith("WIN") || upper.includes("MAC") || upper.includes("DARWIN");
+  const cmpBase = caseInsensitive ? normBase.toLowerCase() : normBase;
+  const cmpAbs = caseInsensitive ? normAbs.toLowerCase() : normAbs;
+  if (cmpAbs.startsWith(cmpBase + "/")) {
     return normAbs.slice(normBase.length + 1);
   }
   return absPath;

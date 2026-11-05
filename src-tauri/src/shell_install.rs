@@ -3,7 +3,8 @@
 //! `<Resources>/scripts/klaudio`; we just symlink to it from a PATH-visible
 //! location. macOS prefers `/usr/local/bin`, falling back to
 //! `~/.local/bin` when that isn't writable; Linux goes straight to
-//! `~/.local/bin`. Windows is deferred.
+//! `~/.local/bin`. On Windows, writes a `klaudio.cmd` wrapper into a standard
+//! user PATH directory.
 
 #[cfg(not(target_os = "windows"))]
 use std::path::PathBuf;
@@ -11,7 +12,6 @@ use tauri::AppHandle;
 #[cfg(not(target_os = "windows"))]
 use tauri::Manager;
 
-#[cfg(not(target_os = "windows"))]
 use crate::debug_log;
 
 #[cfg(not(target_os = "windows"))]
@@ -95,6 +95,22 @@ pub fn uninstall_cli() -> Result<(), String> {
     Ok(())
 }
 
+/// Windows batch wrapper for `klaudio [path]`.
+///
+/// Passes `%~f1` into `KLAUDIO_PATH` with delayed expansion off so characters
+/// like `#`, `&`, `?`, `(`, `)`, and `'` are not re-interpreted by `cmd.exe`,
+/// then URL-encodes the resolved path via `[uri]::EscapeDataString` before
+/// invoking the `klaudio://` deep-link handler.
+#[cfg(target_os = "windows")]
+const WINDOWS_CLI_SCRIPT: &str = "@echo off\r\n\
+setlocal DisableDelayedExpansion\r\n\
+if \"%~1\"==\"\" (\r\n\
+    start \"\" \"klaudio://open\"\r\n\
+    exit /b 0\r\n\
+)\r\n\
+set \"KLAUDIO_PATH=%~f1\"\r\n\
+powershell.exe -NoProfile -NonInteractive -Command \"$u = 'klaudio://open?path=' + [uri]::EscapeDataString($env:KLAUDIO_PATH); Start-Process -FilePath $u\"\r\n";
+
 #[cfg(target_os = "windows")]
 fn windows_candidates() -> Vec<std::path::PathBuf> {
     let mut v = Vec::new();
@@ -114,16 +130,15 @@ fn windows_candidates() -> Vec<std::path::PathBuf> {
 #[cfg(target_os = "windows")]
 #[tauri::command]
 pub fn install_cli(_app: AppHandle) -> Result<String, String> {
-    let script_content = "@echo off\r\nif \"%~1\"==\"\" (\r\n    start \"\" \"klaudio://open\"\r\n) else (\r\n    start \"\" \"klaudio://open?path=%~f1\"\r\n)\r\n";
     for target in windows_candidates() {
         if let Some(parent) = target.parent() {
             if !parent.exists() {
                 let _ = std::fs::create_dir_all(parent);
             }
         }
-        if std::fs::write(&target, script_content).is_ok() {
-            crate::debug_log::write("cli", &format!("installed {}", target.display()));
-            return Ok(format!("Installed 'klaudio' command to {}", target.display()));
+        if std::fs::write(&target, WINDOWS_CLI_SCRIPT).is_ok() {
+            debug_log::write("cli", &format!("installed {}", target.display()));
+            return Ok(target.to_string_lossy().into_owned());
         }
     }
     Err("Could not install klaudio.cmd in any standard PATH directory.".to_string())
@@ -135,7 +150,7 @@ pub fn uninstall_cli() -> Result<(), String> {
     let mut removed_any = false;
     for target in windows_candidates() {
         if target.exists() && std::fs::remove_file(&target).is_ok() {
-            crate::debug_log::write("cli", &format!("uninstalled {}", target.display()));
+            debug_log::write("cli", &format!("uninstalled {}", target.display()));
             removed_any = true;
         }
     }
@@ -143,4 +158,16 @@ pub fn uninstall_cli() -> Result<(), String> {
         return Err("klaudio was not installed in any known location.".to_string());
     }
     Ok(())
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_cli_script_url_encodes_special_path_characters() {
+        assert!(WINDOWS_CLI_SCRIPT.contains("setlocal DisableDelayedExpansion"));
+        assert!(WINDOWS_CLI_SCRIPT.contains("set \"KLAUDIO_PATH=%~f1\""));
+        assert!(WINDOWS_CLI_SCRIPT.contains("[uri]::EscapeDataString($env:KLAUDIO_PATH)"));
+    }
 }

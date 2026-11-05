@@ -21,6 +21,9 @@ import { ClipboardHistoryButton } from "@/components/clipboard-history-button";
 const isMac =
   typeof navigator !== "undefined" &&
   navigator.platform.toUpperCase().includes("MAC");
+const isWindows =
+  typeof navigator !== "undefined" &&
+  navigator.platform.toUpperCase().startsWith("WIN");
 
 function basename(path: string): string {
   const trimmed = path.endsWith("/") || path.endsWith("\\") ? path.slice(0, -1) : path;
@@ -35,8 +38,11 @@ type Props = {
 };
 
 /** Custom titlebar: 40px height, draggable via `data-tauri-drag-region`.
- *  Reserves 72px on the left for macOS traffic lights when running on macOS.
- *  On Windows/Linux, renders native-style controls integrated cleanly into the header. */
+ *  Reserves 72px on the left for macOS traffic lights (titleBarStyle:
+ *  "Overlay" + hiddenTitle: true in tauri.conf.json). The sidebar toggle
+ *  sits right after, matching OpenCode / Warp.
+ *  On Windows, native window decorations are disabled and discrete window
+ *  controls render on the right side of the header. */
 export function Titlebar(props: Props) {
   const sidebar = useSidebar();
   const shellPanel = useShellPanel();
@@ -48,9 +54,9 @@ export function Titlebar(props: Props) {
       class="h-10 shrink-0 flex items-center bg-neutral-950 border-b border-neutral-800 select-none"
       data-tauri-drag-region
     >
-      {/* Spacer for traffic lights on macOS, or compact padding on Windows/Linux */}
+      {/* Spacer for traffic lights on macOS, or compact padding on Windows */}
       <Show
-        when={isMac}
+        when={!isWindows}
         fallback={<div class="w-2.5 h-full shrink-0" data-tauri-drag-region />}
       >
         <div class="w-[72px] h-full shrink-0" data-tauri-drag-region />
@@ -77,13 +83,13 @@ export function Titlebar(props: Props) {
       {/* Remaining space stays draggable; the search pill in the middle
           breaks drag at the button itself. */}
       <div
-        class="flex-1 h-full flex items-center justify-center"
+        class="flex-1 min-w-0 px-2 h-full flex items-center justify-center"
         data-tauri-drag-region
       >
         <Show when={props.activeProjectPath}>
           {(p) => (
             <button
-              class="h-7 w-[280px] max-w-[40vw] px-2.5 rounded-md bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 transition flex items-center gap-2 text-[12px] text-neutral-500 hover:text-neutral-300"
+              class="h-7 w-[280px] max-w-full min-w-0 px-2.5 rounded-md bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 transition flex items-center gap-2 text-[12px] text-neutral-500 hover:text-neutral-300"
               onClick={() => palette.open()}
               title={`Search sessions and files (${isMac ? "⌘K" : "Ctrl+K"})`}
             >
@@ -97,7 +103,13 @@ export function Titlebar(props: Props) {
         </Show>
       </div>
 
-      <div class="shrink-0 pr-1 flex items-center gap-1.5">
+      <div
+        class={
+          isWindows
+            ? "shrink-0 pr-1 flex items-center gap-1.5"
+            : "shrink-0 pr-2 flex items-center gap-2"
+        }
+      >
         <Show when={props.activeProjectPath}>
           {(p) => (
             <>
@@ -132,9 +144,9 @@ export function Titlebar(props: Props) {
           <Settings size={15} strokeWidth={1.75} />
         </button>
 
-        {/* Windows / Linux discrete window controls */}
-        <Show when={!isMac}>
-          <div class="flex items-center ml-2 border-l border-neutral-800/80 pl-1.5">
+        {/* Windows discrete window controls */}
+        <Show when={isWindows}>
+          <div class="shrink-0 flex items-center ml-2 border-l border-neutral-800/80 pl-1.5">
             <button
               class="w-7 h-7 rounded flex items-center justify-center text-neutral-400 hover:text-neutral-100 hover:bg-neutral-800/80 transition"
               onClick={() => appWindow.minimize()}

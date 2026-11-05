@@ -54,6 +54,11 @@ const FORMS = [
   //    evidence prose lacks: `and/or` has a slash between words, never after
   //    the last one. The lookahead is what makes that distinction — without
   //    it `and/or` matches as `and/` (#95).
+  //
+  //    Known cost: a sed expression, `s/foo/bar/`, is this exact shape and
+  //    does linkify. It resolves to nothing and the preview says so. Ruling
+  //    it out would mean ruling out one-segment directories like `web/`,
+  //    which Claude prints far more often than sed one-liners.
   String.raw`${SEG}(?:${S}${SEG})*${S}(?![\w.@-])`,
 ].join("|");
 

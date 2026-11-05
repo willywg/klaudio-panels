@@ -21,6 +21,18 @@ describe("shell drop quoting", () => {
     expect(buildDropPayload([], "/project")).toBeNull();
   });
 
+  test("project prefix matching is case-insensitive on Windows and macOS, case-sensitive on Linux", () => {
+    expect(buildDropPayload(["c:\\Project\\src\\file.ts"], "C:\\project", "claude", "Win32")).toBe(
+      "@src/file.ts ",
+    );
+    expect(buildDropPayload(["/Users/Me/Project/src/file.ts"], "/Users/me/project", "claude", "MacIntel")).toBe(
+      "@src/file.ts ",
+    );
+    expect(buildDropPayload(["/home/me/Project/src/file.ts"], "/home/me/project", "claude", "Linux x86_64")).toBe(
+      "/home/me/Project/src/file.ts ",
+    );
+  });
+
   test.skipIf(process.platform !== "win32")("PowerShell receives a literal filename", () => {
     const path = "C:\\external\\$HOME $(Write-Output changed) O'Brien.txt";
     const payload = buildDropPayload([path], "C:\\project", "shell", "Win32");

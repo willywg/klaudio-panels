@@ -51,6 +51,9 @@ import { toast } from "@/lib/toast";
 const isMac =
   typeof navigator !== "undefined" &&
   navigator.platform.toUpperCase().includes("MAC");
+const isWindows =
+  typeof navigator !== "undefined" &&
+  navigator.platform.toUpperCase().startsWith("WIN");
 
 const THEME = {
   background: "#0b0b0c",
@@ -162,7 +165,7 @@ export function TerminalView(props: Props) {
     term = new Terminal({
       fontFamily: FONT_FAMILY,
       fontSize: 13,
-      lineHeight: 1.2,
+      lineHeight: 1.0,
       letterSpacing: 0,
       theme: THEME,
       cursorBlink: true,
@@ -257,37 +260,44 @@ export function TerminalView(props: Props) {
         return false;
       }
       const mac = navigator.platform.toUpperCase().includes("MAC");
+      const win = navigator.platform.toUpperCase().startsWith("WIN");
       const mod = mac ? e.metaKey : e.ctrlKey;
       if (mod && e.altKey && /^Digit[1-9]$/.test(e.code)) {
         return false;
       }
-      if (mod && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+      if (win && mod && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
         return false;
       }
+      const meta = mac ? e.metaKey : win ? e.ctrlKey : e.ctrlKey && e.shiftKey;
+      if (!meta) return true;
       const key = e.key.toLowerCase();
-      const isCopy = key === "c" && (mac ? e.metaKey : e.ctrlKey);
-      const isPaste = key === "v" && (mac ? e.metaKey : e.ctrlKey);
-      const isClear = key === "k" && (mac ? e.metaKey : (e.ctrlKey && e.shiftKey));
-      const isHome = key === "arrowleft" && mac && e.metaKey;
-      const isEnd = key === "arrowright" && mac && e.metaKey;
-
-      if (isCopy && term!.hasSelection()) {
+      if (key === "c" && term!.hasSelection()) {
         recordClip(term!.getSelection());
         navigator.clipboard
           .writeText(term!.getSelection())
           .catch((err) => console.warn("clipboard write failed", err));
         return false;
       }
-      if (isPaste) {
-        // Read via the Tauri plugin instead of navigator.clipboard.readText().
-        // If text is present, term.paste() handles bracketed paste.
-        // If text is empty, attempt to read clipboard bitmap via paste_clipboard_image,
-        // which saves to a temp file and returns its path so agents can access the screenshot.
+      if (key === "v") {
+        // Read via the Tauri plugin (native macOS pasteboard) instead of
+        // navigator.clipboard.readText(), which pops WebKit's "Paste"
+        // permission bubble every time. term.paste() wraps the text in
+        // bracketed-paste markers when the PTY has ?2004h active so Claude
+        // Code can tell pasted input apart from typed input.
+        // preventDefault() is critical — without it the webview also fires
+        // its native paste into xterm's hidden textarea, xterm forwards
+        // those bytes as onData, and the PTY receives the text twice.
+        // Always call term.paste(), even with empty text: the bracketed-
+        // paste markers alone trigger Claude Code to sniff the NSPasteboard
+        // for an image (same path that the WebKit right-click Paste used
+        // to reach). On Windows, where Claude Code cannot read bitmap data
+        // directly from the Win32 clipboard via bracketed-paste markers,
+        // paste_clipboard_image writes a temporary PNG and pastes its path.
         e.preventDefault();
         readClipboardText()
           .then(async (text) => {
-            if (text && text.length > 0) {
-              term!.paste(text);
+            if (!win || (text && text.length > 0)) {
+              term!.paste(text ?? "");
             } else {
               try {
                 const imgPath = await invoke<string | null>("paste_clipboard_image");
@@ -303,29 +313,34 @@ export function TerminalView(props: Props) {
           })
           .catch(async (err) => {
             console.warn("clipboard read failed", err);
-            try {
-              const imgPath = await invoke<string | null>("paste_clipboard_image");
-              if (imgPath) {
-                term!.paste(`"${imgPath}" `);
-              } else {
-                term!.paste("");
+            if (win) {
+              try {
+                const imgPath = await invoke<string | null>("paste_clipboard_image");
+                if (imgPath) {
+                  term!.paste(`"${imgPath}" `);
+                  return;
+                }
+              } catch {
+                // fall through
               }
-            } catch {
-              term!.paste("");
             }
+            term!.paste("");
           });
         return false;
       }
-      if (isClear) {
+      if (key === "k" && (mac || e.shiftKey)) {
         term!.clear();
         return false;
       }
-      if (isHome) {
+      // Cmd+Left/Right → beginning/end of line (iTerm2 "Natural Text
+      // Editing" preset, Warp default). Ink's text input (used by
+      // Claude Code's prompt) reads Ctrl+A / Ctrl+E as home/end.
+      if (key === "arrowleft" && mac) {
         e.preventDefault();
         void ctx.write(props.id, encoder.encode("\x01"));
         return false;
       }
-      if (isEnd) {
+      if (key === "arrowright" && mac) {
         e.preventDefault();
         void ctx.write(props.id, encoder.encode("\x05"));
         return false;
@@ -363,6 +378,7 @@ export function TerminalView(props: Props) {
       const onTextareaFocus = () => recordTerminalFocus(props.id);
       term.textarea?.addEventListener("focus", onTextareaFocus);
       const onPaste = async (e: ClipboardEvent) => {
+        if (!isWindows) return;
         const items = e.clipboardData?.items;
         let hasImage = false;
         if (items) {
@@ -387,10 +403,14 @@ export function TerminalView(props: Props) {
           }
         }
       };
-      term.textarea?.addEventListener("paste", onPaste);
+      if (isWindows) {
+        term.textarea?.addEventListener("paste", onPaste);
+      }
       onCleanup(() => {
         term?.textarea?.removeEventListener("focus", onTextareaFocus);
-        term?.textarea?.removeEventListener("paste", onPaste);
+        if (isWindows) {
+          term?.textarea?.removeEventListener("paste", onPaste);
+        }
       });
     }
 
@@ -663,7 +683,7 @@ export function TerminalView(props: Props) {
       data-pty-kind="claude"
       data-pty-id={props.id}
     >
-      <div ref={container} class="flex-1 min-h-0 min-w-0 overflow-hidden" />
+      <div ref={container} class="flex-1 min-h-0 min-w-0 overflow-hidden p-2" />
       <ScrollToBottomButton visible={isScrolledUp()} onClick={scrollToBottom} />
       <Show when={isDragOver()}>
         <div class="absolute inset-1 border-2 border-dashed border-indigo-400/60 rounded pointer-events-none flex items-center justify-center">

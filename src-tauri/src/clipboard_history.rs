@@ -79,7 +79,7 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 /// otherwise be lies: the panel says recording is unavailable, and `pty.rs`
 /// withholds `KLAUDIO_CLIP_SOCK` so a terminal copy falls through to the real
 /// `pbcopy` rather than surfacing in a different window's list (#96).
-#[allow(dead_code)]
+#[cfg_attr(not(unix), allow(dead_code))]
 static SHIM_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// Whether terminal copies reach this window's history.
@@ -198,7 +198,14 @@ fn legacy_socket_path() -> Option<PathBuf> {
     dirs::cache_dir().map(|c| c.join("klaudio-panels/clip.sock"))
 }
 
-#[allow(dead_code)]
+/// `pbcopy` replacement placed ahead of `/usr/bin` on the PTY's `PATH`.
+///
+/// Every branch falls through to the real `pbcopy`, and its exit status is
+/// what we return: recording is strictly best-effort, and breaking the user's
+/// `pbcopy` to feed a history panel would be a terrible trade. `tee` into a
+/// process substitution keeps the payload off disk — a clip may well be a
+/// secret, and it has no business in a temp file.
+#[cfg_attr(not(unix), allow(dead_code))]
 const PBCOPY_SHIM: &str = r#"#!/bin/bash
 # Klaudio Panels — pbcopy shim. Tees the clip to Klaudio's clipboard history
 # and then hands it to the real pbcopy unchanged. Generated at app boot; edits

@@ -43,7 +43,7 @@ pub(crate) fn has_live_listener(path: &Path) -> bool {
 }
 
 #[cfg(not(unix))]
-#[allow(dead_code)]
+#[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) fn has_live_listener(_path: &Path) -> bool {
     false
 }

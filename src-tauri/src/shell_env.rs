@@ -5,7 +5,9 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(not(target_os = "windows"))]
+use std::process::Stdio;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
@@ -29,7 +31,7 @@ pub fn get_user_shell() -> String {
     }
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(unix), allow(dead_code))]
 fn is_nushell(shell: &str) -> bool {
     let name = Path::new(shell)
         .file_name()
@@ -39,7 +41,7 @@ fn is_nushell(shell: &str) -> bool {
     name == "nu" || name == "nu.exe" || shell.to_ascii_lowercase().ends_with("\\nu.exe")
 }
 
-#[allow(dead_code)]
+#[cfg_attr(not(unix), allow(dead_code))]
 fn parse_shell_env(stdout: &[u8]) -> HashMap<String, String> {
     String::from_utf8_lossy(stdout)
         .split('\0')
@@ -133,16 +135,34 @@ fn strip_unsafe_baseline_vars(
 /// `strip_unsafe_baseline_vars` excludes removed. An empty env is not a
 /// safe fallback: the child would spawn with no `PATH` and no `HOME` at
 /// all (non-negotiable #3).
-fn safe_baseline_env() -> HashMap<String, String> {
-    let mut map = strip_unsafe_baseline_vars(std::env::vars());
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(p) = map.get("Path").cloned() {
-            map.entry("PATH".to_string()).or_insert(p);
-        } else if let Some(p) = map.get("PATH").cloned() {
-            map.entry("Path".to_string()).or_insert(p);
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn normalize_windows_path_key(mut map: HashMap<String, String>) -> HashMap<String, String> {
+    let alt_keys: Vec<String> = map
+        .keys()
+        .filter(|k| k.eq_ignore_ascii_case("PATH") && k.as_str() != "PATH")
+        .cloned()
+        .collect();
+    for k in alt_keys {
+        if let Some(v) = map.remove(&k) {
+            map.entry("PATH".to_string()).or_insert(v);
         }
     }
+    if !map.contains_key("HOME") {
+        if let Some(home) = map
+            .get("USERPROFILE")
+            .cloned()
+            .or_else(|| dirs::home_dir().map(|p| p.to_string_lossy().into_owned()))
+        {
+            map.insert("HOME".to_string(), home);
+        }
+    }
+    map
+}
+
+fn safe_baseline_env() -> HashMap<String, String> {
+    let map = strip_unsafe_baseline_vars(std::env::vars());
+    #[cfg(target_os = "windows")]
+    let map = normalize_windows_path_key(map);
     map
 }
 
@@ -165,7 +185,7 @@ pub fn load_shell_env(shell: &str) -> Option<HashMap<String, String>> {
     #[cfg(target_os = "windows")]
     {
         let _ = shell;
-        return Some(safe_baseline_env());
+        Some(safe_baseline_env())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -407,5 +427,22 @@ mod tests {
             "shell/editor PTY env must have HOME"
         );
         assert_eq!(env.get("TERM"), Some(&"xterm-256color".to_string()));
+    }
+
+    #[test]
+    fn windows_path_normalization_collapses_path_into_a_single_uppercase_key() {
+        let map = HashMap::from([
+            ("Path".to_string(), "C:\\Windows\\System32".to_string()),
+            ("SystemRoot".to_string(), "C:\\Windows".to_string()),
+        ]);
+        let normalized = normalize_windows_path_key(map);
+        assert_eq!(
+            normalized.get("PATH"),
+            Some(&"C:\\Windows\\System32".to_string())
+        );
+        assert!(
+            !normalized.contains_key("Path"),
+            "must not leave duplicate Path and PATH keys in the child env"
+        );
     }
 }
