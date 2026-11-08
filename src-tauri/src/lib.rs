@@ -97,7 +97,14 @@ pub fn run() {
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
                 #[cfg(target_os = "windows")]
-                let _ = app.deep_link().register_all();
+                {
+                    let _ = app.deep_link().register_all();
+                    if let Ok(Some(urls)) = app.deep_link().get_current() {
+                        for url in urls {
+                            cli_args::handle_startup_url(url.as_str());
+                        }
+                    }
+                }
                 let app_for_url = app.handle().clone();
                 app.deep_link().on_open_url(move |event| {
                     for url in event.urls() {
@@ -194,6 +201,7 @@ pub fn run() {
             file_write::write_file_bytes,
             shell_install::install_cli,
             shell_install::uninstall_cli,
+            cli_args::take_startup_cli_open,
             notify::notify_native,
             notify::set_dock_badge,
             plugins::is_warp_plugin_installed,

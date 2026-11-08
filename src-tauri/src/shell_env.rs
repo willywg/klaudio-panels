@@ -129,14 +129,12 @@ fn strip_unsafe_baseline_vars(
     env.filter(|(k, _)| k != "CLAUDE_CONFIG_DIR").collect()
 }
 
-/// A degraded-but-safe substitute for a failed shell-env probe: Klaudio's
-/// own process env (still a real `PATH`/`HOME` — a macOS GUI app gets *a*
-/// PATH from launchd, just not the shell-hydrated one) with the variables
-/// `strip_unsafe_baseline_vars` excludes removed. An empty env is not a
-/// safe fallback: the child would spawn with no `PATH` and no `HOME` at
-/// all (non-negotiable #3).
+/// Collapses mixed-case Windows `Path` entries into a single uppercase `PATH`
+/// key and populates `HOME` from `USERPROFILE` when absent. Windows sets
+/// `USERPROFILE` rather than `HOME` by default, whereas embedded CLI agents,
+/// Git, and terminal editors (Neovim, Helix) expect `HOME` to be set.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn normalize_windows_path_key(mut map: HashMap<String, String>) -> HashMap<String, String> {
+fn normalize_windows_baseline_env(mut map: HashMap<String, String>) -> HashMap<String, String> {
     let alt_keys: Vec<String> = map
         .keys()
         .filter(|k| k.eq_ignore_ascii_case("PATH") && k.as_str() != "PATH")
@@ -159,10 +157,16 @@ fn normalize_windows_path_key(mut map: HashMap<String, String>) -> HashMap<Strin
     map
 }
 
+/// A degraded-but-safe substitute for a failed shell-env probe: Klaudio's
+/// own process env (still a real `PATH`/`HOME` — a macOS GUI app gets *a*
+/// PATH from launchd, just not the shell-hydrated one) with the variables
+/// `strip_unsafe_baseline_vars` excludes removed. An empty env is not a
+/// safe fallback: the child would spawn with no `PATH` and no `HOME` at
+/// all (non-negotiable #3).
 fn safe_baseline_env() -> HashMap<String, String> {
     let map = strip_unsafe_baseline_vars(std::env::vars());
     #[cfg(target_os = "windows")]
-    let map = normalize_windows_path_key(map);
+    let map = normalize_windows_baseline_env(map);
     map
 }
 
@@ -430,12 +434,13 @@ mod tests {
     }
 
     #[test]
-    fn windows_path_normalization_collapses_path_into_a_single_uppercase_key() {
+    fn windows_baseline_env_collapses_path_and_populates_home_from_userprofile() {
         let map = HashMap::from([
             ("Path".to_string(), "C:\\Windows\\System32".to_string()),
+            ("USERPROFILE".to_string(), "C:\\Users\\Alice".to_string()),
             ("SystemRoot".to_string(), "C:\\Windows".to_string()),
         ]);
-        let normalized = normalize_windows_path_key(map);
+        let normalized = normalize_windows_baseline_env(map);
         assert_eq!(
             normalized.get("PATH"),
             Some(&"C:\\Windows\\System32".to_string())
@@ -443,6 +448,10 @@ mod tests {
         assert!(
             !normalized.contains_key("Path"),
             "must not leave duplicate Path and PATH keys in the child env"
+        );
+        assert_eq!(
+            normalized.get("HOME"),
+            Some(&"C:\\Users\\Alice".to_string())
         );
     }
 }

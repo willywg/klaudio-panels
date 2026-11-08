@@ -5,15 +5,18 @@
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter};
 
 use crate::debug_log;
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct CliOpenPayload {
     pub project_path: String,
     pub file_path: Option<String>,
 }
+
+static STARTUP_OPEN: Mutex<Vec<CliOpenPayload>> = Mutex::new(Vec::new());
 
 /// Extract a single path from an incoming `klaudio://open?path=<url-encoded>`
 /// URL. Returns `None` if the URL is malformed, lacks a `path` query param,
@@ -47,25 +50,54 @@ fn classify(raw: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
     }
 }
 
-/// Entry point for each URL delivered by `tauri_plugin_deep_link::on_open_url`.
-/// Called once per URL (the plugin batches them into a Vec<Url>, we iterate).
-pub fn handle_url(app: &AppHandle, url: &str) {
+fn parse_url(url: &str) -> Option<CliOpenPayload> {
     let Some(raw) = extract_path(url) else {
         debug_log::write("cli", &format!("ignored non-klaudio or malformed url: {url}"));
-        return;
+        return None;
     };
     let Some((project, file)) = classify(Path::new(&raw)) else {
         debug_log::write("cli", &format!("ignored non-absolute path in url: {raw}"));
-        return;
+        return None;
     };
-    let payload = CliOpenPayload {
+    Some(CliOpenPayload {
         project_path: project.to_string_lossy().into_owned(),
         file_path: file.map(|p| p.to_string_lossy().into_owned()),
+    })
+}
+
+/// Entry point for each URL delivered by `tauri_plugin_deep_link::on_open_url`.
+/// Called once per URL (the plugin batches them into a Vec<Url>, we iterate).
+pub fn handle_url(app: &AppHandle, url: &str) {
+    let Some(payload) = parse_url(url) else {
+        return;
     };
     debug_log::write("cli", &format!("cli:open emit {payload:?}"));
     if let Err(e) = app.emit("cli:open", &payload) {
         debug_log::write("cli", &format!("emit failed: {e}"));
     }
+}
+
+/// Queue a cold-start deep-link URL discovered via `app.deep_link().get_current()`
+/// during `setup`. Emitting `cli:open` synchronously inside `setup` would fire
+/// before the webview loads `App.tsx` and registers its `listen("cli:open")`
+/// handler, so the frontend drains this queue on mount via [`take_startup_cli_open`].
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn handle_startup_url(url: &str) {
+    let Some(payload) = parse_url(url) else {
+        return;
+    };
+    debug_log::write("cli", &format!("cli:open startup queued {payload:?}"));
+    if let Ok(mut guard) = STARTUP_OPEN.lock() {
+        guard.push(payload);
+    }
+}
+
+#[tauri::command]
+pub fn take_startup_cli_open() -> Vec<CliOpenPayload> {
+    STARTUP_OPEN
+        .lock()
+        .map(|mut guard| std::mem::take(&mut *guard))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -91,5 +123,26 @@ mod tests {
     #[test]
     fn classify_rejects_relative() {
         assert!(classify(Path::new("relative/path")).is_none());
+    }
+
+    #[test]
+    fn startup_queue_drains_once() {
+        let _ = take_startup_cli_open();
+        let dir = std::env::temp_dir();
+        let encoded: String = url::form_urlencoded::byte_serialize(
+            dir.to_string_lossy().as_bytes(),
+        )
+        .collect();
+        let url = format!("klaudio://open?path={encoded}");
+        handle_startup_url(&url);
+        let drained = take_startup_cli_open();
+        assert_eq!(
+            drained,
+            vec![CliOpenPayload {
+                project_path: dir.to_string_lossy().into_owned(),
+                file_path: None,
+            }]
+        );
+        assert!(take_startup_cli_open().is_empty());
     }
 }

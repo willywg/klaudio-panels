@@ -293,10 +293,12 @@ export function ShellTerminalView(props: Props) {
         }
         const text = e.clipboardData?.getData("text");
         if (hasImage || !text || text.length === 0) {
+          if (hasImage) {
+            e.preventDefault();
+          }
           try {
             const imgPath = await invoke<string | null>("paste_clipboard_image");
             if (imgPath) {
-              e.preventDefault();
               term?.paste(`"${imgPath}" `);
               return;
             }

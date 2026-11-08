@@ -278,7 +278,7 @@ On macOS, running `klaudio` from the terminal opens projects via a Unix symlink 
   - Installs `klaudio.cmd` into `%LOCALAPPDATA%\Programs\klaudio\klaudio.cmd` and appends that directory to the user's `HKCU\Environment\Path` registry value (broadcasting `WM_SETTINGCHANGE`).
   - Exposes `install_cli` and `uninstall_cli` in the **Settings** dialog on Windows (`src/components/agent-settings-dialog.tsx`), while keeping the native `"Klaudio"` OS menu on macOS and Linux.
   - Generates a batch launcher that URL-encodes the resolved path (`%~f1`) via `[uri]::EscapeDataString($env:KLAUDIO_PATH)` so paths containing `#`, `%`, `&`, or `?` survive deep-link parsing.
-  - Integrates `tauri-plugin-single-instance` (with the `deep-link` feature) on Windows so invoking `klaudio .` from a terminal forwards the `klaudio://open?path=...` URL to the already-running Klaudio Panels window and focuses it instead of spawning a second instance.
+  - Integrates `tauri-plugin-single-instance` (with the `deep-link` feature) on Windows so invoking `klaudio .` from a terminal forwards the `klaudio://open?path=...` URL to the already-running Klaudio Panels window and focuses it instead of spawning a second instance, while cold-start launches inspect `app.deep_link().get_current()` during `setup` and queue the target for the frontend on mount (`take_startup_cli_open`).
 
 #### Decision Rationale & Tradeoffs
 * **Why `.cmd` over PowerShell `.ps1`:** Windows execution policy blocks unsigned `.ps1` scripts by default (`Restricted` or `RemoteSigned`). A `.cmd` batch file executes instantly from CMD, PowerShell, Git Bash, and third-party terminal emulators without requiring policy changes.
@@ -369,7 +369,7 @@ Building a distributable NSIS installer (`klaudio-panels_..._x64-setup.exe`) and
 | **Image Clipboard Paste** | Screenshot buffer acquisition -> PNG conversion -> terminal paste | **PASSED** |
 | **ConPTY Interactive Terminal** | Spawning `pwsh.exe` with interactive ANSI cursor movement | **PASSED** |
 | **External Editor Launch** | Detached launch of VS Code, Cursor, and File Explorer via native process spawn | **PASSED** |
-| **Windows CLI Integration** | `klaudio.cmd` launcher creation in `~/.cargo/bin` and deep link dispatch | **PASSED** |
+| **Windows CLI Integration** | `klaudio.cmd` launcher in `%LOCALAPPDATA%\Programs\klaudio` (`HKCU\Environment\Path`) + cold/warm deep link dispatch | **PASSED** |
 | **Keyboard Event Routing** | `Ctrl+Alt+1..9`, `Ctrl+1..9`, `Ctrl+C` (copy/SIGINT), `Ctrl+V`, `Ctrl+W` in xterm | **PASSED** |
 
 ---

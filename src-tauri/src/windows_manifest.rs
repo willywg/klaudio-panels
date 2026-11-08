@@ -16,7 +16,11 @@ fn windows_test_executable_embeds_common_controls_v6_manifest() {
     // These handles refer only to resources embedded in this running executable.
     unsafe {
         let module = GetModuleHandleW(std::ptr::null());
-        let resource = FindResourceW(module, 1usize as *const u16, 24usize as *const u16);
+        let resource = FindResourceW(
+            module,
+            std::ptr::without_provenance::<u16>(1),
+            std::ptr::without_provenance::<u16>(24),
+        );
         assert!(
             !resource.is_null(),
             "the test executable needs an embedded application manifest"

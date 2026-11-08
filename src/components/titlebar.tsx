@@ -83,13 +83,21 @@ export function Titlebar(props: Props) {
       {/* Remaining space stays draggable; the search pill in the middle
           breaks drag at the button itself. */}
       <div
-        class="flex-1 min-w-0 px-2 h-full flex items-center justify-center"
+        class={
+          isWindows
+            ? "flex-1 min-w-0 px-2 h-full flex items-center justify-center"
+            : "flex-1 min-w-0 h-full flex items-center justify-center"
+        }
         data-tauri-drag-region
       >
         <Show when={props.activeProjectPath}>
           {(p) => (
             <button
-              class="h-7 w-[280px] max-w-full min-w-0 px-2.5 rounded-md bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 transition flex items-center gap-2 text-[12px] text-neutral-500 hover:text-neutral-300"
+              class={
+                isWindows
+                  ? "h-7 w-[280px] max-w-full min-w-0 px-2.5 rounded-md bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 transition flex items-center gap-2 text-[12px] text-neutral-500 hover:text-neutral-300"
+                  : "h-7 w-[280px] max-w-[40vw] px-2.5 rounded-md bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 transition flex items-center gap-2 text-[12px] text-neutral-500 hover:text-neutral-300"
+              }
               onClick={() => palette.open()}
               title={`Search sessions and files (${isMac ? "⌘K" : "Ctrl+K"})`}
             >
