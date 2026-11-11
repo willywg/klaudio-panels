@@ -22,7 +22,9 @@ describe("commitTime", () => {
     // nothing you can place. The cutoff is where the day count stops
     // meaning something.
     expect(commitTime(secondsAgo(6 * DAY), NOW)).toBe("6d ago");
-    expect(commitTime(secondsAgo(8 * DAY), NOW)).not.toContain("ago");
+    // Match the relative shape, not the word: the calendar date is
+    // locale-formatted, and in Spanish August is abbreviated "ago" (#127).
+    expect(commitTime(secondsAgo(8 * DAY), NOW)).not.toMatch(/^\d+[mhd] ago$/);
   });
 
   test("an older year is named, the current one isn't", () => {
