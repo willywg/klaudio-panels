@@ -1122,6 +1122,9 @@ function Shell() {
     }
     activeByProject.delete(path);
     autoResumed.delete(path);
+    // A CLI open only claims the project until it is closed; otherwise a
+    // later reopen from the home screen would skip restoring its tabs.
+    cliClaimed.delete(path);
     // Defensive: clearProject already SIGHUP'd editor tabs through the
     // onBeforeClose hook, but the project may have lived without a diff
     // panel ever opening — kill anything still alive directly.
