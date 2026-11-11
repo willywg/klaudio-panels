@@ -133,11 +133,11 @@ function FileIcon(props: { path: string }) {
 }
 
 function dirOf(path: string): string {
-  const i = path.lastIndexOf("/");
+  const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return i >= 0 ? path.slice(0, i + 1) : "";
 }
 
 function baseOf(path: string): string {
-  const i = path.lastIndexOf("/");
+  const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
   return i >= 0 ? path.slice(i + 1) : path;
 }

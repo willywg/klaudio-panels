@@ -319,16 +319,16 @@ mod tests {
     }
 
     fn session_meta_line(session_id: &str, id: &str, cwd: &Path, timestamp: &str) -> String {
+        let cwd = serde_json::to_string(&cwd.to_string_lossy()).unwrap();
         format!(
-            r#"{{"timestamp":"{timestamp}","type":"session_meta","payload":{{"session_id":"{session_id}","id":"{id}","timestamp":"{timestamp}","cwd":"{}","originator":"codex-tui"}}}}"#,
-            cwd.display()
+            r#"{{"timestamp":"{timestamp}","type":"session_meta","payload":{{"session_id":"{session_id}","id":"{id}","timestamp":"{timestamp}","cwd":{cwd},"originator":"codex-tui"}}}}"#
         )
     }
 
     fn legacy_session_meta_line(id: &str, cwd: &Path, timestamp: &str) -> String {
+        let cwd = serde_json::to_string(&cwd.to_string_lossy()).unwrap();
         format!(
-            r#"{{"timestamp":"{timestamp}","type":"session_meta","payload":{{"id":"{id}","timestamp":"{timestamp}","cwd":"{}","originator":"codex-tui"}}}}"#,
-            cwd.display()
+            r#"{{"timestamp":"{timestamp}","type":"session_meta","payload":{{"id":"{id}","timestamp":"{timestamp}","cwd":{cwd},"originator":"codex-tui"}}}}"#
         )
     }
 
@@ -507,7 +507,6 @@ mod tests {
         assert_eq!(ids, vec!["ok"]);
     }
 
-    #[cfg(unix)]
     fn set_mtime(path: &Path, time: SystemTime) {
         let file = fs::File::options().write(true).open(path).unwrap();
         file.set_modified(time).unwrap();

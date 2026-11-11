@@ -13,18 +13,27 @@ const SEP = "\u0000";
 
 /** Strip a trailing slash so `${base}/${rel}` never doubles up. */
 export function projectBase(projectPath: string): string {
-  return projectPath.endsWith("/") ? projectPath.slice(0, -1) : projectPath;
+  return projectPath.endsWith("/") || projectPath.endsWith("\\")
+    ? projectPath.slice(0, -1)
+    : projectPath;
 }
 
-/** The path as the backend wants it: no `./` prefix, nothing else touched. */
+/** The path as the backend wants it: no `./` or `.\` prefix, forward slashes. */
 export function needleOf(rel: string): string {
-  return rel.startsWith("./") ? rel.slice(2) : rel;
+  const trimmed = rel.startsWith("./") || rel.startsWith(".\\") ? rel.slice(2) : rel;
+  return trimmed.replace(/\\/g, "/");
 }
 
 /** True for a path that already says where it lives, so no project is needed
- *  to interpret it. Tilde expansion happens host-side. */
+ *  to interpret it. Handles Unix absolute, home tilde, and Windows drive letters/UNC. */
 export function isAbsoluteish(path: string): boolean {
-  return path.startsWith("/") || path.startsWith("~/");
+  return (
+    path.startsWith("/") ||
+    path.startsWith("~/") ||
+    path.startsWith("~\\") ||
+    /^[A-Za-z]:[/\\]/.test(path) ||
+    path.startsWith("\\\\")
+  );
 }
 
 /**
@@ -124,7 +133,7 @@ export async function pathKind(
   try {
     return await invoke<PathKind>("path_kind", {
       projectPath: projectBase(projectPath),
-      relPath: rel,
+      relPath: needleOf(rel),
     });
   } catch {
     return "missing";

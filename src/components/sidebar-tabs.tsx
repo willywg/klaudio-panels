@@ -7,6 +7,10 @@ type Props = {
   onCollapse: () => void;
 };
 
+const isMac =
+  typeof navigator !== "undefined" &&
+  navigator.platform.toUpperCase().includes("MAC");
+
 export function SidebarTabs(props: Props) {
   return (
     <div class="flex items-stretch h-8 border-b border-neutral-800 bg-neutral-950/40 text-[11px]">
@@ -25,7 +29,7 @@ export function SidebarTabs(props: Props) {
       <div class="flex-1" />
       <button
         class="px-2 text-neutral-500 hover:text-neutral-200 transition"
-        title="Collapse sidebar (⌘B)"
+        title={`Collapse sidebar (${isMac ? "⌘B" : "Ctrl+B"})`}
         onClick={props.onCollapse}
       >
         <ChevronLeft size={14} strokeWidth={2} />

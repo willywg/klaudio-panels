@@ -40,7 +40,40 @@ older Homebrew versions don't have (or need) the command.
 
 **Or download directly:** grab `Klaudio Panels_<version>_universal.dmg` from the [latest release](https://github.com/willywg/klaudio-panels/releases/latest) and drag the app into `/Applications`.
 
-## First launch
+## Install & Run (Windows via Terminal)
+
+Klaudio Panels can be built and run directly from your terminal (PowerShell or Command Prompt):
+
+### 1. Prerequisites
+- [Rust](https://rustup.rs/) with the Windows GNU toolchain active (`x86_64-pc-windows-gnu`) and `windres` available for the GNU release command below
+- [Bun](https://bun.sh/) (for installing dependencies and running the frontend build)
+
+### 2. Clone & Build
+```powershell
+git clone https://github.com/willywg/klaudio-panels.git
+cd klaudio-panels
+bun install --frozen-lockfile
+bun run release:windows-gnu
+```
+Use the committed `bun.lock` and `src-tauri/Cargo.lock` together. An unconstrained npm install can select JavaScript versions incompatible with the locked Rust crates; do not bypass Tauri's version compatibility check.
+
+The GNU release command explicitly selects its target so Tauri bundles the required `WebView2Loader.dll`. The executable and DLL are generated in `src-tauri\target\x86_64-pc-windows-gnu\release\`; the NSIS installer is under that directory's `bundle\nsis\`. Do not distribute the GNU executable without its adjacent DLL. If `CARGO_TARGET_DIR` is set, these paths are relative to that directory instead.
+
+MSVC builds use their own target/toolchain; this GNU command does not change the existing macOS or generic Tauri commands.
+
+### 3. Install the `klaudio` CLI command
+Once Klaudio Panels is running, open **Settings** (⚙️ in the top-right titlebar) and click **Install 'klaudio' in PATH** under **Terminal CLI (`klaudio`)** (on macOS and Linux, use the OS menu bar: **Klaudio → Install 'klaudio' Command in PATH**).
+
+On Windows, this installs `klaudio.cmd` into `%LOCALAPPDATA%\Programs\klaudio` and adds that directory to your user `PATH`. You can then launch any project straight from a new terminal window:
+
+```powershell
+klaudio .              # open current directory in Klaudio Panels
+klaudio C:\my-project  # open specific project
+```
+
+> For full architectural details of the Windows port, see [docs/WINDOWS_PORT.md](./docs/WINDOWS_PORT.md).
+
+## First launch (macOS)
 
 Klaudio Panels is **not yet signed with an Apple Developer ID** — see [Platform support](#platform-support) for why. On first launch, macOS will refuse to open the app and show one of these two warnings:
 
@@ -69,8 +102,8 @@ Both warnings are Gatekeeper defaults for unsigned apps, not signs that anything
 | OS | Status | Notes |
 | --- | --- | --- |
 | **macOS 14+** (Sonoma, Sequoia) | ✅ primary target | Tested on Apple Silicon and Intel. Universal `.dmg` is what the maintainer ships. |
+| **Windows 10/11** | 🧪 validation in progress | Native ConPTY port. Terminal clipboard recording and Cursor turn-notification hooks are unavailable. Clean-machine build, installer, and end-to-end validation remain pending. See [docs/WINDOWS_PORT.md](./docs/WINDOWS_PORT.md). |
 | **Linux** | 🧪 untested | Every release carries an `.AppImage` and a `.deb` built by CI, named `-untested` because that is exactly what they are — they compile, but nobody has run them end to end. Notifications, clipboard history and "Open in…" take macOS-only paths that have no Linux equivalent yet. Help validating is very welcome — see [#1](https://github.com/willywg/klaudio-panels/issues/1). |
-| **Windows** | ❌ not supported yet | Several backend modules are stubbed on Windows. Help porting is welcome — see [#2](https://github.com/willywg/klaudio-panels/issues/2). |
 
 **About code signing.** Apple's Developer Program is US$99/year. We'll pay it once the project has real usage; until then, the first-launch workaround above is the cost of keeping the project free. Apple has been tightening the unsigned-app escape hatches with each macOS release, so this is a temporary state, not a permanent stance.
 
@@ -247,7 +280,7 @@ Artifacts land under `src-tauri/target/universal-apple-darwin/release/bundle/`.
 
 Building with a plain `bun tauri build` is fine for local smoke-testing, but **don't ship it** — it produces a host-arch-only binary, which on an x86_64 toolchain means Intel-only, and Apple Silicon users will run it under Rosetta and see macOS's "End of support for Intel-based apps" warning.
 
-On Windows / Linux, `bun tauri build` is still the right command; artifacts land under `src-tauri/target/release/bundle/`.
+On Linux, use `bun tauri build`; artifacts land under `src-tauri/target/release/bundle/`. For Windows GNU, use `bun run release:windows-gnu`; installers land under `src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/` unless `CARGO_TARGET_DIR` overrides the target directory.
 
 _Note: release builds are not yet signed with an Apple Developer ID. End-users hit a Gatekeeper warning on first launch — see [First launch](#first-launch) for the one-time workaround._
 

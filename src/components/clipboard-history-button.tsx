@@ -15,6 +15,8 @@ import { describeClip, previewOf } from "@/lib/clipboard-prefs";
 import { useAnchoredPanel } from "@/lib/anchored-panel";
 import { relativeTime } from "@/lib/relative-time";
 
+const isWindows = typeof navigator !== "undefined" && navigator.platform.toUpperCase().startsWith("WIN");
+
 export function ClipboardHistoryButton() {
   const clips = useClipboardHistory();
   const panel = useAnchoredPanel();
@@ -78,8 +80,8 @@ export function ClipboardHistoryButton() {
                 fallback={
                   <p class="px-3 py-6 text-center text-[11px] text-neutral-500 leading-relaxed">
                     <Show
-                      when={clips.enabled()}
-                      fallback="Recording is off. Anything copied while it is off stays out of here."
+                      when={clips.enabled() && clips.shimActive()}
+                      fallback={isWindows ? "Terminal clipboard recording is not supported on Windows yet." : "Recording is unavailable or off. New copies will not be recorded."}
                     >
                       Nothing copied yet.
                       <br />
@@ -130,8 +132,9 @@ export function ClipboardHistoryButton() {
                 the thing that says so (#96). */}
             <Show when={!clips.shimActive()}>
               <p class="px-3 py-2 border-t border-neutral-800 shrink-0 text-[11px] text-amber-300/90 leading-relaxed">
-                Another Klaudio window is recording terminal copies. Copies
-                made in this one's terminals won't be listed here; ⌘C still is.
+                {isWindows
+                  ? "Terminal clipboard recording is not supported on Windows yet. Normal copy and paste still work."
+                  : "Terminal clipboard recording is unavailable in this window. Another instance may own the clipboard listener. Normal copy and paste still work."}
               </p>
             </Show>
 
@@ -140,7 +143,8 @@ export function ClipboardHistoryButton() {
               <input
                 type="checkbox"
                 class="accent-neutral-300"
-                checked={clips.enabled()}
+                checked={clips.enabled() && clips.shimActive()}
+                disabled={!clips.shimActive()}
                 onChange={(e) => clips.setEnabled(e.currentTarget.checked)}
               />
             </label>

@@ -12,9 +12,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { useAgents, type AgentInfo } from "@/context/agents";
 import { AGENT_DISPLAY, CURSOR, type AgentId } from "@/lib/agents";
 
+const isWindows =
+  typeof navigator !== "undefined" &&
+  navigator.platform.toUpperCase().startsWith("WIN");
+
 type HookStatus =
   | { state: "on" }
   | { state: "off" }
+  | { state: "unsupported"; reason: string }
   | { state: "unmanaged"; reason: string; snippet: string };
 
 type Draft = { enabled: boolean; binaryPath: string };
@@ -43,6 +48,11 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
   const [hook, setHook] = createSignal<HookStatus | null>(null);
   const [hookError, setHookError] = createSignal<string | null>(null);
   const [hookBusy, setHookBusy] = createSignal(false);
+  const [cliBusy, setCliBusy] = createSignal(false);
+  const [cliMessage, setCliMessage] = createSignal<{
+    kind: "ok" | "err";
+    text: string;
+  } | null>(null);
   let panelRef: HTMLDivElement | undefined;
 
   function reset(list: AgentInfo[]) {
@@ -67,6 +77,7 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
       () => props.open,
       (open) => {
         if (!open) return;
+        setCliMessage(null);
         void agents.refresh().then(() => {
           reset(agents.agents());
           for (const a of agents.agents()) void discover(a.id);
@@ -112,7 +123,7 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
 
   async function toggleHook() {
     const current = hook();
-    if (!current || current.state === "unmanaged") return;
+    if (!current || current.state === "unmanaged" || current.state === "unsupported") return;
     setHookBusy(true);
     setHookError(null);
     try {
@@ -124,6 +135,38 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
       setHookError(String(err));
     } finally {
       setHookBusy(false);
+    }
+  }
+
+  async function installCli() {
+    setCliBusy(true);
+    setCliMessage(null);
+    try {
+      const where = await invoke<string>("install_cli");
+      setCliMessage({
+        kind: "ok",
+        text: `Installed at ${where}. Open a new terminal window to pick up the updated PATH.`,
+      });
+    } catch (err) {
+      setCliMessage({ kind: "err", text: String(err) });
+    } finally {
+      setCliBusy(false);
+    }
+  }
+
+  async function uninstallCli() {
+    setCliBusy(true);
+    setCliMessage(null);
+    try {
+      await invoke("uninstall_cli");
+      setCliMessage({
+        kind: "ok",
+        text: "Removed 'klaudio' from PATH. Open a new terminal window for changes to take effect.",
+      });
+    } catch (err) {
+      setCliMessage({ kind: "err", text: String(err) });
+    } finally {
+      setCliBusy(false);
     }
   }
 
@@ -167,7 +210,7 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
       >
         <div
           ref={panelRef}
-          class="w-[520px] max-w-[calc(100vw-32px)] rounded-lg border border-neutral-700 bg-neutral-900 shadow-2xl p-4 text-[12.5px] text-neutral-200"
+          class="w-[520px] max-w-[calc(100vw-32px)] max-h-[calc(100dvh-32px)] overflow-y-auto rounded-lg border border-neutral-700 bg-neutral-900 shadow-2xl p-4 text-[12.5px] text-neutral-200"
         >
           <div class="font-semibold text-[13px] text-neutral-100">Agents</div>
           <div class="text-neutral-400 mt-1 mb-4 leading-snug">
@@ -263,6 +306,50 @@ export function AgentSettingsDialog(props: { open: boolean; onClose: () => void 
             open keep running.
           </div>
 
+          <Show when={isWindows}>
+            <div class="mt-4 pt-3 border-t border-neutral-800">
+              <div class="font-medium text-neutral-100">
+                Terminal CLI (<span class="font-mono text-[11.5px]">klaudio</span>)
+              </div>
+              <div class="text-[11px] text-neutral-500 mt-0.5 leading-snug">
+                Install or remove the <span class="font-mono">klaudio</span>{" "}
+                command in your user <span class="font-mono">PATH</span> so you
+                can open projects from any terminal with{" "}
+                <span class="font-mono">klaudio .</span>
+              </div>
+              <div class="flex items-center gap-2 mt-2">
+                <button
+                  type="button"
+                  class="px-2.5 h-7 rounded text-[11.5px] transition border border-neutral-700 hover:bg-neutral-800 text-neutral-200 disabled:opacity-50"
+                  disabled={cliBusy() || saving()}
+                  onClick={() => void installCli()}
+                >
+                  Install 'klaudio' in PATH
+                </button>
+                <button
+                  type="button"
+                  class="px-2.5 h-7 rounded text-[11.5px] transition border border-neutral-800 hover:bg-neutral-800 text-neutral-400 hover:text-neutral-200 disabled:opacity-50"
+                  disabled={cliBusy() || saving()}
+                  onClick={() => void uninstallCli()}
+                >
+                  Uninstall
+                </button>
+              </div>
+              <Show when={cliMessage()}>
+                {(msg) => (
+                  <div
+                    class={
+                      "mt-1.5 text-[11px] leading-snug break-words " +
+                      (msg().kind === "ok" ? "text-emerald-400" : "text-red-400")
+                    }
+                  >
+                    {msg().text}
+                  </div>
+                )}
+              </Show>
+            </div>
+          </Show>
+
           <div class="flex gap-2 justify-end mt-4">
             <button
               type="button"
@@ -295,11 +382,13 @@ function CursorHookToggle(props: {
   const status = () => props.status;
   const on = () => status()?.state === "on";
   const unmanaged = () => status()?.state === "unmanaged";
+  const unavailable = () => unmanaged() || status()?.state === "unsupported";
   const label = () => {
     const s = status();
     if (!s) return "Checking hooks.json…";
     if (s.state === "on") return "On";
     if (s.state === "off") return "Off";
+    if (s.state === "unsupported") return s.reason;
     return "Can't manage (edited by hand)";
   };
 
@@ -308,14 +397,14 @@ function CursorHookToggle(props: {
       <label
         class={
           "flex items-start gap-2 text-[12px] select-none " +
-          (unmanaged() ? "text-neutral-500 cursor-not-allowed" : "text-neutral-300 cursor-pointer")
+          (unavailable() ? "text-neutral-500 cursor-not-allowed" : "text-neutral-300 cursor-pointer")
         }
       >
         <input
           type="checkbox"
           class="accent-indigo-500 mt-0.5"
           checked={on()}
-          disabled={props.busy || unmanaged() || !status()}
+          disabled={props.busy || unavailable() || !status()}
           onChange={() => props.onToggle()}
         />
         <span>

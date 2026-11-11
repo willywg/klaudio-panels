@@ -115,8 +115,8 @@ const AUTODISMISS_NEUTRAL_MS = 5000;
 const AUTODISMISS_PERMISSION_MS = 10000;
 
 function projectName(projectPath: string): string {
-  const trimmed = projectPath.replace(/\/+$/, "");
-  const slash = trimmed.lastIndexOf("/");
+  const trimmed = projectPath.replace(/[/\\]+$/, "");
+  const slash = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   return slash >= 0 ? trimmed.slice(slash + 1) : trimmed;
 }
 

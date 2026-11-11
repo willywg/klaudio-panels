@@ -87,10 +87,17 @@ fn projects_dir_for(config_dir: Option<PathBuf>) -> Option<PathBuf> {
 }
 
 pub(crate) fn canonical(path: &str) -> String {
-    PathBuf::from(path)
+    let s = PathBuf::from(path)
         .canonicalize()
         .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| path.to_string())
+        .unwrap_or_else(|_| path.to_string());
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            return stripped.to_string();
+        }
+    }
+    s
 }
 
 /// Scans the first N lines of a JSONL looking for a top-level `cwd` field.
@@ -700,7 +707,7 @@ pub(crate) fn last_assistant_complete(file: &Path) -> Option<AssistantComplete> 
 /// callers fall back to the file's mtime in that case, which is a more
 /// honest "we don't know" than silently understating how recent the session
 /// actually is.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn latest_event_timestamp_from_tail(lines: &[String]) -> Option<DateTime<Utc>> {
     match timestamp_outcome_from_lines(lines) {
         Some(TimestampOutcome::Valid(dt)) => Some(dt),
@@ -731,7 +738,7 @@ pub(crate) fn session_updated_at(file: &Path, scan: &SessionScan) -> Option<Stri
 /// What `updated_at` was before it moved onto the incremental cursor: the
 /// tail walk, then mtime. Equivalence tests compare [`session_updated_at`]
 /// against this.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 fn tail_session_updated_at(file: &Path) -> Option<String> {
     let lines = read_tail_lines(file).unwrap_or_default();
     latest_event_timestamp_from_tail(&lines)

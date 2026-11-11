@@ -185,10 +185,14 @@ pub fn resolve_project_file(project_path: String, rel: String) -> Result<Vec<Str
     // leading slash and hunting for a suffix match inside the project could
     // only ever answer a question nobody asked. The frontend short-circuits
     // these before calling; this is the second lock on the same door.
-    if rel.starts_with('/') || rel.starts_with("~/") {
+    let normalized = rel.replace('\\', "/");
+    if normalized.starts_with('/')
+        || normalized.starts_with("~/")
+        || (normalized.len() >= 2 && normalized.as_bytes()[1] == b':')
+    {
         return Err("expected a project-relative path".into());
     }
-    let needle = rel.trim_start_matches("./");
+    let needle = normalized.trim_start_matches("./");
     if needle.is_empty() {
         return Err("empty path".into());
     }

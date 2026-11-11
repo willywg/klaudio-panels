@@ -6,6 +6,7 @@ pub mod binary;
 pub mod cli_agent;
 pub mod cli_args;
 pub mod clipboard_history;
+pub mod clipboard_image;
 pub mod codex_sessions;
 pub mod cursor_hooks;
 pub mod cursor_sessions;
@@ -52,10 +53,20 @@ impl Drop for TtyGuard {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _tty_guard = TtyGuard;
-    use tauri::menu::{Menu, MenuItem, Submenu};
+    #[cfg(not(target_os = "windows"))]
     use tauri::Emitter;
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        use tauri::Manager;
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }));
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -70,6 +81,9 @@ pub fn run() {
                 );
             }
             clipboard_history::install(app.handle().clone());
+            #[cfg(target_os = "windows")]
+            clipboard_image::cleanup_temp_dir();
+            #[cfg(unix)]
             if let Err(e) = shell_integration::install() {
                 debug_log::write("shell", &format!("zsh wrapper install failed: {e}"));
             }
@@ -82,6 +96,15 @@ pub fn run() {
             });
             {
                 use tauri_plugin_deep_link::DeepLinkExt;
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = app.deep_link().register_all();
+                    if let Ok(Some(urls)) = app.deep_link().get_current() {
+                        for url in urls {
+                            cli_args::handle_startup_url(url.as_str());
+                        }
+                    }
+                }
                 let app_for_url = app.handle().clone();
                 app.deep_link().on_open_url(move |event| {
                     for url in event.urls() {
@@ -89,11 +112,21 @@ pub fn run() {
                     }
                 });
             }
+            #[cfg(target_os = "windows")]
+            {
+                use tauri::Manager;
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.set_decorations(false);
+                }
+            }
+
             // Append a "Klaudio" submenu to the default OS menu bar with the
             // Install / Uninstall CLI items. These just emit intents to the
             // frontend which invokes the Tauri commands and shows the result
             // dialog — keeps all dialog plumbing on the JS side.
+            #[cfg(not(target_os = "windows"))]
             {
+                use tauri::menu::{Menu, MenuItem, Submenu};
                 let install_item = MenuItem::with_id(
                     app,
                     "install_cli",
@@ -168,6 +201,7 @@ pub fn run() {
             file_write::write_file_bytes,
             shell_install::install_cli,
             shell_install::uninstall_cli,
+            cli_args::take_startup_cli_open,
             notify::notify_native,
             notify::set_dock_badge,
             plugins::is_warp_plugin_installed,
@@ -176,7 +210,10 @@ pub fn run() {
             clipboard_history::clipboard_history_clear,
             clipboard_history::clipboard_history_set_enabled,
             clipboard_history::clipboard_shim_active,
+            clipboard_image::paste_clipboard_image,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+#[cfg(all(test, target_os = "windows"))]
+mod windows_manifest;

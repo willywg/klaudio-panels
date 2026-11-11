@@ -1,6 +1,10 @@
 import { Show } from "solid-js";
 import { ChevronDown } from "lucide-solid";
 
+const isMac =
+  typeof navigator !== "undefined" &&
+  navigator.platform.toUpperCase().includes("MAC");
+
 /** Floating bottom-right button that appears when the terminal viewport is
  *  scrolled up from the tail. Click → scroll to bottom. Visibility is
  *  controlled by the parent (driven by xterm's `onScroll` event). */
@@ -17,7 +21,7 @@ export function ScrollToBottomButton(props: {
           e.stopPropagation();
           props.onClick();
         }}
-        title="Scroll to bottom (⌘↓)"
+        title={`Scroll to bottom (${isMac ? "⌘↓" : "Ctrl+↓"})`}
       >
         <ChevronDown size={14} strokeWidth={2.25} />
       </button>

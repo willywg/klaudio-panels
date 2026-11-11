@@ -110,19 +110,47 @@ pub fn installer_candidates(id: AgentId) -> Vec<PathBuf> {
     let Some(home) = dirs::home_dir() else {
         return Vec::new();
     };
-    match id {
+    #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
+    let mut v = match id {
         AgentId::Claude => vec![
             home.join(".local/bin/claude"),
             home.join(".claude/local/claude"),
+            home.join(".claude/local/claude.exe"),
         ],
         // Cursor's installer symlinks this into its versioned install dir.
-        AgentId::Cursor => vec![home.join(".local/bin/cursor-agent")],
+        AgentId::Cursor => vec![
+            home.join(".local/bin/cursor-agent"),
+            home.join(".cursor/bin/cursor-agent.exe"),
+        ],
         // The standalone installer's shim — confirmed on this machine via
         // `codex doctor`, which reports the real binary living under
         // `~/.codex/packages/standalone/releases/<ver>-<arch>/bin/codex`
         // with this path as its PATH entry.
-        AgentId::Codex => vec![home.join(".local/bin/codex")],
+        AgentId::Codex => vec![
+            home.join(".local/bin/codex"),
+            home.join(".codex/bin/codex.exe"),
+        ],
+    };
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(local) = dirs::data_local_dir() {
+            let programs = local.join("Programs");
+            match id {
+                AgentId::Claude => {
+                    v.push(programs.join("Claude/claude.exe"));
+                }
+                AgentId::Cursor => {
+                    v.push(programs.join("cursor/Cursor.exe"));
+                }
+                AgentId::Codex => {
+                    v.push(programs.join("OpenAI/Codex/bin/codex.exe"));
+                }
+            }
+        }
     }
+
+    v
 }
 
 /// Paths to try only after the PATH lookups have failed — package managers
@@ -150,6 +178,17 @@ pub fn fallback_candidates(id: AgentId) -> Vec<PathBuf> {
                     }
                 }
             }
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(app_data) = dirs::data_dir() {
+                    out.push(app_data.join("npm/claude.cmd"));
+                    out.push(app_data.join("npm/claude"));
+                }
+                if let Some(local) = dirs::data_local_dir() {
+                    out.push(local.join("npm/claude.cmd"));
+                    out.push(local.join("Programs/Claude/claude.exe"));
+                }
+            }
             out
         }
         // The installer writes a second name for the same binary, `agent` —
@@ -158,7 +197,7 @@ pub fn fallback_candidates(id: AgentId) -> Vec<PathBuf> {
         // `--version` answers like Cursor (see `accepts_version`). Never
         // `cursor`: that is a shim that finds and launches the Cursor IDE.
         AgentId::Cursor => dirs::home_dir()
-            .map(|h| vec![h.join(".local/bin/agent")])
+            .map(|h| vec![h.join(".local/bin/agent"), h.join(".local/bin/agent.exe")])
             .unwrap_or_default(),
         // Codex also ships as `@openai/codex` on npm, unlike Cursor, so the
         // same node-version-manager shims Claude's arm walks apply here too.
@@ -179,6 +218,17 @@ pub fn fallback_candidates(id: AgentId) -> Vec<PathBuf> {
                     for entry in entries.flatten() {
                         out.push(entry.path().join("bin/codex"));
                     }
+                }
+            }
+            #[cfg(target_os = "windows")]
+            {
+                if let Some(local) = dirs::data_local_dir() {
+                    out.push(local.join("Programs/OpenAI/Codex/bin/codex.exe"));
+                    out.push(local.join("npm/codex.cmd"));
+                }
+                if let Some(app_data) = dirs::data_dir() {
+                    out.push(app_data.join("npm/codex.cmd"));
+                    out.push(app_data.join("npm/codex"));
                 }
             }
             out

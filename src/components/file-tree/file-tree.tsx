@@ -40,8 +40,16 @@ import {
   type TreeNode as TreeNodeType,
 } from "./use-file-tree";
 
+function norm(p: string): string {
+  return p.replace(/\\/g, "/");
+}
+
+const isMac =
+  typeof navigator !== "undefined" &&
+  navigator.platform.toUpperCase().includes("MAC");
+
 function stripTrailingSlash(p: string): string {
-  return p.endsWith("/") ? p.slice(0, -1) : p;
+  return p.replace(/[/\\]+$/, "");
 }
 
 /** Read-only walk of the tree store to locate a node by absolute path. */
@@ -49,9 +57,11 @@ function findNodeByPath(
   root: TreeNodeType,
   path: string,
 ): TreeNodeType | null {
-  if (root.path === path) return root;
+  if (root.path === path || norm(root.path) === norm(path)) return root;
   if (!root.isDir) return null;
-  if (!path.startsWith(root.path + "/") && root.path !== "/") return null;
+  const normRoot = norm(root.path).replace(/\/+$/, "");
+  const normPath = norm(path);
+  if (!normPath.startsWith(normRoot + "/") && normRoot !== "" && normRoot !== "/") return null;
   for (const child of root.children) {
     const found = findNodeByPath(child, path);
     if (found) return found;
@@ -163,10 +173,9 @@ export function FileTree(props: Props) {
   const statusMap = createMemo(() => git.statusByAbsPath(props.projectPath));
 
   function toRel(abs: string): string {
-    const base = props.projectPath.endsWith("/")
-      ? props.projectPath.slice(0, -1)
-      : props.projectPath;
-    if (abs.startsWith(base + "/")) return abs.slice(base.length + 1);
+    const normBase = norm(props.projectPath).replace(/\/+$/, "");
+    const normAbs = norm(abs);
+    if (normAbs.startsWith(normBase + "/")) return normAbs.slice(normBase.length + 1);
     return abs;
   }
 
@@ -358,7 +367,7 @@ export function FileTree(props: Props) {
     if (!node) return stripTrailingSlash(props.projectPath);
     if (node.isDir) return sel;
     // File selected → create in its parent.
-    const idx = sel.lastIndexOf("/");
+    const idx = Math.max(sel.lastIndexOf("/"), sel.lastIndexOf("\\"));
     return idx > 0 ? sel.slice(0, idx) : stripTrailingSlash(props.projectPath);
   }
 
@@ -391,11 +400,12 @@ export function FileTree(props: Props) {
       cancelCreate();
       return;
     }
-    if (name.includes("/") || name === "." || name === "..") {
+    if (name.includes("/") || name.includes("\\") || name === "." || name === "..") {
       setError(`invalid name: ${name}`);
       return;
     }
-    const target = `${st.targetDir}/${name}`;
+    const sep = st.targetDir.includes("\\") ? "\\" : "/";
+    const target = `${st.targetDir}${sep}${name}`;
     try {
       await invoke(st.mode === "file" ? "fs_create_file" : "fs_create_dir", {
         path: target,
@@ -410,7 +420,7 @@ export function FileTree(props: Props) {
   }
 
   async function deleteEntry(path: string, isDir: boolean) {
-    const name = path.split("/").pop() ?? path;
+    const name = path.split(/[/\\]/).pop() ?? path;
     const what = isDir ? "folder" : "file";
     const ok = await confirm(
       `Move ${what} "${name}" to the trash?\n\n${path}`,
@@ -522,7 +532,7 @@ export function FileTree(props: Props) {
       onClick: () => void copyPath(m.path),
     });
     items.push({
-      label: "Reveal in Finder",
+      label: isMac ? "Reveal in Finder" : "Reveal in File Explorer",
       icon: FolderOpen,
       onClick: () => void reveal(m.path),
     });

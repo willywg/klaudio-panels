@@ -5,6 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
+import { invoke } from "@tauri-apps/api/core";
 import {
   readText as readClipboardText,
 } from "@tauri-apps/plugin-clipboard-manager";
@@ -175,6 +176,7 @@ export function ShellTerminalView(props: Props) {
         return false;
       }
       const mac = navigator.platform.toUpperCase().includes("MAC");
+      const win = navigator.platform.toUpperCase().startsWith("WIN");
       const meta = mac ? e.metaKey : e.ctrlKey && e.shiftKey;
       if (!meta) return true;
       const key = e.key.toLowerCase();
@@ -194,9 +196,35 @@ export function ShellTerminalView(props: Props) {
         // in v0.9.3).
         e.preventDefault();
         readClipboardText()
-          .then((text) => term!.paste(text ?? ""))
-          .catch((err) => {
+          .then(async (text) => {
+            if (!win || (text && text.length > 0)) {
+              term!.paste(text ?? "");
+            } else {
+              try {
+                const imgPath = await invoke<string | null>("paste_clipboard_image");
+                if (imgPath) {
+                  term!.paste(`"${imgPath}" `);
+                } else {
+                  term!.paste(text ?? "");
+                }
+              } catch {
+                term!.paste(text ?? "");
+              }
+            }
+          })
+          .catch(async (err) => {
             console.warn("clipboard read failed", err);
+            if (win) {
+              try {
+                const imgPath = await invoke<string | null>("paste_clipboard_image");
+                if (imgPath) {
+                  term!.paste(`"${imgPath}" `);
+                  return;
+                }
+              } catch {
+                // fall through
+              }
+            }
             term!.paste("");
           });
         return false;
@@ -248,8 +276,45 @@ export function ShellTerminalView(props: Props) {
       // current even when the bus isn't called.
       const onTextareaFocus = () => recordTerminalFocus(props.ptyId);
       term.textarea?.addEventListener("focus", onTextareaFocus);
+      const isWin =
+        typeof navigator !== "undefined" &&
+        navigator.platform.toUpperCase().startsWith("WIN");
+      const onPaste = async (e: ClipboardEvent) => {
+        if (!isWin) return;
+        const items = e.clipboardData?.items;
+        let hasImage = false;
+        if (items) {
+          for (let i = 0; i < items.length; i++) {
+            if (items[i].type.startsWith("image/")) {
+              hasImage = true;
+              break;
+            }
+          }
+        }
+        const text = e.clipboardData?.getData("text");
+        if (hasImage || !text || text.length === 0) {
+          if (hasImage) {
+            e.preventDefault();
+          }
+          try {
+            const imgPath = await invoke<string | null>("paste_clipboard_image");
+            if (imgPath) {
+              term?.paste(`"${imgPath}" `);
+              return;
+            }
+          } catch (err) {
+            console.warn("paste_clipboard_image failed", err);
+          }
+        }
+      };
+      if (isWin) {
+        term.textarea?.addEventListener("paste", onPaste);
+      }
       onCleanup(() => {
         term?.textarea?.removeEventListener("focus", onTextareaFocus);
+        if (isWin) {
+          term?.textarea?.removeEventListener("paste", onPaste);
+        }
       });
     }
 

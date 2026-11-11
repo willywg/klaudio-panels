@@ -177,14 +177,22 @@ fn run_with_timeout(
 ) -> Result<String, String> {
     use std::io::Read;
 
-    let mut child = Command::new(bin)
-        .args(args)
+    let mut cmd = Command::new(bin);
+    cmd.args(args)
         .current_dir(cwd)
         .env_clear()
         .envs(env)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let mut child = cmd
         .spawn()
         .map_err(|e| format!("could not start {}: {e}", bin.display()))?;
 
@@ -217,8 +225,15 @@ fn run_with_timeout(
 
 /// Whether Klaudio's entry is in `~/.cursor/hooks.json`. Status comes from
 /// the file, never from a stored flag.
+const CURSOR_HOOK_UNSUPPORTED: &str = "Cursor turn notifications are not supported on Windows yet.";
+
 #[tauri::command]
 pub fn cursor_hook_status() -> Result<crate::cursor_hooks::HookFileStatus, String> {
+    if cfg!(not(unix)) {
+        return Ok(crate::cursor_hooks::HookFileStatus::Unsupported {
+            reason: CURSOR_HOOK_UNSUPPORTED.into(),
+        });
+    }
     let path =
         crate::agent_hooks::user_hooks_path().ok_or("could not resolve the home directory")?;
     let command = crate::agent_hooks::user_hooks_command().unwrap_or_default();
@@ -227,6 +242,9 @@ pub fn cursor_hook_status() -> Result<crate::cursor_hooks::HookFileStatus, Strin
 
 #[tauri::command]
 pub fn cursor_hook_install() -> Result<(), String> {
+    if cfg!(not(unix)) {
+        return Err(CURSOR_HOOK_UNSUPPORTED.into());
+    }
     let path =
         crate::agent_hooks::user_hooks_path().ok_or("could not resolve the home directory")?;
     let command =
@@ -236,6 +254,9 @@ pub fn cursor_hook_install() -> Result<(), String> {
 
 #[tauri::command]
 pub fn cursor_hook_uninstall() -> Result<(), String> {
+    if cfg!(not(unix)) {
+        return Err(CURSOR_HOOK_UNSUPPORTED.into());
+    }
     let path =
         crate::agent_hooks::user_hooks_path().ok_or("could not resolve the home directory")?;
     let command =
@@ -246,6 +267,21 @@ pub fn cursor_hook_uninstall() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(unix))]
+    #[test]
+    fn windows_cursor_hook_is_unavailable_without_touching_user_configuration() {
+        let status = serde_json::to_value(cursor_hook_status().unwrap()).unwrap();
+        assert_eq!(status["state"], "unsupported");
+        assert_eq!(
+            cursor_hook_install().unwrap_err(),
+            "Cursor turn notifications are not supported on Windows yet."
+        );
+        assert_eq!(
+            cursor_hook_uninstall().unwrap_err(),
+            CURSOR_HOOK_UNSUPPORTED
+        );
+    }
 
     #[test]
     fn the_last_enabled_agent_cannot_be_disabled() {

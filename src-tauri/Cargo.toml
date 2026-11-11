@@ -7,7 +7,9 @@ edition = "2021"
 
 [lib]
 name = "klaudio_panels_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Desktop only needs rlib; cdylib overflows the 65,535 PE export ordinal
+# limit under the Windows GNU linker (ld).
+crate-type = ["rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -34,6 +36,10 @@ lru = "0.14"
 git2 = { version = "0.20", default-features = false }
 tauri-plugin-deep-link = "2.4.7"
 url = "2.5.8"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+tauri-plugin-single-instance = { version = "2.4.0", features = ["deep-link"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

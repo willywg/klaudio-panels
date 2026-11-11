@@ -205,12 +205,12 @@ mod tests {
     }
 
     fn meta(cwd: &Path, has_conversation: bool, title: Option<&str>, updated: i64) -> String {
+        let cwd = serde_json::to_string(&cwd.to_string_lossy()).unwrap();
         let title = title
             .map(|t| format!(r#""title":"{t}","#))
             .unwrap_or_default();
         format!(
-            r#"{{"schemaVersion":1,"createdAtMs":1789928343396,"hasConversation":{has_conversation},{title}"updatedAtMs":{updated},"cwd":"{}"}}"#,
-            cwd.display()
+            r#"{{"schemaVersion":1,"createdAtMs":1789928343396,"hasConversation":{has_conversation},{title}"updatedAtMs":{updated},"cwd":{cwd}}}"#
         )
     }
 

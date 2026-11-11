@@ -127,4 +127,16 @@ describe("relativizeToProject", () => {
       "/project2/logo.png",
     );
   });
+
+  test("matches case-insensitively on Windows and macOS, case-sensitively on Linux", () => {
+    expect(
+      relativizeToProject("C:\\Proj", "c:\\proj\\public\\logo.png", "Win32"),
+    ).toBe("public/logo.png");
+    expect(
+      relativizeToProject("/Users/Me/Proj", "/Users/me/proj/public/logo.png", "MacIntel"),
+    ).toBe("public/logo.png");
+    expect(
+      relativizeToProject("/home/me/proj", "/home/me/Proj/public/logo.png", "Linux x86_64"),
+    ).toBe("/home/me/Proj/public/logo.png");
+  });
 });

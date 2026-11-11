@@ -105,6 +105,16 @@ import { displayLabel } from "@/lib/session-label";
 const AUTO_RESUME_FAIL_WINDOW_MS = 2000;
 
 function relPathInside(base: string, full: string): string | null {
+  const isWindows =
+    typeof navigator !== "undefined" &&
+    navigator.platform.toUpperCase().startsWith("WIN");
+  if (isWindows) {
+    const b = base.replace(/\\/g, "/").replace(/\/+$/, "");
+    const f = full.replace(/\\/g, "/");
+    if (f.toLowerCase() === b.toLowerCase()) return null;
+    const prefix = b.toLowerCase() + "/";
+    return f.toLowerCase().startsWith(prefix) ? f.slice(prefix.length) : null;
+  }
   const b = base.endsWith("/") ? base.slice(0, -1) : base;
   if (full === b) return null;
   const prefix = b + "/";
@@ -127,6 +137,12 @@ function dirname(p: string): string {
 }
 
 function installSuccessMessage(where: string): string {
+  const isWindows =
+    typeof navigator !== "undefined" &&
+    navigator.platform.toUpperCase().startsWith("WIN");
+  if (isWindows) {
+    return `Installed at ${where}.\n\nRestart your terminal or open a new terminal window to pick up the updated PATH.`;
+  }
   const dir = dirname(where);
   const inPrimary = where.startsWith("/usr/local/bin");
   const header = `Installed at ${where}.`;
@@ -209,6 +225,7 @@ function Shell() {
   // Track which projects have already consumed their auto-resume (once per
   // app lifetime — switching away and back doesn't re-trigger).
   const autoResumed = new Set<string>();
+  const cliClaimed = new Set<string>();
 
   /** Single entry point for changing which project is active. Always save the
    *  current active tab for the OUTGOING project first, so coming back lands
@@ -964,7 +981,7 @@ function Shell() {
       }
 
       const target = chooseWakeTarget(groups, getLastAgent(projectPath));
-      if (!target) return;
+      if (!target || cliClaimed.has(projectPath)) return;
 
       // Rebuild every agent's remembered strip dormant — agents in registry
       // order, each in its own stored order — then give a PTY to one tab
@@ -1105,6 +1122,9 @@ function Shell() {
     }
     activeByProject.delete(path);
     autoResumed.delete(path);
+    // A CLI open only claims the project until it is closed; otherwise a
+    // later reopen from the home screen would skip restoring its tabs.
+    cliClaimed.delete(path);
     // Defensive: clearProject already SIGHUP'd editor tabs through the
     // onBeforeClose hook, but the project may have lived without a diff
     // panel ever opening — kill anything still alive directly.
@@ -1133,6 +1153,7 @@ function Shell() {
     // Suppress auto-resume for this project — the user's intent is a fresh
     // tab, not continuation. Adding to the set BEFORE setActiveProjectPath
     // short-circuits the maybeAutoResume call inside the active-path effect.
+    cliClaimed.add(projectPath);
     autoResumed.add(projectPath);
     projects.touch(projectPath);
     setActiveProjectPath(projectPath);
@@ -1162,6 +1183,21 @@ function Shell() {
       },
     ).then((off) => unlistens.push(off));
 
+    const isWindows =
+      typeof navigator !== "undefined" &&
+      navigator.platform.toUpperCase().startsWith("WIN");
+    if (isWindows) {
+      void invoke<Array<{ project_path: string; file_path: string | null }>>(
+        "take_startup_cli_open",
+      )
+        .then((items) => {
+          for (const item of items) {
+            void handleCliOpen(item.project_path, item.file_path ?? undefined);
+          }
+        })
+        .catch((err) => console.error("take_startup_cli_open failed", err));
+    }
+
     void listen("menu:install-cli", async () => {
       try {
         const where = await invoke<string>("install_cli");
@@ -1180,10 +1216,13 @@ function Shell() {
     void listen("menu:uninstall-cli", async () => {
       try {
         await invoke("uninstall_cli");
-        await message(
-          "The klaudio command has been removed from PATH.\n\nOpen a new terminal window — shells opened before this will still have klaudio cached until you run `rehash` (zsh) or `hash -r` (bash).",
-          { title: "klaudio CLI uninstalled", kind: "info" },
-        );
+        const isWindows =
+          typeof navigator !== "undefined" &&
+          navigator.platform.toUpperCase().startsWith("WIN");
+        const msg = isWindows
+          ? "The klaudio command has been removed from PATH.\n\nOpen a new terminal window to ensure PATH changes take effect."
+          : "The klaudio command has been removed from PATH.\n\nOpen a new terminal window — shells opened before this will still have klaudio cached until you run `rehash` (zsh) or `hash -r` (bash).";
+        await message(msg, { title: "klaudio CLI uninstalled", kind: "info" });
       } catch (err) {
         await message(String(err), {
           title: "Uninstall failed",

@@ -66,7 +66,7 @@ export function saveRecentProjects(list: RecentProject[]): void {
 }
 
 export function projectLabel(path: string): string {
-  const segs = path.split("/").filter(Boolean);
+  const segs = path.split(/[/\\]/).filter(Boolean);
   return segs[segs.length - 1] || path;
 }
 

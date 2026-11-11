@@ -34,14 +34,18 @@ export type FsEventEnvelope = FsEvent & { project_path: string };
 
 export type FlatRow = { node: TreeNode; depth: number };
 
+function norm(p: string): string {
+  return p.replace(/\\/g, "/");
+}
+
 function basename(p: string): string {
-  const s = p.split("/").filter(Boolean);
+  const s = p.split(/[/\\]/).filter(Boolean);
   return s[s.length - 1] || p;
 }
 
 function dirname(p: string): string {
-  const idx = p.lastIndexOf("/");
-  if (idx <= 0) return "/";
+  const idx = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+  if (idx <= 0) return p.includes("\\") ? p.slice(0, 3) : "/";
   return p.slice(0, idx);
 }
 
@@ -57,10 +61,12 @@ function insertSorted(list: TreeNode[], node: TreeNode) {
 }
 
 function findNodeMut(root: TreeNode, path: string): TreeNode | null {
-  if (root.path === path) return root;
+  if (root.path === path || norm(root.path) === norm(path)) return root;
   if (!root.isDir) return null;
   // Only descend if path is under root.path
-  if (!path.startsWith(root.path + "/") && root.path !== "/") return null;
+  const normRoot = norm(root.path).replace(/\/+$/, "");
+  const normPath = norm(path);
+  if (!normPath.startsWith(normRoot + "/") && normRoot !== "" && normRoot !== "/") return null;
   for (const child of root.children) {
     const found = findNodeMut(child, path);
     if (found) return found;
@@ -222,7 +228,7 @@ export function makeFileTreeStore(projectPath: string) {
         const parent = dirname(ev.path);
         const parentNode = findNodeMut(root, parent);
         if (!parentNode || !parentNode.loaded) return;
-        if (parentNode.children.some((c) => c.path === ev.path)) return;
+        if (parentNode.children.some((c) => c.path === ev.path || norm(c.path) === norm(ev.path))) return;
         setRoot(
           produce((r: TreeNode) => {
             const pn = findNodeMut(r, parent);
@@ -247,7 +253,7 @@ export function makeFileTreeStore(projectPath: string) {
           produce((r: TreeNode) => {
             const pn = findNodeMut(r, parent);
             if (!pn) return;
-            const idx = pn.children.findIndex((c) => c.path === ev.path);
+            const idx = pn.children.findIndex((c) => c.path === ev.path || norm(c.path) === norm(ev.path));
             if (idx >= 0) pn.children.splice(idx, 1);
           }),
         );

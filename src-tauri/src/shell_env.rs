@@ -5,16 +5,33 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(not(target_os = "windows"))]
+use std::process::Stdio;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
+#[cfg(not(target_os = "windows"))]
 const SHELL_ENV_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn get_user_shell() -> String {
-    std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(p) = which::which("pwsh.exe") {
+            return p.to_string_lossy().into_owned();
+        }
+        if let Ok(p) = which::which("powershell.exe") {
+            return p.to_string_lossy().into_owned();
+        }
+        std::env::var("COMSPEC").unwrap_or_else(|_| "powershell.exe".into())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())
+    }
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 fn is_nushell(shell: &str) -> bool {
     let name = Path::new(shell)
         .file_name()
@@ -24,6 +41,7 @@ fn is_nushell(shell: &str) -> bool {
     name == "nu" || name == "nu.exe" || shell.to_ascii_lowercase().ends_with("\\nu.exe")
 }
 
+#[cfg_attr(not(unix), allow(dead_code))]
 fn parse_shell_env(stdout: &[u8]) -> HashMap<String, String> {
     String::from_utf8_lossy(stdout)
         .split('\0')
@@ -44,6 +62,11 @@ pub(crate) fn command_output_with_timeout(
     mut cmd: Command,
     timeout: Duration,
 ) -> std::io::Result<Option<std::process::Output>> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
     let mut child = cmd.spawn()?;
     let start = Instant::now();
     loop {
@@ -59,12 +82,14 @@ pub(crate) fn command_output_with_timeout(
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 enum ShellEnvProbe {
     Loaded(HashMap<String, String>),
     Timeout,
     Unavailable,
 }
 
+#[cfg(not(target_os = "windows"))]
 fn probe_shell_env(shell: &str, mode: &str) -> ShellEnvProbe {
     let mut cmd = Command::new(shell);
     cmd.args([mode, "-c", "env -0"]);
@@ -104,6 +129,34 @@ fn strip_unsafe_baseline_vars(
     env.filter(|(k, _)| k != "CLAUDE_CONFIG_DIR").collect()
 }
 
+/// Collapses mixed-case Windows `Path` entries into a single uppercase `PATH`
+/// key and populates `HOME` from `USERPROFILE` when absent. Windows sets
+/// `USERPROFILE` rather than `HOME` by default, whereas embedded CLI agents,
+/// Git, and terminal editors (Neovim, Helix) expect `HOME` to be set.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn normalize_windows_baseline_env(mut map: HashMap<String, String>) -> HashMap<String, String> {
+    let alt_keys: Vec<String> = map
+        .keys()
+        .filter(|k| k.eq_ignore_ascii_case("PATH") && k.as_str() != "PATH")
+        .cloned()
+        .collect();
+    for k in alt_keys {
+        if let Some(v) = map.remove(&k) {
+            map.entry("PATH".to_string()).or_insert(v);
+        }
+    }
+    if !map.contains_key("HOME") {
+        if let Some(home) = map
+            .get("USERPROFILE")
+            .cloned()
+            .or_else(|| dirs::home_dir().map(|p| p.to_string_lossy().into_owned()))
+        {
+            map.insert("HOME".to_string(), home);
+        }
+    }
+    map
+}
+
 /// A degraded-but-safe substitute for a failed shell-env probe: Klaudio's
 /// own process env (still a real `PATH`/`HOME` — a macOS GUI app gets *a*
 /// PATH from launchd, just not the shell-hydrated one) with the variables
@@ -111,7 +164,10 @@ fn strip_unsafe_baseline_vars(
 /// safe fallback: the child would spawn with no `PATH` and no `HOME` at
 /// all (non-negotiable #3).
 fn safe_baseline_env() -> HashMap<String, String> {
-    strip_unsafe_baseline_vars(std::env::vars())
+    let map = strip_unsafe_baseline_vars(std::env::vars());
+    #[cfg(target_os = "windows")]
+    let map = normalize_windows_baseline_env(map);
+    map
 }
 
 /// Resolves the login-shell-hydrated env, always returning *something*
@@ -130,21 +186,29 @@ fn safe_baseline_env() -> HashMap<String, String> {
 /// while Klaudio is open is picked up on the next launch, not the next
 /// spawn. Per-project direnv is a separate step and stays fresh.
 pub fn load_shell_env(shell: &str) -> Option<HashMap<String, String>> {
-    if is_nushell(shell) {
-        crate::debug_log::write("shell_env", "nushell detected, using safe baseline env");
-        return Some(safe_baseline_env());
+    #[cfg(target_os = "windows")]
+    {
+        let _ = shell;
+        Some(safe_baseline_env())
     }
-    if let ShellEnvProbe::Loaded(env) = probe_shell_env(shell, "-il") {
-        return Some(env);
+    #[cfg(not(target_os = "windows"))]
+    {
+        if is_nushell(shell) {
+            crate::debug_log::write("shell_env", "nushell detected, using safe baseline env");
+            return Some(safe_baseline_env());
+        }
+        if let ShellEnvProbe::Loaded(env) = probe_shell_env(shell, "-il") {
+            return Some(env);
+        }
+        if let ShellEnvProbe::Loaded(env) = probe_shell_env(shell, "-l") {
+            return Some(env);
+        }
+        crate::debug_log::write(
+            "shell_env",
+            &format!("shell probe failed for {shell}, using safe baseline env"),
+        );
+        Some(safe_baseline_env())
     }
-    if let ShellEnvProbe::Loaded(env) = probe_shell_env(shell, "-l") {
-        return Some(env);
-    }
-    crate::debug_log::write(
-        "shell_env",
-        &format!("shell probe failed for {shell}, using safe baseline env"),
-    );
-    Some(safe_baseline_env())
 }
 
 /// Login-shell environment, probed once per process.
@@ -184,7 +248,7 @@ pub fn which_in_shell(
     shell_env: Option<&HashMap<String, String>>,
     binary: &str,
 ) -> Option<String> {
-    if binary.contains('/') {
+    if binary.contains('/') || (cfg!(target_os = "windows") && binary.contains('\\')) {
         let p = Path::new(binary);
         if p.is_file() {
             return Some(binary.to_string());
@@ -193,14 +257,28 @@ pub fn which_in_shell(
     }
 
     let path = shell_env
-        .and_then(|m| m.get("PATH"))
+        .and_then(|m| m.get("PATH").or_else(|| m.get("Path")))
         .cloned()
-        .or_else(|| std::env::var("PATH").ok())?;
+        .or_else(|| std::env::var("PATH").ok().or_else(|| std::env::var("Path").ok()))?;
 
-    for dir in path.split(':').filter(|s| !s.is_empty()) {
+    #[cfg(target_os = "windows")]
+    let delim = ';';
+    #[cfg(not(target_os = "windows"))]
+    let delim = ':';
+
+    for dir in path.split(delim).filter(|s| !s.is_empty()) {
         let candidate = Path::new(dir).join(binary);
         if candidate.is_file() {
             return candidate.to_str().map(|s| s.to_string());
+        }
+        #[cfg(target_os = "windows")]
+        {
+            for ext in &[".exe", ".cmd", ".bat"] {
+                let with_ext = Path::new(dir).join(format!("{binary}{ext}"));
+                if with_ext.is_file() {
+                    return with_ext.to_str().map(|s| s.to_string());
+                }
+            }
         }
     }
     None
@@ -353,5 +431,27 @@ mod tests {
             "shell/editor PTY env must have HOME"
         );
         assert_eq!(env.get("TERM"), Some(&"xterm-256color".to_string()));
+    }
+
+    #[test]
+    fn windows_baseline_env_collapses_path_and_populates_home_from_userprofile() {
+        let map = HashMap::from([
+            ("Path".to_string(), "C:\\Windows\\System32".to_string()),
+            ("USERPROFILE".to_string(), "C:\\Users\\Alice".to_string()),
+            ("SystemRoot".to_string(), "C:\\Windows".to_string()),
+        ]);
+        let normalized = normalize_windows_baseline_env(map);
+        assert_eq!(
+            normalized.get("PATH"),
+            Some(&"C:\\Windows\\System32".to_string())
+        );
+        assert!(
+            !normalized.contains_key("Path"),
+            "must not leave duplicate Path and PATH keys in the child env"
+        );
+        assert_eq!(
+            normalized.get("HOME"),
+            Some(&"C:\\Users\\Alice".to_string())
+        );
     }
 }

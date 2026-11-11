@@ -11,41 +11,69 @@
  *  with spaces or shell metacharacters gets quoted. */
 export type DropTargetKind = "claude" | "shell";
 
-/** POSIX-safe quoting for a shell prompt: leave boring paths bare, wrap
- *  anything else in single quotes (`'` itself becomes `'\''`). Broader
- *  than the old escape-spaces-only rule, which still handed the shell a
- *  broken word for names like `CAMBIOS (1).docx`. */
-function shellQuote(token: string): string {
+function norm(p: string): string {
+  return p.replace(/\\/g, "/");
+}
+
+/** Safe quoting for a shell prompt: leave boring paths bare, wrap
+ *  anything else in single quotes (`'` itself becomes `'\''` on POSIX
+ *  or `''` on PowerShell). Broader than the old escape-spaces-only
+ *  rule, which still handed the shell a broken word for names like
+ *  `CAMBIOS (1).docx`. */
+function shellQuote(token: string, windows: boolean): string {
   if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(token)) return token;
+  if (windows) return `'${token.replace(/'/g, "''")}'`;
   return `'${token.replace(/'/g, `'\\''`)}'`;
+}
+
+function defaultPlatform(): string {
+  if (typeof navigator !== "undefined" && navigator.platform) {
+    return navigator.platform;
+  }
+  if (typeof process !== "undefined" && process.platform) {
+    return process.platform;
+  }
+  return "";
 }
 
 export function buildDropPayload(
   absPaths: string[],
   projectPath: string,
   kind: DropTargetKind = "claude",
+  platform = defaultPlatform(),
 ): string | null {
   const trimmed = absPaths.filter((p) => p && p.length > 0);
   if (trimmed.length === 0) return null;
-  const base = projectPath.endsWith("/")
-    ? projectPath.slice(0, -1)
-    : projectPath;
-  const tokens = trimmed.map((abs) => {
-    if (abs === base) return "@.";
-    if (abs.startsWith(base + "/")) return `@${abs.slice(base.length + 1)}`;
+  const upper = platform.toUpperCase();
+  const windows = upper.startsWith("WIN");
+  const caseInsensitive =
+    windows || upper.includes("MAC") || upper.includes("DARWIN");
+  const normBase = norm(projectPath).replace(/\/+$/, "");
+  const cmpBase = caseInsensitive ? normBase.toLowerCase() : normBase;
+
+  const tokens = trimmed.map((rawAbs) => {
+    const normAbs = norm(rawAbs);
+    const cmpAbs = caseInsensitive ? normAbs.toLowerCase() : normAbs;
+    if (cmpAbs === cmpBase) return "@.";
+    if (cmpAbs.startsWith(cmpBase + "/")) {
+      const rel = normAbs.slice(normBase.length + 1);
+      return `@${rel}`;
+    }
     // Outside the project — send the absolute path verbatim. Claude
     // Code accepts absolute paths in @ references too, but they're
     // noisier; keeping the bare absolute path lets the user decide
     // whether to prefix with @ or paste into a tool argument.
-    return abs;
+    return rawAbs;
   });
+
   // Claude's prompt is prose, not a command line: a backslash there is a
   // literal character, so `CAMBIOS\ 5\ AGOSTO.docx` names a file that
   // doesn't exist and every subsequent read fails. Only the shell wants
   // quoting. (Trade-off: dropping several space-containing paths into
   // Claude at once is ambiguous — the model still reads it fine, and
   // that beats every single-file drop being broken.)
-  const out = kind === "shell" ? tokens.map(shellQuote) : tokens;
+  const out =
+    kind === "shell" ? tokens.map((token) => shellQuote(token, windows)) : tokens;
   return `${out.join(" ")} `;
 }
 

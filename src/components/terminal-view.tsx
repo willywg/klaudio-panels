@@ -5,6 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
+import { invoke } from "@tauri-apps/api/core";
 import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { AGENT_DISPLAY, DEFAULT_AGENT } from "@/lib/agents";
 import { useTerminal } from "@/context/terminal";
@@ -46,6 +47,13 @@ import {
 } from "@/lib/resolve-file";
 import { useReveal } from "@/context/reveal";
 import { toast } from "@/lib/toast";
+
+const isMac =
+  typeof navigator !== "undefined" &&
+  navigator.platform.toUpperCase().includes("MAC");
+const isWindows =
+  typeof navigator !== "undefined" &&
+  navigator.platform.toUpperCase().startsWith("WIN");
 
 const THEME = {
   background: "#0b0b0c",
@@ -251,11 +259,16 @@ export function TerminalView(props: Props) {
       if (e.key === "Tab" && e.ctrlKey && !e.metaKey && !e.altKey) {
         return false;
       }
-      if (e.metaKey && e.altKey && /^Digit[1-9]$/.test(e.code)) {
+      const mac = navigator.platform.toUpperCase().includes("MAC");
+      const win = navigator.platform.toUpperCase().startsWith("WIN");
+      const mod = mac ? e.metaKey : e.ctrlKey;
+      if (mod && e.altKey && /^Digit[1-9]$/.test(e.code)) {
         return false;
       }
-      const mac = navigator.platform.toUpperCase().includes("MAC");
-      const meta = mac ? e.metaKey : e.ctrlKey && e.shiftKey;
+      if (win && mod && !e.shiftKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+        return false;
+      }
+      const meta = mac ? e.metaKey : win ? e.ctrlKey : e.ctrlKey && e.shiftKey;
       if (!meta) return true;
       const key = e.key.toLowerCase();
       if (key === "c" && term!.hasSelection()) {
@@ -277,29 +290,57 @@ export function TerminalView(props: Props) {
         // Always call term.paste(), even with empty text: the bracketed-
         // paste markers alone trigger Claude Code to sniff the NSPasteboard
         // for an image (same path that the WebKit right-click Paste used
-        // to reach).
+        // to reach). On Windows, where Claude Code cannot read bitmap data
+        // directly from the Win32 clipboard via bracketed-paste markers,
+        // paste_clipboard_image writes a temporary PNG and pastes its path.
         e.preventDefault();
         readClipboardText()
-          .then((text) => term!.paste(text ?? ""))
-          .catch((err) => {
+          .then(async (text) => {
+            if (!win || (text && text.length > 0)) {
+              term!.paste(text ?? "");
+            } else {
+              try {
+                const imgPath = await invoke<string | null>("paste_clipboard_image");
+                if (imgPath) {
+                  term!.paste(`"${imgPath}" `);
+                } else {
+                  term!.paste(text ?? "");
+                }
+              } catch {
+                term!.paste(text ?? "");
+              }
+            }
+          })
+          .catch(async (err) => {
             console.warn("clipboard read failed", err);
+            if (win) {
+              try {
+                const imgPath = await invoke<string | null>("paste_clipboard_image");
+                if (imgPath) {
+                  term!.paste(`"${imgPath}" `);
+                  return;
+                }
+              } catch {
+                // fall through
+              }
+            }
             term!.paste("");
           });
         return false;
       }
-      if (key === "k") {
+      if (key === "k" && (mac || e.shiftKey)) {
         term!.clear();
         return false;
       }
       // Cmd+Left/Right → beginning/end of line (iTerm2 "Natural Text
       // Editing" preset, Warp default). Ink's text input (used by
       // Claude Code's prompt) reads Ctrl+A / Ctrl+E as home/end.
-      if (key === "arrowleft") {
+      if (key === "arrowleft" && mac) {
         e.preventDefault();
         void ctx.write(props.id, encoder.encode("\x01"));
         return false;
       }
-      if (key === "arrowright") {
+      if (key === "arrowright" && mac) {
         e.preventDefault();
         void ctx.write(props.id, encoder.encode("\x05"));
         return false;
@@ -336,8 +377,42 @@ export function TerminalView(props: Props) {
       });
       const onTextareaFocus = () => recordTerminalFocus(props.id);
       term.textarea?.addEventListener("focus", onTextareaFocus);
+      const onPaste = async (e: ClipboardEvent) => {
+        if (!isWindows) return;
+        const items = e.clipboardData?.items;
+        let hasImage = false;
+        if (items) {
+          for (let i = 0; i < items.length; i++) {
+            if (items[i].type.startsWith("image/")) {
+              hasImage = true;
+              break;
+            }
+          }
+        }
+        const text = e.clipboardData?.getData("text");
+        if (hasImage || !text || text.length === 0) {
+          if (hasImage) {
+            e.preventDefault();
+          }
+          try {
+            const imgPath = await invoke<string | null>("paste_clipboard_image");
+            if (imgPath) {
+              term?.paste(`"${imgPath}" `);
+              return;
+            }
+          } catch (err) {
+            console.warn("paste_clipboard_image failed", err);
+          }
+        }
+      };
+      if (isWindows) {
+        term.textarea?.addEventListener("paste", onPaste);
+      }
       onCleanup(() => {
         term?.textarea?.removeEventListener("focus", onTextareaFocus);
+        if (isWindows) {
+          term?.textarea?.removeEventListener("paste", onPaste);
+        }
       });
     }
 
@@ -590,7 +665,7 @@ export function TerminalView(props: Props) {
         host.appendChild(img);
         const caption = document.createElement("div");
         caption.className = "terminal-thumb-caption";
-        caption.textContent = `${formatBytes(payload.bytes)} · ⌘-click to open`;
+        caption.textContent = `${formatBytes(payload.bytes)} · ${isMac ? "⌘-click" : "Ctrl-click"} to open`;
         host.appendChild(caption);
         term.element.appendChild(host);
         thumbEl = host;

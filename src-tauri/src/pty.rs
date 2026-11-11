@@ -24,8 +24,11 @@ pub struct PtySession {
     pause: Arc<PauseGate>,
     /// Set for agent tabs. Shell and editor PTYs leave this empty, so a
     /// Cursor hook event cannot be routed to them.
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) agent: Option<crate::agent::AgentId>,
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) project_path: String,
+    #[cfg_attr(not(unix), allow(dead_code))]
     pub(crate) session_id: Option<String>,
 }
 
@@ -239,31 +242,38 @@ fn log_startup_bytes(id: &str, bytes: &[u8]) {
 /// copied here, listed somewhere else. Withholding `KLAUDIO_CLIP_SOCK` makes
 /// the shim fall through to the real `pbcopy` instead (#96).
 fn clipboard_history_env(env: Vec<(String, String)>) -> Vec<(String, String)> {
-    if !crate::clipboard_history::shim_active() {
-        return env;
+    #[cfg(target_os = "windows")]
+    {
+        env
     }
-    let (Some(dir), Some(sock)) = (
-        crate::clipboard_history::shim_dir(),
-        crate::clipboard_history::socket_path(),
-    ) else {
-        return env;
-    };
-    let dir = dir.display().to_string();
-    let mut out: Vec<(String, String)> = env
-        .into_iter()
-        .map(|(k, v)| {
-            if k == "PATH" {
-                (k, format!("{dir}:{v}"))
-            } else {
-                (k, v)
-            }
-        })
-        .collect();
-    if !out.iter().any(|(k, _)| k == "PATH") {
-        out.push(("PATH".into(), dir));
+    #[cfg(not(target_os = "windows"))]
+    {
+        if !crate::clipboard_history::shim_active() {
+            return env;
+        }
+        let (Some(dir), Some(sock)) = (
+            crate::clipboard_history::shim_dir(),
+            crate::clipboard_history::socket_path(),
+        ) else {
+            return env;
+        };
+        let dir = dir.display().to_string();
+        let mut out: Vec<(String, String)> = env
+            .into_iter()
+            .map(|(k, v)| {
+                if k == "PATH" {
+                    (k, format!("{dir}:{v}"))
+                } else {
+                    (k, v)
+                }
+            })
+            .collect();
+        if !out.iter().any(|(k, _)| k == "PATH") {
+            out.push(("PATH".into(), dir));
+        }
+        out.push(("KLAUDIO_CLIP_SOCK".into(), sock.display().to_string()));
+        out
     }
-    out.push(("KLAUDIO_CLIP_SOCK".into(), sock.display().to_string()));
-    out
 }
 
 /// Core PTY spawn routine used by both Claude and embedded editor sessions.
@@ -698,9 +708,12 @@ pub async fn pty_open_shell(
     // A login zsh's path_helper would put /usr/bin/pbcopy ahead of the shim
     // (#117); the wrapper puts it back after the user's startup files.
     let env = crate::shell_integration::shell_tab_env(&shell, env);
-    // POSIX /bin/sh doesn't understand `-l` the same way; keep it to `-i`
+    // On Windows, launching powershell/cmd with no args starts the shell.
+    // On Unix, POSIX /bin/sh doesn't understand `-l` the same way; keep it to `-i`
     // there. Every other shell (zsh/bash/fish) accepts `-l -i`.
-    let args: Vec<String> = if shell.ends_with("/sh") {
+    let args: Vec<String> = if cfg!(target_os = "windows") {
+        vec![]
+    } else if shell.ends_with("/sh") {
         vec!["-i".into()]
     } else {
         vec!["-l".into(), "-i".into()]
