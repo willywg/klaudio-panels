@@ -4,6 +4,42 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.17.0] — 2026-11-11
+
+### Added
+- **Native Windows support, built from source**
+  ([#127](https://github.com/willywg/klaudio-panels/pull/127), contributed by
+  [@gianmarcozap](https://github.com/gianmarcozap)). Agents and the shell
+  dock run under ConPTY, with `Path`/`PATH` normalized into a single key,
+  `HOME` filled in from `USERPROFILE`, `\\?\` prefixes stripped, and no
+  console window flashing on spawn.
+  - **Window:** a custom titlebar with its own minimize, maximize and close
+    controls, Windows keybindings, and drag-and-drop paths quoted for
+    PowerShell.
+  - **Images:** clipboard images are pasted as a temporary PNG path, because
+    Claude Code can't read a bitmap from the Win32 clipboard. Those files
+    are pruned after 15 minutes and on every launch.
+  - **`klaudio` CLI:** installed from Settings into
+    `%LOCALAPPDATA%\Programs\klaudio` and added to the user `PATH`. It hands
+    paths to a single running instance, including when the app was not
+    running yet.
+  - **Not available on Windows yet:** terminal clipboard recording and
+    Cursor's completion hook. Those panels say they are unavailable.
+
+  Windows is labelled "validation in progress": no installer ships with this
+  release. See [`docs/WINDOWS_PORT.md`](docs/WINDOWS_PORT.md) for the build
+  steps and what has been validated. macOS and Linux behavior is unchanged.
+
+### Fixed
+- **The `relative-time` test no longer fails on a Spanish-locale machine.**
+  The test checked the calendar date with `not.toContain("ago")`, and in
+  Spanish August is abbreviated "ago". It now checks for the relative format
+  (`6d ago`) instead.
+
+### Tracked work
+- PR: [#127](https://github.com/willywg/klaudio-panels/pull/127)
+- Follow-up: [#129](https://github.com/willywg/klaudio-panels/issues/129) (⌘W closes the window; predates this release)
+
 ## [1.16.0] — 2026-10-13
 
 ### Added
