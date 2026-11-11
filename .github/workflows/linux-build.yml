@@ -46,10 +46,17 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag }}
 
+      # This step normally takes under a minute. On v1.17.0 the runner lost
+      # DNS for the Ubuntu mirrors, crawled at ~10 KB/s for 75 minutes, and
+      # then failed. Per-request timeouts and retries cover a flaky mirror;
+      # the step timeout makes a dead network fail fast, so a re-run (or a
+      # workflow_dispatch with the tag) gets the release its bundles sooner.
       - name: Install system dependencies
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          APT="sudo apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          $APT update
+          $APT install -y \
             build-essential \
             curl \
             file \
