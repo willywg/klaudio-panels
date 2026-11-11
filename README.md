@@ -40,15 +40,24 @@ older Homebrew versions don't have (or need) the command.
 
 **Or download directly:** grab `Klaudio Panels_<version>_universal.dmg` from the [latest release](https://github.com/willywg/klaudio-panels/releases/latest) and drag the app into `/Applications`.
 
-## Install & Run (Windows via Terminal)
+## Install (Windows)
 
-Klaudio Panels can be built and run directly from your terminal (PowerShell or Command Prompt):
+### 1. Download the installer
+Grab `Klaudio.Panels_<version>_x64-setup-untested.exe` from the [latest release](https://github.com/willywg/klaudio-panels/releases/latest) and run it. CI builds it on every release (MSVC, NSIS). It installs per user, needs no admin rights, and sets up the WebView2 runtime if the machine doesn't have it.
 
-### 1. Prerequisites
+The installer is **experimental and unsigned**:
+- It is named `-untested` because nobody has run a CI-built installer on a clean machine yet. Reports are very welcome.
+- Windows SmartScreen will say *"Windows protected your PC"*. Click **More info** → **Run anyway**. This is the default for unsigned installers, not a sign that anything is wrong with the binary.
+
+### 2. Or build from source
+
+You can build and run Klaudio Panels from a terminal (PowerShell or Command Prompt) instead.
+
+#### Prerequisites
 - [Rust](https://rustup.rs/) with the Windows GNU toolchain active (`x86_64-pc-windows-gnu`) and `windres` available for the GNU release command below
 - [Bun](https://bun.sh/) (for installing dependencies and running the frontend build)
 
-### 2. Clone & Build
+#### Clone & Build
 ```powershell
 git clone https://github.com/willywg/klaudio-panels.git
 cd klaudio-panels
@@ -102,7 +111,7 @@ Both warnings are Gatekeeper defaults for unsigned apps, not signs that anything
 | OS | Status | Notes |
 | --- | --- | --- |
 | **macOS 14+** (Sonoma, Sequoia) | ✅ primary target | Tested on Apple Silicon and Intel. Universal `.dmg` is what the maintainer ships. |
-| **Windows 10/11** | 🧪 validation in progress | Native ConPTY port. Terminal clipboard recording and Cursor turn-notification hooks are unavailable. Clean-machine build, installer, and end-to-end validation remain pending. See [docs/WINDOWS_PORT.md](./docs/WINDOWS_PORT.md). |
+| **Windows 10/11** | 🧪 validation in progress | Native ConPTY port. Terminal clipboard recording and Cursor turn-notification hooks are unavailable. Every release carries an unsigned NSIS installer built by CI, named `-untested` until it has been run on a clean machine. See [docs/WINDOWS_PORT.md](./docs/WINDOWS_PORT.md). |
 | **Linux** | 🧪 untested | Every release carries an `.AppImage` and a `.deb` built by CI, named `-untested` because that is exactly what they are — they compile, but nobody has run them end to end. Notifications, clipboard history and "Open in…" take macOS-only paths that have no Linux equivalent yet. Help validating is very welcome — see [#1](https://github.com/willywg/klaudio-panels/issues/1). |
 
 **About code signing.** Apple's Developer Program is US$99/year. We'll pay it once the project has real usage; until then, the first-launch workaround above is the cost of keeping the project free. Apple has been tightening the unsigned-app escape hatches with each macOS release, so this is a temporary state, not a permanent stance.
