@@ -20,6 +20,9 @@ export type ClipEntry = {
   text: string;
   copied_at_ms: number;
   truncated: boolean;
+  /** Rich text (RTF): `text` is its plain rendering, and the backend holds
+   *  the original for `clipboard_copy_rich` (#130). */
+  rich: boolean;
 };
 
 const MAX_ENTRIES = 10;
@@ -34,7 +37,9 @@ export function applyClip(
   list: readonly ClipEntry[],
   entry: ClipEntry,
 ): ClipEntry[] {
-  const without = list.filter((e) => e.text !== entry.text);
+  const without = list.filter(
+    (e) => e.text !== entry.text || e.rich !== entry.rich,
+  );
   return [entry, ...without].slice(0, MAX_ENTRIES);
 }
 
@@ -86,6 +91,15 @@ function makeClipboardHistoryContext() {
   });
 
   async function recopy(entry: ClipEntry) {
+    if (entry.rich) {
+      try {
+        await invoke("clipboard_copy_rich", { id: entry.id });
+        return;
+      } catch (err) {
+        // Its plain text is still better than nothing, and never the markup.
+        console.warn("clipboard_copy_rich failed; copying as text", err);
+      }
+    }
     try {
       await writeText(entry.text);
     } catch (err) {

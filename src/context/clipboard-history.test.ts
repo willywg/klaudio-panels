@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { applyClip, type ClipEntry } from "@/context/clipboard-history";
 
-function clip(id: number, text: string): ClipEntry {
-  return { id, text, copied_at_ms: id * 1000, truncated: false };
+function clip(id: number, text: string, rich = false): ClipEntry {
+  return { id, text, copied_at_ms: id * 1000, truncated: false, rich };
 }
 
 describe("applyClip", () => {
@@ -32,5 +32,15 @@ describe("applyClip", () => {
     const out = applyClip([clip(1, "same")], clip(2, "same"));
     expect(out.length).toBe(1);
     expect(out[0].id).toBe(2);
+  });
+
+  test("the same text as plain and as rich text stays two rows", () => {
+    // Mirrors insert_entry: promoting the plain copy over the rich one would
+    // lose the formatting a re-copy is supposed to restore (#130).
+    const out = applyClip([clip(1, "same", true)], clip(2, "same"));
+    expect(out.map((e) => [e.id, e.rich])).toEqual([
+      [2, false],
+      [1, true],
+    ]);
   });
 });
