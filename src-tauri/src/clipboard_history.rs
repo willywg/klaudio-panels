@@ -62,6 +62,15 @@ pub struct ClipEntry {
     pub copied_at_ms: u64,
     /// The source text exceeded `MAX_TEXT_BYTES` and `text` is a prefix.
     pub truncated: bool,
+    /// The clip was rich text: `text` is its plain-text rendering and the
+    /// original is held in `rtf`, which a re-copy restores (#130).
+    #[serde(default)]
+    pub rich: bool,
+    /// The original RTF, kept only here. It never crosses to the frontend:
+    /// the panel shows `text`, and `clipboard_copy_rich` hands this back to
+    /// `pbcopy` by id.
+    #[serde(skip)]
+    pub rtf: Option<String>,
 }
 
 static HISTORY: LazyLock<Mutex<VecDeque<ClipEntry>>> =
@@ -121,7 +130,12 @@ pub(crate) fn normalize(text: &str) -> Option<(String, bool)> {
 /// instead of producing a duplicate row, which is what makes a 10-entry
 /// window useful rather than a log.
 pub(crate) fn insert_entry(ring: &mut VecDeque<ClipEntry>, entry: ClipEntry) {
-    if let Some(pos) = ring.iter().position(|e| e.text == entry.text) {
+    // Same text in a different format is a different clip: re-copying the
+    // plain row must not silently replace the rich one, or the reverse.
+    if let Some(pos) = ring
+        .iter()
+        .position(|e| e.text == entry.text && e.rich == entry.rich)
+    {
         ring.remove(pos);
     }
     ring.push_front(entry);
@@ -130,8 +144,68 @@ pub(crate) fn insert_entry(ring: &mut VecDeque<ClipEntry>, entry: ClipEntry) {
     }
 }
 
+/// `/usr/bin/pbcopy` decides a payload is RTF by this header, not by
+/// `-Prefer rtf` (that flag only matters to `pbpaste`), so we use the same
+/// test.
+pub(crate) fn is_rtf(bytes: &[u8]) -> bool {
+    bytes.starts_with(br"{\rtf")
+}
+
+/// Plain text for an RTF payload, through the system's own converter.
+/// `None` when the conversion fails; the caller then drops the clip rather
+/// than showing markup.
+#[cfg(target_os = "macos")]
+fn rtf_to_plain(rtf: &[u8]) -> Option<String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("/usr/bin/textutil")
+        .args(["-format", "rtf", "-convert", "txt", "-stdin", "-stdout"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    // Write from a thread: a payload larger than the pipe buffer would
+    // otherwise deadlock against textutil filling its stdout.
+    let mut stdin = child.stdin.take()?;
+    let input = rtf.to_vec();
+    let writer = std::thread::spawn(move || stdin.write_all(&input));
+    let out = child.wait_with_output().ok()?;
+    let _ = writer.join();
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8(out.stdout).ok()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn rtf_to_plain(_rtf: &[u8]) -> Option<String> {
+    None
+}
+
+/// What a raw payload from the shim becomes: `(display text, original RTF)`.
+/// RTF is kept only when it fits whole under the cap, because a truncated
+/// RTF document is not one `pbcopy` can restore; past that, the entry is
+/// recorded as its plain text.
+fn decode_payload(buf: Vec<u8>) -> Option<(String, Option<String>)> {
+    if !is_rtf(&buf) {
+        // Text only — a piped image or other binary payload is not
+        // something this panel can show or hand back.
+        return String::from_utf8(buf).ok().map(|t| (t, None));
+    }
+    let plain = rtf_to_plain(&buf)?;
+    // RTF is 7-bit by spec, but a cp1252 writer can emit raw high bytes.
+    // Those can't be held in a `String`, so that clip keeps only its text.
+    let rtf = if buf.len() <= MAX_TEXT_BYTES {
+        String::from_utf8(buf).ok()
+    } else {
+        None
+    };
+    Some((plain, rtf))
+}
+
 /// Shared entry point for both sources. No-op when recording is off.
-fn record(app: &AppHandle, raw: &str) {
+fn record(app: &AppHandle, raw: &str, rtf: Option<String>) {
     if !ENABLED.load(Ordering::Relaxed) {
         return;
     }
@@ -143,6 +217,8 @@ fn record(app: &AppHandle, raw: &str) {
         text,
         copied_at_ms: now_ms(),
         truncated,
+        rich: rtf.is_some(),
+        rtf,
     };
     if let Ok(mut h) = HISTORY.lock() {
         insert_entry(&mut h, entry.clone());
@@ -153,7 +229,51 @@ fn record(app: &AppHandle, raw: &str) {
 /// Reported by the frontend for ⌘C inside a Klaudio terminal.
 #[tauri::command]
 pub fn clipboard_record(app: AppHandle, text: String) {
-    record(&app, &text);
+    record(&app, &text, None);
+}
+
+/// Put a rich entry back on the pasteboard in its original format. The RTF
+/// goes through the real `/usr/bin/pbcopy`, the same path that stored it
+/// the first time, so the pasteboard gets the same flavors it had then.
+/// Plain entries are re-copied by the frontend and never come here.
+#[tauri::command]
+pub fn clipboard_copy_rich(id: u64) -> Result<(), String> {
+    let rtf = HISTORY
+        .lock()
+        .ok()
+        .and_then(|h| h.iter().find(|e| e.id == id).and_then(|e| e.rtf.clone()))
+        .ok_or_else(|| "That clip is no longer in the history.".to_string())?;
+    copy_rtf(&rtf)
+}
+
+#[cfg(target_os = "macos")]
+fn copy_rtf(rtf: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new("/usr/bin/pbcopy")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("pbcopy failed to start: {e}"))?;
+    let write = child
+        .stdin
+        .take()
+        .map(|mut s| s.write_all(rtf.as_bytes()))
+        .transpose()
+        .map_err(|e| format!("pbcopy write failed: {e}"));
+    let status = child.wait().map_err(|e| format!("pbcopy failed: {e}"))?;
+    write?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("pbcopy exited with an error".to_string())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn copy_rtf(_rtf: &str) -> Result<(), String> {
+    Err("Rich-text re-copy is only available on macOS.".to_string())
 }
 
 #[tauri::command]
@@ -317,10 +437,8 @@ fn accept_loop(app: &AppHandle, listener: &UnixListener) {
             {
                 return;
             }
-            // Text only — a piped image or other binary payload is not
-            // something this panel can show or hand back.
-            if let Ok(text) = String::from_utf8(buf) {
-                record(&app, &text);
+            if let Some((text, rtf)) = decode_payload(buf) {
+                record(&app, &text, rtf);
             }
         });
     }
@@ -342,7 +460,59 @@ mod tests {
             text: text.to_string(),
             copied_at_ms: 0,
             truncated: false,
+            rich: false,
+            rtf: None,
         }
+    }
+
+    #[test]
+    fn rtf_is_recognized_by_its_header() {
+        assert!(is_rtf(br"{\rtf1\ansi hello}"));
+        assert!(!is_rtf(b"plain text"));
+        assert!(!is_rtf(br" {\rtf1"));
+    }
+
+    #[test]
+    fn plain_and_rich_clips_with_the_same_text_are_separate_rows() {
+        let mut ring = VecDeque::new();
+        insert_entry(&mut ring, entry(1, "Hi there"));
+        let mut rich = entry(2, "Hi there");
+        rich.rich = true;
+        rich.rtf = Some(r"{\rtf1 \b Hi\b0  there}".to_string());
+        insert_entry(&mut ring, rich);
+        assert_eq!(ring.len(), 2);
+        insert_entry(&mut ring, entry(3, "Hi there"));
+        assert_eq!(ring.iter().map(|e| e.id).collect::<Vec<_>>(), vec![3, 2]);
+    }
+
+    #[test]
+    fn the_rtf_source_never_reaches_the_frontend() {
+        let mut e = entry(1, "Hi");
+        e.rich = true;
+        e.rtf = Some(r"{\rtf1 Hi}".to_string());
+        let json = serde_json::to_string(&e).unwrap();
+        assert!(json.contains(r#""rich":true"#));
+        assert!(!json.contains("rtf1"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn rtf_payloads_are_shown_as_their_text_and_keep_the_original() {
+        let rtf = br"{\rtf1\ansi{\fonttbl\f0\fswiss Helvetica;}\f0\b Hi\b0  there}".to_vec();
+        let (text, kept) = decode_payload(rtf.clone()).unwrap();
+        assert_eq!(text.trim(), "Hi there");
+        assert_eq!(kept.as_deref().map(str::as_bytes), Some(rtf.as_slice()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn rtf_too_large_to_keep_whole_is_recorded_as_text_only() {
+        let mut rtf = br"{\rtf1\ansi ".to_vec();
+        rtf.extend(std::iter::repeat_n(b'a', MAX_TEXT_BYTES));
+        rtf.push(b'}');
+        let (text, kept) = decode_payload(rtf).unwrap();
+        assert!(text.starts_with("aaa"));
+        assert_eq!(kept, None);
     }
 
     #[test]

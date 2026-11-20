@@ -105,6 +105,14 @@ export function ClipboardHistoryButton() {
                         <span>{relativeTime(entry.copied_at_ms)}</span>
                         <span aria-hidden="true">·</span>
                         <span>{describeClip(entry.text)}</span>
+                        <Show when={entry.rich}>
+                          <span
+                            class="text-sky-400/80"
+                            title="Copied as rich text. Copying it again keeps the formatting."
+                          >
+                            · rich text
+                          </span>
+                        </Show>
                         <Show when={entry.truncated}>
                           <span
                             class="text-amber-500/80"
