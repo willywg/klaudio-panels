@@ -4,6 +4,31 @@ All notable changes to Klaudio Panels are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); the project uses
 semantic versioning from v0.2.0 onwards (pre-`v0.2.0` tags are PoC snapshots).
 
+## [1.17.1] — 2026-11-20
+
+### Fixed
+- **Rich-text copies in the clipboard history.** A `pbcopy` of RTF inside a
+  Klaudio terminal (for example an email converted with `textutil` to paste
+  into Gmail) used to show up as raw `{\rtf1\ansi…}` markup. Worse, "copy
+  again" put that markup on the pasteboard as plain text. Such a clip now
+  shows as its readable text with a "rich text" marker, and re-copying it
+  restores the original RTF through the real `pbcopy`, so formatting
+  survives the paste. RTF over the 64 KB cap is kept as text only, because a
+  truncated RTF can't be restored.
+
+### Changed
+- **Windows installer from CI.** Every release now carries an unsigned NSIS
+  installer (`…_x64-setup-untested.exe`) built on `windows-latest`. The
+  README leads Windows users to it, with the SmartScreen step, and keeps the
+  source build as the alternative.
+- **Linux CI is more resilient to mirror outages.** The 1.17.0 Linux build
+  hung for 75 minutes on unreachable Ubuntu mirrors before failing. apt now
+  retries with per-request timeouts, and the step is capped at 10 minutes.
+
+### Tracked work
+- Issue: [#130](https://github.com/willywg/klaudio-panels/issues/130)
+- PR: [#131](https://github.com/willywg/klaudio-panels/pull/131)
+
 ## [1.17.0] — 2026-11-11
 
 ### Added
